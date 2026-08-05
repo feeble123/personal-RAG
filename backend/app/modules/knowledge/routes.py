@@ -1,0 +1,250 @@
+"""知识库管理路由（仅管理员）：知识库 CRUD + 文档上传/列表/删除/重解析 + 检索预览。"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import APIRouter, File, Query, UploadFile
+from sqlalchemy import func, select
+
+from app.core.config import settings
+from app.core.deps import AdminUser, CurrentUser, DbSession
+from app.core.exceptions import BizError
+from app.db.models import Chunk, Document, KnowledgeBase
+from app.modules.ingestion import manager as ingestion
+from app.modules.knowledge.schemas import (
+    DocumentListOut,
+    DocumentOut,
+    KBCreate,
+    KBOut,
+    KBUpdate,
+    SearchResult,
+    UploadResult,
+)
+from app.services import rag
+from app.services.parser.ocr_progress import get_progress
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/admin", tags=["knowledge"])
+
+# 面向登录用户（非管理）的知识库列表：仅暴露名称与统计，供问答时选择知识库
+public_router = APIRouter(prefix="/knowledge-bases", tags=["knowledge"])
+
+
+@public_router.get("", response_model=list[KBOut])
+async def list_public_kbs(db: DbSession, _user: CurrentUser) -> list[KnowledgeBase]:
+    result = await db.execute(
+        select(KnowledgeBase).where(KnowledgeBase.status != "empty").order_by(KnowledgeBase.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+# ---------------- 知识库 ----------------
+@router.get("/kbs", response_model=list[KBOut])
+async def list_kbs(db: DbSession, _admin: AdminUser) -> list[KnowledgeBase]:
+    result = await db.execute(select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc()))
+    return list(result.scalars().all())
+
+
+@router.post("/kbs", response_model=KBOut, status_code=201)
+async def create_kb(body: KBCreate, db: DbSession, admin: AdminUser) -> KnowledgeBase:
+    exists = await db.scalar(select(KnowledgeBase).where(KnowledgeBase.name == body.name))
+    if exists:
+        raise BizError("知识库名称已存在", 409, "KB_EXISTS")
+    kb = KnowledgeBase(name=body.name, description=body.description, created_by=admin.id)
+    db.add(kb)
+    await db.commit()
+    await db.refresh(kb)
+    return kb
+
+
+@router.patch("/kbs/{kb_id}", response_model=KBOut)
+async def update_kb(kb_id: int, body: KBUpdate, db: DbSession, _admin: AdminUser) -> KnowledgeBase:
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb:
+        raise BizError("知识库不存在", 404, "KB_NOT_FOUND")
+    if body.name and body.name != kb.name:
+        exists = await db.scalar(select(KnowledgeBase).where(KnowledgeBase.name == body.name))
+        if exists:
+            raise BizError("知识库名称已存在", 409, "KB_EXISTS")
+        kb.name = body.name
+    if body.description is not None:
+        kb.description = body.description
+    await db.commit()
+    await db.refresh(kb)
+    return kb
+
+
+@router.delete("/kbs/{kb_id}", status_code=204)
+async def delete_kb(kb_id: int, _db: DbSession, _admin: AdminUser) -> None:
+    await ingestion.delete_kb(kb_id)
+
+
+# ---------------- 文档 ----------------
+@router.post("/kbs/{kb_id}/documents/upload", response_model=UploadResult, status_code=201)
+async def upload_document(
+    kb_id: int,
+    db: DbSession,
+    _admin: AdminUser,
+    file: UploadFile = File(...),
+) -> UploadResult:
+    kb = await db.get(KnowledgeBase, kb_id)
+    if not kb:
+        raise BizError("知识库不存在", 404, "KB_NOT_FOUND")
+
+    original = file.filename or "untitled"
+    ext = Path(original).suffix.lower().lstrip(".")
+    if ext not in settings.allowed_extensions:
+        raise BizError(
+            f"不支持的文件格式 .{ext}，支持：{', '.join(settings.allowed_extensions)}",
+            400,
+            "UNSUPPORTED_FORMAT",
+        )
+
+    # 流式写盘（200MB 限制，不整文件进内存）
+    stored_name = f"{uuid4().hex}.{ext}"
+    dest = settings.upload_dir_path / stored_name
+    size = 0
+    try:
+        with dest.open("wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > settings.max_upload_size:
+                    raise BizError(
+                        f"文件超过 {settings.max_upload_size // 1024 // 1024}MB 限制",
+                        413,
+                        "FILE_TOO_LARGE",
+                    )
+                out.write(chunk)
+    except BizError:
+        dest.unlink(missing_ok=True)
+        raise
+
+    doc = Document(
+        kb_id=kb_id,
+        filename=original,
+        stored_path=stored_name,
+        file_type=ext,
+        file_size=size,
+        status="pending",
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+
+    # 后台入库
+    ingestion.enqueue_ingestion(doc.id)
+    return UploadResult(id=doc.id, filename=original, status="pending")
+
+
+@router.get("/kbs/{kb_id}/documents", response_model=DocumentListOut)
+async def list_documents(
+    kb_id: int,
+    db: DbSession,
+    _admin: AdminUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+) -> DocumentListOut:
+    total = (await db.scalar(select(func.count()).select_from(Document).where(Document.kb_id == kb_id))) or 0
+    rows = await db.execute(
+        select(Document)
+        .where(Document.kb_id == kb_id)
+        .order_by(Document.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = []
+    for d in rows.scalars().all():
+        out = DocumentOut.model_validate(d)
+        if d.status == "parsing":
+            p = get_progress(d.stored_path)
+            if p:
+                total_pages = p.get("total") or 0
+                done = p.get("done") or 0
+                out.progress = {
+                    **p,
+                    "percent": round(done / total_pages * 100, 1) if total_pages else None,
+                }
+        items.append(out)
+    return DocumentListOut(items=items, total=total)
+
+
+@router.get("/documents/{doc_id}", response_model=DocumentOut)
+async def document_detail(doc_id: int, db: DbSession, _admin: AdminUser) -> Document:
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
+    return doc
+
+
+@router.delete("/documents/{doc_id}", status_code=204)
+async def delete_document(doc_id: int, db: DbSession, _admin: AdminUser) -> None:
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
+    await ingestion.delete_document(doc_id)
+
+
+@router.post("/documents/{doc_id}/reparse", response_model=DocumentOut)
+async def reparse_document(doc_id: int, db: DbSession, _admin: AdminUser) -> Document:
+    doc = await db.get(Document, doc_id)
+    if not doc:
+        raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
+    doc.status = "pending"
+    doc.error_message = None
+    await db.commit()
+    ingestion.enqueue_ingestion(doc_id)
+    await db.refresh(doc)
+    return doc
+
+
+# ---------------- 检索预览（管理员验证库质量） ----------------
+@router.get("/search", response_model=SearchResult)
+async def search_preview(
+    db: DbSession,
+    _admin: AdminUser,
+    q: str = Query(..., min_length=1, max_length=500),
+    kb_id: int | None = Query(None),
+    top_k: int = Query(5, ge=1, le=20),
+) -> SearchResult:
+    # 预览与问答一致：问题点名《书名》/「XXX中」时限定到该文档
+    doc_ids = await rag.resolve_documents_by_title(db, q)
+    hits = await rag.retrieve(db, q, kb_id=kb_id, doc_ids=doc_ids or None, top_k=top_k)
+    return SearchResult(hits=[h.to_citation() for h in hits])
+
+
+@router.get("/kbs/{kb_id}/chunks")
+async def list_kb_chunks(
+    kb_id: int,
+    db: DbSession,
+    _admin: AdminUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    doc_id: int | None = Query(None, description="按文档筛选切片"),
+):
+    where = [Chunk.kb_id == kb_id]
+    if doc_id is not None:
+        where.append(Chunk.doc_id == doc_id)
+    total = (await db.scalar(select(func.count()).select_from(Chunk).where(*where))) or 0
+    rows = await db.execute(
+        select(Chunk)
+        .where(*where)
+        .order_by(Chunk.doc_id, Chunk.chunk_index)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    return {
+        "total": total,
+        "items": [
+            {
+                "id": c.id,
+                "doc_id": c.doc_id,
+                "chunk_index": c.chunk_index,
+                "page": c.page,
+                "section": c.section,
+                "content": c.content,
+            }
+            for c in rows.scalars().all()
+        ],
+    }

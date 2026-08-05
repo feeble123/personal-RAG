@@ -1,0 +1,17 @@
+# 升级路径：Docker Compose 编排示例
+# 未来可在此扩展 MySQL / Milvus / Redis 等服务（当前 SQLite + Chroma 已内置数据卷）
+version: "3.8"
+
+services:
+  rag:
+    build: ..
+    container_name: rag-system
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../backend/.env
+    volumes:
+      - rag-data:/app/backend/data
+
+volumes:
+  rag-data:

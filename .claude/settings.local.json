@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./.venv/Scripts/python.exe -c \"import httpx, tenacity, jieba, fitz; print\\('httpx/tenacity/jieba/fitz OK'\\)\")",
+      "Bash(./.venv/Scripts/python.exe -m pip list)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -)"
+    ]
+  }
+}
