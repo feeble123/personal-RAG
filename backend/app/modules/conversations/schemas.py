@@ -48,3 +48,5 @@ class MessageListOut(BaseModel):
 class ChatIn(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000)
     kb_id: int | None = None
+    # 回答风格（单元 F）：standard/logical/summary/expanded/tutorial；缺省用知识库默认
+    style: str | None = Field(None, max_length=30)

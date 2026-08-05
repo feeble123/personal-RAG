@@ -106,6 +106,9 @@ class KnowledgeBase(Base):
     doc_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="empty", nullable=False)  # empty/indexing/ready
+    # 回答风格（单元 F）：standard 规范条文 / logical 专业论证 / summary 要点摘要 /
+    # expanded 拓展延伸 / tutorial 通俗讲解。问答时按此风格组装 SYSTEM_PROMPT
+    answer_style: Mapped[str] = mapped_column(String(30), default="standard", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -220,6 +223,8 @@ class SemanticCache(Base):
     # 命中缓存必须作用域完全一致，否则切库后同问会重放旧库答案。
     kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     doc_scope: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # 回答风格（单元 F）：同题不同风格答案不同，缓存命中须风格一致
+    style: Mapped[str | None] = mapped_column(String(30), nullable=True)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     citations_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

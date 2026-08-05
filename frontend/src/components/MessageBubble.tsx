@@ -3,6 +3,10 @@ import { Avatar, Space, Typography } from 'antd'
 import { RobotOutlined, UserOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
+// KaTeX 公式样式（数学公式排版字体与布局）
+import 'katex/dist/katex.min.css'
 import CitationCard from './CitationCard'
 import type { Citation } from '@/api/types'
 import type { StreamMessage } from '@/stores/chat'
@@ -35,7 +39,9 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
           {isUser ? (
             <Typography.Text style={{ color: '#fff', whiteSpace: 'pre-wrap' }}>{msg.content}</Typography.Text>
           ) : msg.content ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+              {msg.content}
+            </ReactMarkdown>
           ) : streaming ? (
             <Typography.Text type="secondary">正在思考…</Typography.Text>
           ) : (

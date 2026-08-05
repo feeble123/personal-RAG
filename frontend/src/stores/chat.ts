@@ -39,7 +39,7 @@ interface ChatState {
   newConversation: () => Promise<number | null>
   renameConversation: (id: number, title: string) => Promise<void>
   deleteConversation: (id: number) => Promise<void>
-  send: (content: string, kbId?: number | null) => Promise<void>
+  send: (content: string, kbId?: number | null, style?: string) => Promise<void>
   stop: () => void
   reset: () => void
 }
@@ -102,7 +102,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (currentId === id) set({ currentId: null, history: [], messages: [] })
   },
 
-  send: async (content, kbId) => {
+  send: async (content, kbId, style) => {
     const state = get()
     const convId = state.currentId
     if (!convId || state.streaming || !content.trim()) return
@@ -124,6 +124,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         conversationId: convId,
         content,
         kbId,
+        style,
         signal: abortCtrl.signal,
         onEvent: (ev) => {
           if (ev.event === 'citations') {

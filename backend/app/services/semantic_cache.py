@@ -61,10 +61,11 @@ async def find(
     subject: str | None = None,
     kb_id: int | None = None,
     doc_scope: str | None = None,
+    style: str | None = None,
 ) -> tuple[str, list[dict]] | None:
     """在最近缓存池中找相似、主题一致且**检索作用域一致**的提问。命中返回 (answer, citations)。
 
-    作用域（kb_id + doc_scope）须与缓存条目完全一致：切库/切换点名文档后，
+    作用域（kb_id + doc_scope + style）须与缓存条目完全一致：切库/切换点名文档/改回答风格后，
     同一问题的向量余弦仍可能 > 阈值，但答案应不同，不得重放旧作用域的缓存。
     """
     if not settings.semantic_cache_enabled:
@@ -74,7 +75,7 @@ async def find(
         .order_by(SemanticCache.updated_at.desc())
         .limit(settings.semantic_cache_pool)
     )
-    # 候选池按检索作用域过滤（SQL 层，避免别的库/文档的缓存占满候选池）
+    # 候选池按检索作用域过滤（SQL 层，避免别的库/文档/风格的缓存占满候选池）
     if kb_id is None:
         stmt = stmt.where(SemanticCache.kb_id.is_(None))
     else:
@@ -83,6 +84,10 @@ async def find(
         stmt = stmt.where(SemanticCache.doc_scope.is_(None))
     else:
         stmt = stmt.where(SemanticCache.doc_scope == doc_scope)
+    if style is None:
+        stmt = stmt.where(SemanticCache.style.is_(None))
+    else:
+        stmt = stmt.where(SemanticCache.style == style)
     rows = (await db.execute(stmt)).scalars().all()
     best: SemanticCache | None = None
     best_sim = 0.0
@@ -112,8 +117,9 @@ async def store(
     citations: list[dict],
     kb_id: int | None = None,
     doc_scope: str | None = None,
+    style: str | None = None,
 ) -> None:
-    """存储缓存条目（含主题词 + 检索作用域）；容量超限按 kb 作用域淘汰最旧。"""
+    """存储缓存条目（含主题词 + 检索作用域 + 回答风格）；容量超限按 kb 作用域淘汰最旧。"""
     if not settings.semantic_cache_enabled or not answer:
         return
     # 容量按 kb 作用域统计，避免单一库写满把其它库的缓存挤掉
@@ -141,6 +147,7 @@ async def store(
             subject=subject,
             kb_id=kb_id,
             doc_scope=doc_scope,
+            style=style,
             answer=answer,
             citations_json=json.dumps(citations, ensure_ascii=False),
         )

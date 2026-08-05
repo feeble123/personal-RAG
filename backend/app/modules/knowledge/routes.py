@@ -52,7 +52,12 @@ async def create_kb(body: KBCreate, db: DbSession, admin: AdminUser) -> Knowledg
     exists = await db.scalar(select(KnowledgeBase).where(KnowledgeBase.name == body.name))
     if exists:
         raise BizError("知识库名称已存在", 409, "KB_EXISTS")
-    kb = KnowledgeBase(name=body.name, description=body.description, created_by=admin.id)
+    kb = KnowledgeBase(
+        name=body.name,
+        description=body.description,
+        answer_style=body.answer_style,
+        created_by=admin.id,
+    )
     db.add(kb)
     await db.commit()
     await db.refresh(kb)
@@ -71,6 +76,8 @@ async def update_kb(kb_id: int, body: KBUpdate, db: DbSession, _admin: AdminUser
         kb.name = body.name
     if body.description is not None:
         kb.description = body.description
+    if body.answer_style is not None:
+        kb.answer_style = body.answer_style
     await db.commit()
     await db.refresh(kb)
     return kb

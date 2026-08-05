@@ -25,7 +25,14 @@ from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
 from app.schemas import CitationOut
 from app.services import rag, semantic_cache
-from app.services.chat import build_chat_model, build_prompt
+from app.services.chat import (
+    ANSWER_STYLES,
+    DEFAULT_STYLE,
+    STYLE_CONFIG,
+    build_chat_model,
+    build_prompt,
+    resolve_answer_style,
+)
 from app.services.embedding import embed_query
 
 logger = logging.getLogger(__name__)
@@ -86,6 +93,15 @@ async def chat(
                 doc_ids = await rag.resolve_documents_by_title(sdb, body.content)
                 # 缓存检索作用域（BUG-B）：选库 kb_id + 点名文档 doc_scope，命中须完全一致
                 doc_scope = ",".join(map(str, sorted(doc_ids))) if doc_ids else None
+                # 回答风格（单元 F）：会话指定 > 知识库默认；同题不同风格答案不同
+                style = await resolve_answer_style(sdb, body.kb_id)
+                if body.style in ANSWER_STYLES:
+                    style = body.style
+                # 风格生成参数：发散风格（拓展延伸/通俗讲解）不缓存 + 高温，重复提问产生多样化回答；
+                # 严谨风格保留缓存 + 低温，重复同问给出稳定一致答案。
+                style_cfg = STYLE_CONFIG.get(style, STYLE_CONFIG[DEFAULT_STYLE])
+                cacheable = bool(style_cfg["cacheable"])
+                style_temp = float(style_cfg["temperature"])
                 cites = await rag.retrieve(
                     sdb,
                     body.content,
@@ -93,24 +109,50 @@ async def chat(
                     doc_ids=doc_ids or None,
                     top_k=settings.top_k_final,
                 )
-                # 3) 语义缓存：相似、主题一致且**检索作用域一致**的提问直接秒回
-                qvec = await embed_query(body.content)
-                cached = await semantic_cache.find(
-                    sdb,
-                    qvec,
-                    rag.focus_rerank_query(body.content),
-                    kb_id=body.kb_id,
-                    doc_scope=doc_scope,
-                )
+                # 3) 语义缓存（仅严谨风格）：相似、主题一致且**检索作用域一致**的提问直接秒回
+                cached = None
+                qvec = None
+                if cacheable:
+                    qvec = await embed_query(body.content)
+                    cached = await semantic_cache.find(
+                        sdb,
+                        qvec,
+                        rag.focus_rerank_query(body.content),
+                        kb_id=body.kb_id,
+                        doc_scope=doc_scope,
+                        style=style,
+                    )
                 if cached:
                     cached_answer, cached_cites = cached
                     yield _sse({"event": "citations", "data": cached_cites})
                     for piece in _chunk_answer(cached_answer):
                         yield _sse({"event": "delta", "data": piece})
                     yield _sse({"event": "done", "data": {"message_id": None, "cached": True}})
-                    # 落库缓存答案消息
+                    # 落库缓存答案消息 + 引用行（与真实生成一致，刷新/切会话后数据来源仍在）
                     async with async_session_factory() as ss:
-                        ss.add(Message(conversation_id=conv.id, role="assistant", content=cached_answer, is_complete=True))
+                        asst = Message(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=cached_answer,
+                            is_complete=True,
+                        )
+                        ss.add(asst)
+                        await ss.flush()
+                        for c in cached_cites:
+                            ss.add(
+                                Citation(
+                                    message_id=asst.id,
+                                    chunk_id=c.get("chunk_id"),
+                                    kb_id=c.get("kb_id"),
+                                    doc_id=c.get("doc_id"),
+                                    source=c.get("source") or "",
+                                    page=c.get("page"),
+                                    section=c.get("section"),
+                                    snippet=(c.get("snippet") or "")[:1000],
+                                    score=c.get("score"),
+                                    rank=c.get("rank"),
+                                )
+                            )
                         conv2 = await ss.get(Conversation, conv.id)
                         if conv2:
                             conv2.last_message_at = _now()
@@ -121,9 +163,9 @@ async def chat(
                 history = await _load_history(sdb, conv.id, settings.history_turns)
                 yield _sse({"event": "citations", "data": [c.to_citation().model_dump() for c in cites]})
 
-            # 5) 流式生成
-            llm = build_chat_model()
-            messages = build_prompt(body.content, cites, history)
+            # 5) 流式生成（按回答风格组装 SYSTEM_PROMPT + 对应温度）
+            llm = build_chat_model(style_temp)
+            messages = build_prompt(body.content, cites, history, style=style)
             buffer = ""
             usage_in = usage_out = None
             async for chunk in llm.astream(messages):
@@ -173,20 +215,22 @@ async def chat(
                     conv2.last_message_at = _now()
                 await sdb.commit()
                 asst_id = asst.id
-            # 7) 写入语义缓存
-            try:
-                async with async_session_factory() as sdb:
-                    await semantic_cache.store(
-                        sdb,
-                        qvec,
-                        rag.focus_rerank_query(body.content),
-                        buffer,
-                        cite_dicts,
-                        kb_id=body.kb_id,
-                        doc_scope=doc_scope,
-                    )
-            except Exception:
-                logger.debug("语义缓存写入失败，忽略")
+            # 7) 写入语义缓存（仅严谨风格；发散风格不缓存，保证每次重新生成出变化）
+            if cacheable:
+                try:
+                    async with async_session_factory() as sdb:
+                        await semantic_cache.store(
+                            sdb,
+                            qvec,
+                            rag.focus_rerank_query(body.content),
+                            buffer,
+                            cite_dicts,
+                            kb_id=body.kb_id,
+                            doc_scope=doc_scope,
+                            style=style,
+                        )
+                except Exception:
+                    logger.debug("语义缓存写入失败，忽略")
             yield _sse({"event": "done", "data": {"message_id": asst_id}})
 
         except Exception as exc:

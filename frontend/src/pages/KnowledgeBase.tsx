@@ -34,6 +34,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { kbApi } from '@/api/modules'
 import type { ChunkItem, Citation, DocumentItem, KnowledgeBase } from '@/api/types'
+import { ANSWER_STYLE_OPTIONS } from '@/api/types'
 import { errMsg } from '@/api/client'
 import UserMenu from '@/components/UserMenu'
 import { useNavigate } from 'react-router-dom'
@@ -172,7 +173,7 @@ export default function KnowledgeBase() {
   const queryClient = useQueryClient()
   const [activeKb, setActiveKb] = useState<number | null>(null)
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
-  const [kbForm, setKbForm] = useState({ name: '', description: '' })
+  const [kbForm, setKbForm] = useState({ name: '', description: '', answer_style: 'standard' })
   const [detailDoc, setDetailDoc] = useState<DocumentItem | null>(null)
 
   // ---- 文档切片浏览 ----
@@ -245,7 +246,11 @@ export default function KnowledgeBase() {
   const renameKb = async () => {
     if (!kbModal.editing) return
     try {
-      await kbApi.update(kbModal.editing.id, { name: kbForm.name, description: kbForm.description })
+      await kbApi.update(kbModal.editing.id, {
+        name: kbForm.name,
+        description: kbForm.description,
+        answer_style: kbForm.answer_style,
+      })
       message.success('已更新')
       setKbModal({ open: false })
       queryClient.invalidateQueries({ queryKey: ['admin-kbs'] })
@@ -409,7 +414,7 @@ export default function KnowledgeBase() {
                 block
                 icon={<PlusOutlined />}
                 onClick={() => {
-                  setKbForm({ name: '', description: '' })
+                  setKbForm({ name: '', description: '', answer_style: 'standard' })
                   setKbModal({ open: true })
                 }}
               >
@@ -446,7 +451,11 @@ export default function KnowledgeBase() {
                           icon={<EditOutlined />}
                           onClick={(e) => {
                             e.stopPropagation()
-                            setKbForm({ name: kb.name, description: kb.description || '' })
+                            setKbForm({
+                              name: kb.name,
+                              description: kb.description || '',
+                              answer_style: kb.answer_style || 'standard',
+                            })
                             setKbModal({ open: true, editing: kb })
                           }}
                         />
@@ -635,6 +644,17 @@ export default function KnowledgeBase() {
             value={kbForm.description}
             onChange={(e) => setKbForm({ ...kbForm, description: e.target.value })}
           />
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              回答风格
+            </Typography.Text>
+            <Select
+              value={kbForm.answer_style}
+              onChange={(v) => setKbForm({ ...kbForm, answer_style: v })}
+              style={{ width: '100%', marginTop: 4 }}
+              options={ANSWER_STYLE_OPTIONS}
+            />
+          </div>
         </Space>
       </Modal>
 

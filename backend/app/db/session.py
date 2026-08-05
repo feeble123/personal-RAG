@@ -103,4 +103,30 @@ async def init_db() -> None:
         if cols and "doc_scope" not in cols:
             await conn.execute(text("ALTER TABLE semantic_cache ADD COLUMN doc_scope VARCHAR(100)"))
             logger.info("migration: semantic_cache.doc_scope added")
+        # 单元 F：回答风格列（知识库 + 缓存）
+        if cols and "style" not in cols:
+            await conn.execute(text("ALTER TABLE semantic_cache ADD COLUMN style VARCHAR(30)"))
+            logger.info("migration: semantic_cache.style added")
+
+        kb_cols = await conn.run_sync(
+            lambda sync_conn: [
+                row[1]
+                for row in sync_conn.execute(text("PRAGMA table_info(knowledge_bases)")).fetchall()
+            ]
+        )
+        if kb_cols and "answer_style" not in kb_cols:
+            await conn.execute(text("ALTER TABLE knowledge_bases ADD COLUMN answer_style VARCHAR(30)"))
+            logger.info("migration: knowledge_bases.answer_style added")
+        # 回填：ALTER 加列不带默认值，历史行 answer_style=NULL → KBOut.answer_style:str
+        # 序列化 NULL 抛 ValidationError → 知识库列表接口全 500（用户实测「服务器内部错误」）。
+        # 幂等：无 NULL/空值行时为 no-op。
+        if kb_cols:
+            await conn.execute(
+                text(
+                    "UPDATE knowledge_bases "
+                    "SET answer_style='standard' "
+                    "WHERE answer_style IS NULL OR answer_style=''"
+                )
+            )
+            logger.info("migration: knowledge_bases.answer_style backfilled to 'standard'")
     logger.info("Database tables ensured.")

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas import CitationOut, ORMModel
 
@@ -12,11 +12,14 @@ from app.schemas import CitationOut, ORMModel
 class KBCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     description: str | None = Field(None, max_length=500)
+    # 回答风格（单元 F）：standard/logical/summary/expanded/tutorial
+    answer_style: str = Field("standard", max_length=30)
 
 
 class KBUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     description: str | None = None
+    answer_style: str | None = Field(None, max_length=30)
 
 
 class KBOut(ORMModel):
@@ -26,7 +29,14 @@ class KBOut(ORMModel):
     doc_count: int
     chunk_count: int
     status: str
+    answer_style: str
     created_at: datetime
+
+    @field_validator("answer_style", mode="before")
+    @classmethod
+    def _fill_answer_style(cls, v: object) -> object:
+        """历史行（迁移加列未回填）answer_style 为 NULL/'' → 归一为 'standard'，避免列表接口 500。"""
+        return v or "standard"
 
 
 class DocumentOut(ORMModel):

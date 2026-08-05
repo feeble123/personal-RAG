@@ -21,8 +21,18 @@ export interface KnowledgeBase {
   doc_count: number
   chunk_count: number
   status: string
+  answer_style: string
   created_at: string
 }
+
+// 回答风格选项（单元 F）：值与后端 chat.ANSWER_STYLES 一致
+export const ANSWER_STYLE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'standard', label: '规范条文式' },
+  { value: 'logical', label: '专业论证式' },
+  { value: 'summary', label: '要点摘要式' },
+  { value: 'expanded', label: '拓展延伸式' },
+  { value: 'tutorial', label: '通俗讲解式' },
+]
 
 export interface DocumentItem {
   id: number

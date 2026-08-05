@@ -39,6 +39,7 @@ export async function streamChat(opts: {
   conversationId: number
   content: string
   kbId?: number | null
+  style?: string
   signal: AbortSignal
   onEvent: (ev: { event: string; data: unknown }) => void
 }): Promise<void> {
@@ -49,7 +50,7 @@ export async function streamChat(opts: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ content: opts.content, kb_id: opts.kbId ?? null }),
+    body: JSON.stringify({ content: opts.content, kb_id: opts.kbId ?? null, style: opts.style ?? null }),
     signal: opts.signal,
   })
   if (!res.ok || !res.body) {
@@ -80,9 +81,9 @@ export async function streamChat(opts: {
 // ===== 知识库 / 文档（管理员）=====
 export const kbApi = {
   list: () => api.get('/admin/kbs').then((r) => r.data),
-  create: (data: { name: string; description?: string }) =>
+  create: (data: { name: string; description?: string; answer_style?: string }) =>
     api.post('/admin/kbs', data).then((r) => r.data),
-  update: (id: number, data: { name?: string; description?: string }) =>
+  update: (id: number, data: { name?: string; description?: string; answer_style?: string }) =>
     api.patch(`/admin/kbs/${id}`, data).then((r) => r.data),
   remove: (id: number) => api.delete(`/admin/kbs/${id}`).then((r) => r.data),
   documents: (kbId: number, params?: Record<string, unknown>) =>
