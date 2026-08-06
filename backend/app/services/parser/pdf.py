@@ -29,7 +29,7 @@ from app.services.parser.headings import (
     line_height_from_box,
     median,
 )
-from app.services.parser.ocr import OCRResult, ocr_image
+from app.services.parser.ocr import OCRResult, ocr_image, ocr_image_tiled, ocr_image_union
 from app.services.parser.ocr_progress import clear_progress, set_progress
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,25 @@ def _garble_ratio(text: str) -> float:
     bad += sum(1 for ch in text if 0xE000 <= ord(ch) <= 0xF8FF)
     total = len(text)
     return bad / total if total else 0.0
+
+
+# 高频汉字集（判定文本层是否被 CID 字体 ToUnicode 损坏）。
+# 正常中文正文由高频字主导（实测常见 PDF 页占比 0.43~0.95）；
+# 乱码页把中文映射成生僻字（如 犮犪狊犜…=custom…），占比 ≈0。
+_COMMON_HAN = set(
+    "的一是了我不人在他有这上们来到时大地为子中你说生国年着就那和要她出也得里后自以会家可下而过天去能对小多然于心学么之都好看起发当没成只如事把还用第样道想作种开美总从无情己面最女但现前些所同日手又行意动方期它头经长儿回位分爱老因很给名法间斯知世什两次使身者被高已亲其进此话常与活正感见明问力理尔点文几定本公特做外孩相西果走将月十实向声车全信重三机工物气每并别真打太新比才便夫再书部水像眼等体却加电主界门利海受听表德少克代员许先口由死安写性马光白或住难望教命花结乐色更拉东神记处让母父应直字场平报友关放至张认接告入笑内英军候民岁往何度山觉路带万男边风解叫任金快原吃妈变通师立象数四失满战远格士音轻目条呢病始达深完今提求清王化空业思切怎非找片罗钱语元喜曾离飞科言干流欢约各即指合反题必该论交终林请医晚制球决传画保读运及则房早院量苦火布品近坐产答星精视五连司巴奇管类未朋且婚台夜青北队久乎越观落尽形影红爸百令周吧识步希亚术留市半热送兴造谈容极随演收首根整式取照办强石古华另句纪接元伟测速笑组带志呼干友王李张吴刘陈黄杨周徐孙马朱胡郭何高林罗郑梁谢宋唐许韩冯邓曹彭曾肖田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛阎段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤"
+)
+
+
+def _chinese_common_ratio(text: str) -> float:
+    """常用汉字占比：判定文本层是否乱码。
+
+    真中文正文由高频字主导；CID 乱码页把中文映射成生僻字，常用字占比 ≈0。
+    """
+    total = sum(1 for ch in text if 0x4E00 <= ord(ch) <= 0x9FFF)
+    if total == 0:
+        return 0.0
+    return sum(1 for ch in text if ch in _COMMON_HAN) / total
 
 
 def _is_heading(text: str, max_size: float, body_size: float) -> bool:
@@ -139,12 +158,21 @@ def _extract_table_blocks(page, page_no: int, section: str | None) -> list[Parse
 
 
 def _page_needs_ocr(page) -> bool:
-    """质量检测：是否应走 OCR（扫描版 / 乱码 / 无文本）。"""
+    """质量检测：是否应走 OCR（扫描版 / 乱码 / 无文本）。
+
+    乱码检测三层：
+    1. 字符数不足 → 扫描/空白页；
+    2. 替换符 � 与私用区字符占比（部分 CID 字体直接映射到 PUA）；
+    3. 常用汉字占比过低（CID 字体 ToUnicode 损坏时中文被映射成生僻字，
+       如 犮犪狊…=custom…，无替换符/私用区字符，只能靠常用字占比识别）。
+    """
     text = page.get_text("text")
     chars = _count_text_chars(text)
     if chars < settings.pdf_text_threshold_per_page:
         return True
     if _garble_ratio(text) > settings.garble_threshold:
+        return True
+    if _chinese_common_ratio(text) < settings.chinese_common_threshold:
         return True
     return False
 
@@ -190,7 +218,7 @@ class PDFParser(DocumentParser):
         if ocr_payloads:
             set_progress(path.name, stage="ocr", done=0, total=len(ocr_payloads))
             with ThreadPoolExecutor(max_workers=2) as ex:
-                futures = {ex.submit(ocr_image, data): pn for pn, data in ocr_payloads.items()}
+                futures = {ex.submit(ocr_image_tiled, data): pn for pn, data in ocr_payloads.items()}
                 for fut in as_completed(futures):
                     pn = futures[fut]
                     try:
@@ -276,6 +304,58 @@ class PDFParser(DocumentParser):
                     ParsedBlock(text=para, section=section, page=page_no, block_type="paragraph")
                 )
         return blocks
+
+    def repair_ocr_gaps(
+        self, path: Path, parsed: ParsedDocument, gaps: list[dict]
+    ) -> list[ParsedBlock] | None:
+        """断号修复：对断号页用更高条带数重 OCR，补回缺失条款则重建该页 blocks。
+
+        自校验：仅当重 OCR 文本确实出现缺失条款号时才替换该页块；规范本身跳号
+        （重 OCR 也补不回）则不改动，免疫误报。返回新 blocks；无改善返回 None。
+        """
+        from collections import defaultdict
+
+        from app.services.parser.clause_gap import _contains_clause
+
+        affected: dict[int, list[str]] = {}
+        for g in gaps:
+            for pno in g["pages"]:
+                affected.setdefault(pno, []).extend(g["missing_full"])
+        if not affected:
+            return None
+        doc = fitz.open(str(path))
+        rebuilt: dict[int, list[ParsedBlock]] = {}
+        changed = False
+        try:
+            for pno, missing_nums in affected.items():
+                page = doc[pno - 1]
+                zoom = settings.ocr_dpi / 72.0
+                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                # 三路并集（整页+3条带+6条带）：单种配置漏的行不同，并集互补最大化恢复
+                res = ocr_image_union(pix.tobytes("png"))
+                orig = [b for b in parsed.blocks if b.page == pno]
+                # 该页起始章节上下文 = 页内首个带 section 的块（跨页标题续接）
+                section_hint = next((b.section for b in orig if b.section), None)
+                recovered = [m for m in set(missing_nums) if _contains_clause(res.text, m)]
+                if not recovered:
+                    continue  # 补不回 → 规范本身无此条（跳号），跳过
+                new_blocks = self._blocks_from_ocr(res, pno, section_hint)
+                if not new_blocks:
+                    continue
+                rebuilt[pno] = new_blocks
+                changed = True
+                logger.info("OCR 断号修复 page=%s 补回条款=%s", pno, recovered)
+        finally:
+            doc.close()
+        if not changed:
+            return None
+        grouped = defaultdict(list)
+        for b in parsed.blocks:
+            grouped[b.page].append(b)
+        merged: list[ParsedBlock] = []
+        for pno in sorted(grouped):
+            merged.extend(rebuilt.get(pno, grouped[pno]))
+        return merged
 
     def _parse_page_text(self, page, page_no: int, current_section: str | None):
         """文字层路径：版面块重建 + 表格 + 标题检测。

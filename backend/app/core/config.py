@@ -118,10 +118,17 @@ class Settings(BaseSettings):
     ocr_dpi: int = 200
     # onnxruntime 单会话推理线程数：设低让线程池并行 OCR 提速（默认全核反而互相争抢）
     ocr_intra_op_threads: int = 2
+    # OCR 分条带数：整页检测模型在密集排版下偶发漏行（实测漏条款行），
+    # 拆成 N 个横向重叠条带分别识别再合并可避免漏行。=1 关闭分条带。
+    ocr_tiles: int = 3
     # 扫描页判定：单页有效文本字符数低于该阈值视为扫描/图片页
     pdf_text_threshold_per_page: int = 40
     # 乱码判定：替换字符 � 占比阈值
     garble_threshold: float = 0.02
+    # 乱码判定：常用汉字占比阈值（CID 字体 ToUnicode 损坏时中文被映射成生僻字，
+    # 如「犮犪狊…」=custom…，无替换符/私用区字符；正常中文正文常用字占比实测 0.4+，
+    # 乱码页 ≈0。低于该阈值 → 该页转 OCR）
+    chinese_common_threshold: float = 0.2
 
     @property
     def upload_dir_path(self) -> Path:

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Layout, Button, Empty, Space, Typography } from 'antd'
 import { MessageOutlined } from '@ant-design/icons'
 import SessionSidebar from '@/components/SessionSidebar'
@@ -9,10 +9,54 @@ import { useChatStore } from '@/stores/chat'
 
 const { Sider, Content } = Layout
 
-// 知识库问答主界面：左侧会话栏 + 右侧聊天区
+const SIDEBAR_MIN = 160
+const SIDEBAR_MAX = 480
+const SIDEBAR_KEY = 'chat-sidebar-width'
+
+// 知识库问答主界面：左侧会话栏（可拖拽调宽）+ 右侧聊天区
 export default function Chat() {
   const { currentId, history, messages, loadHistory, historyHasMore, streaming } = useChatStore()
   const scrollRef = useRef<HTMLDivElement>(null)
+  const resizingRef = useRef(false)
+
+  // 会话栏宽度：默认 240，可拖拽调整并记忆到 localStorage
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem(SIDEBAR_KEY))
+      if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) return saved
+    } catch {
+      /* localStorage 不可用时用默认值 */
+    }
+    return 240
+  })
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    resizingRef.current = true
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return
+      setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, ev.clientX)))
+    }
+    const onUp = () => {
+      resizingRef.current = false
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+      setSidebarWidth((w) => {
+        try {
+          localStorage.setItem(SIDEBAR_KEY, String(w))
+        } catch {
+          /* 忽略持久化失败 */
+        }
+        return w
+      })
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
 
   // 切换会话时加载历史
   useEffect(() => {
@@ -33,8 +77,26 @@ export default function Chat() {
 
   return (
     <Layout style={{ height: '100vh' }}>
-      <Sider width={240} theme="light" style={{ borderRight: '1px solid #f0f0f0' }}>
+      <Sider
+        width={sidebarWidth}
+        theme="light"
+        style={{ borderRight: '1px solid #f0f0f0', position: 'relative' }}
+      >
         <SessionSidebar />
+        {/* 拖拽手柄：调整会话栏宽度 */}
+        <div
+          onMouseDown={startResize}
+          title="拖动调整宽度"
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            right: 0,
+            width: 6,
+            cursor: 'col-resize',
+            zIndex: 10,
+          }}
+        />
       </Sider>
       <Content style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <div

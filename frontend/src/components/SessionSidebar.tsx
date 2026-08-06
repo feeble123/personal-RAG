@@ -108,10 +108,10 @@ export default function SessionSidebar() {
                     ],
                   }}
                 >
-                  <div>
+                  <div style={{ width: '100%' }}>
                     <Typography.Text
                       ellipsis
-                      style={{ fontSize: 13, display: 'block', maxWidth: 200 }}
+                      style={{ fontSize: 13, display: 'block', width: '100%' }}
                     >
                       <MessageOutlined style={{ marginRight: 6 }} />
                       {conv.title}

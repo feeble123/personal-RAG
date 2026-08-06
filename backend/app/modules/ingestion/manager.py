@@ -84,9 +84,35 @@ async def _process_document(doc_id: int) -> None:
         parser = get_parser(doc.filename)
         parsed = await asyncio.to_thread(parser.parse, path, doc.filename)
 
+        # 断号自检（OCR 偶发漏行防护）：扫描条款号缺失，命中则用更高条带数重 OCR
+        # 受影响页补回（自校验：补不回视为规范本身跳号，不改动）
+        gap_info = None
+        if hasattr(parser, "repair_ocr_gaps"):
+            from app.services.parser.clause_gap import check_clause_gaps
+
+            gaps = check_clause_gaps(parsed.blocks)
+            if gaps:
+                logger.info("检测到条款断号 doc=%s 节=%s", doc_id, [g["section"] for g in gaps])
+                repaired = await asyncio.to_thread(parser.repair_ocr_gaps, path, parsed, gaps)
+                if repaired is not None:
+                    parsed.blocks = repaired
+                    gap_info = {
+                        "detected": len(gaps),
+                        "sections": [g["section"] for g in gaps],
+                        "repaired": True,
+                    }
+                else:
+                    gap_info = {
+                        "detected": len(gaps),
+                        "sections": [g["section"] for g in gaps],
+                        "repaired": False,
+                    }
+
         doc.status = "embedding"
         doc.page_count = parsed.page_count
         doc.quality = parsed.quality
+        if gap_info:
+            doc.quality = {**parsed.quality, "gap_check": gap_info}
         await db.commit()
 
         chunks = chunk_blocks(parsed.blocks)

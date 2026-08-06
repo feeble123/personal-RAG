@@ -14,7 +14,7 @@ description: 运行本项目全量测试（后端 pytest：单元 + 集成），
 
 1. **运行全量测试**（单元 + 集成，一条命令搞定）：
    ```bash
-   cd "e:/GPT&Codex/LangChainRAG项目/backend" && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q
+   cd "e:/GPT-Codex/LangChainRAG/backend" && PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q
    ```
    - 全部测试：单元测试在 `tests/unit/`（服务层纯逻辑：security / chunker / parser / rag / bm25 / semantic_cache / embedding），集成测试在 `tests/` 根目录（`test_api.py`，端到端 API 流程）。
    - 只跑单元测试：`-q tests/unit`
