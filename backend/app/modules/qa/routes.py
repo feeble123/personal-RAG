@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession
@@ -24,7 +27,7 @@ from app.db.session import async_session_factory
 from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
 from app.schemas import CitationOut
-from app.services import rag, semantic_cache
+from app.services import memory, rag, semantic_cache
 from app.services.chat import (
     ANSWER_STYLES,
     DEFAULT_STYLE,
@@ -102,6 +105,65 @@ async def chat(
                 style_cfg = STYLE_CONFIG.get(style, STYLE_CONFIG[DEFAULT_STYLE])
                 cacheable = bool(style_cfg["cacheable"])
                 style_temp = float(style_cfg["temperature"])
+                # 3) 问答记忆（用户背书，先于检索）：命中即秒回，不浪费检索
+                #    good → 直接复用记忆答案；bad → 强制跳过语义缓存重新检索
+                subject = rag.focus_rerank_query(body.content)
+                skip_cache = False
+                qvec = None
+                if settings.memory_enabled:
+                    qvec = await embed_query(body.content)
+                    mem = await memory.recall(
+                        sdb, qvec, subject,
+                        user_id=user.id, kb_id=body.kb_id, doc_scope=doc_scope, style=style,
+                    )
+                    if mem is not None and mem.status == "good":
+                        # 命中复用：先落库拿真实 message_id，再发 done（带 from_memory 标记）
+                        yield _sse({"event": "citations", "data": mem.citations})
+                        for piece in _chunk_answer(mem.answer):
+                            yield _sse({"event": "delta", "data": piece})
+                        async with async_session_factory() as ss:
+                            asst = Message(
+                                conversation_id=conv.id,
+                                role="assistant",
+                                content=mem.answer,
+                                is_complete=True,
+                                from_memory=True,
+                                kb_id=body.kb_id,
+                                doc_scope=doc_scope,
+                                style=style,
+                            )
+                            ss.add(asst)
+                            await ss.flush()
+                            for c in mem.citations:
+                                ss.add(
+                                    Citation(
+                                        message_id=asst.id,
+                                        chunk_id=c.get("chunk_id"),
+                                        kb_id=c.get("kb_id"),
+                                        doc_id=c.get("doc_id"),
+                                        source=c.get("source") or "",
+                                        page=c.get("page"),
+                                        section=c.get("section"),
+                                        snippet=(c.get("snippet") or "")[:1000],
+                                        score=c.get("score"),
+                                        rank=c.get("rank"),
+                                    )
+                                )
+                            conv2 = await ss.get(Conversation, conv.id)
+                            if conv2:
+                                conv2.last_message_at = _now()
+                            await ss.commit()
+                            asst_id = asst.id
+                        yield _sse(
+                            {"event": "done",
+                             "data": {"message_id": asst_id, "cached": True, "from_memory": True}}
+                        )
+                        return
+                    if mem is not None and mem.status == "bad":
+                        skip_cache = True
+                        logger.info("负面记忆命中 mem=%s，强制重新检索", mem.memory_id)
+
+                # 4) 检索（记忆未命中才执行）：问题点名《书名》/「XXX中」→ 限定只搜该文档（BUG-A）
                 cites = await rag.retrieve(
                     sdb,
                     body.content,
@@ -109,15 +171,15 @@ async def chat(
                     doc_ids=doc_ids or None,
                     top_k=settings.top_k_final,
                 )
-                # 3) 语义缓存（仅严谨风格）：相似、主题一致且**检索作用域一致**的提问直接秒回
+                # 5) 语义缓存（仅严谨风格；负面记忆命中时跳过）：相似、主题一致且**作用域一致**直接秒回
                 cached = None
-                qvec = None
-                if cacheable:
-                    qvec = await embed_query(body.content)
+                if cacheable and not skip_cache:
+                    if qvec is None:
+                        qvec = await embed_query(body.content)
                     cached = await semantic_cache.find(
                         sdb,
                         qvec,
-                        rag.focus_rerank_query(body.content),
+                        subject,
                         kb_id=body.kb_id,
                         doc_scope=doc_scope,
                         style=style,
@@ -127,14 +189,17 @@ async def chat(
                     yield _sse({"event": "citations", "data": cached_cites})
                     for piece in _chunk_answer(cached_answer):
                         yield _sse({"event": "delta", "data": piece})
-                    yield _sse({"event": "done", "data": {"message_id": None, "cached": True}})
-                    # 落库缓存答案消息 + 引用行（与真实生成一致，刷新/切会话后数据来源仍在）
+                    # 落库缓存答案消息 + 引用行（先落库拿真实 message_id，缓存重放也能点赞/踩）
                     async with async_session_factory() as ss:
                         asst = Message(
                             conversation_id=conv.id,
                             role="assistant",
                             content=cached_answer,
                             is_complete=True,
+                            from_memory=False,
+                            kb_id=body.kb_id,
+                            doc_scope=doc_scope,
+                            style=style,
                         )
                         ss.add(asst)
                         await ss.flush()
@@ -157,9 +222,14 @@ async def chat(
                         if conv2:
                             conv2.last_message_at = _now()
                         await ss.commit()
+                        asst_id = asst.id
+                    yield _sse(
+                        {"event": "done",
+                         "data": {"message_id": asst_id, "cached": True, "from_memory": False}}
+                    )
                     return
 
-                # 4) 历史
+                # 6) 历史
                 history = await _load_history(sdb, conv.id, settings.history_turns)
                 yield _sse({"event": "citations", "data": [c.to_citation().model_dump() for c in cites]})
 
@@ -190,6 +260,9 @@ async def chat(
                     is_complete=True,
                     usage_input_tokens=usage_in,
                     usage_output_tokens=usage_out,
+                    kb_id=body.kb_id,
+                    doc_scope=doc_scope,
+                    style=style,
                 )
                 sdb.add(asst)
                 await sdb.flush()
@@ -222,7 +295,7 @@ async def chat(
                         await semantic_cache.store(
                             sdb,
                             qvec,
-                            rag.focus_rerank_query(body.content),
+                            subject,
                             buffer,
                             cite_dicts,
                             kb_id=body.kb_id,
@@ -257,6 +330,83 @@ async def chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class FeedbackIn(BaseModel):
+    """消息反馈：up=点赞(沉淀正向记忆) / down=点踩(沉淀负面记忆) / null=取消评价。"""
+
+    feedback: Literal["up", "down"] | None = None
+
+
+def _memory_config() -> memory.MemoryConfig:
+    return memory.MemoryConfig(
+        enabled=settings.memory_enabled,
+        threshold=settings.memory_threshold,
+        max_entries=settings.memory_max_entries,
+        pool=settings.memory_pool,
+        eviction_ratio=settings.memory_eviction_ratio,
+    )
+
+
+@router.post("/conversations/{conv_id}/messages/{message_id}/feedback")
+@limiter.limit(settings.feedback_rate_limit)
+async def message_feedback(
+    request: Request,
+    conv_id: int,
+    message_id: int,
+    body: FeedbackIn,
+    db: DbSession,
+    user: CurrentUser,
+) -> dict:
+    """记录消息反馈：up → 沉淀正向记忆；down → 沉淀负面记忆；null → 取消评价（不动记忆）。"""
+    conv = await get_owned_conversation(db, conv_id, user.id)
+    asst = await db.get(Message, message_id)
+    if asst is None or asst.conversation_id != conv.id or asst.role != "assistant" or not asst.is_complete:
+        raise BizError("消息不存在", 404, "MSG_NOT_FOUND")
+    # 前置最近的 user 问题（记忆的 question）
+    prev = await db.scalar(
+        select(Message)
+        .where(Message.conversation_id == conv.id, Message.role == "user", Message.id < asst.id)
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    if prev is None:
+        raise BizError("找不到该回答对应的问题", 400, "NO_PREV_USER_MSG")
+
+    if body.feedback in ("up", "down"):
+        asst.feedback = body.feedback
+        await db.commit()
+        # 沉淀记忆（尽力而为，失败不回滚已记录的反馈）
+        try:
+            qvec = await embed_query(prev.content)
+            cites = (
+                await db.execute(
+                    select(Citation).where(Citation.message_id == asst.id).order_by(Citation.rank)
+                )
+            ).scalars().all()
+            cite_dicts = [CitationOut.model_validate(c).model_dump() for c in cites]
+            await memory.record_feedback(
+                db,
+                user_id=user.id,
+                question=prev.content,
+                answer=asst.content,
+                citations=cite_dicts,
+                feedback=body.feedback,
+                query_vector=qvec,
+                subject=rag.focus_rerank_query(prev.content),
+                kb_id=asst.kb_id,
+                doc_scope=asst.doc_scope,
+                style=asst.style,
+                config=_memory_config(),
+            )
+        except Exception:
+            logger.exception("记忆沉淀失败（反馈已记录）")
+        return {"feedback": body.feedback}
+
+    # 取消评价
+    asst.feedback = None
+    await db.commit()
+    return {"feedback": None}
 
 
 def _user_friendly_error(exc: Exception) -> str:

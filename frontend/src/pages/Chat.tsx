@@ -69,9 +69,19 @@ export default function Chat() {
     if (el) el.scrollTop = el.scrollHeight
   }, [history.length, messages.length, messages[messages.length - 1]?.content])
 
-  // 合并展示：历史（含引用）+ 本次流式消息
+  // 合并展示：历史（含引用/反馈/记忆来源）+ 本次流式消息
   const display = [
-    ...history.map((m) => ({ id: String(m.id), role: m.role, content: m.content, is_complete: m.is_complete, citations: m.citations, error: m.error })),
+    ...history.map((m) => ({
+      id: String(m.id),
+      role: m.role,
+      content: m.content,
+      is_complete: m.is_complete,
+      citations: m.citations,
+      error: m.error,
+      messageId: m.id,
+      feedback: m.feedback,
+      from_memory: m.from_memory,
+    })),
     ...messages,
   ]
 

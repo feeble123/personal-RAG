@@ -291,9 +291,11 @@ async def delete_kb(kb_id: int) -> None:
 
     注意：文件路径用轻量 select 获取（不加载 ORM 子对象），
     删除全部走 bulk delete（DB 级 CASCADE），最后对象删除 KB 本身。
+    同时级联清理该库沉淀的问答记忆（qa_memory），避免悬空记忆污染。
     """
     from app.db.models import Document as Doc
     from app.db.models import KnowledgeBase as KB
+    from app.db.models import QaMemory
 
     async with async_session_factory() as db:
         paths = (await db.execute(select(Doc.stored_path).where(Doc.kb_id == kb_id))).scalars().all()
@@ -305,6 +307,7 @@ async def delete_kb(kb_id: int) -> None:
         await asyncio.to_thread(vector_store.delete_by_where, {"kb_id": kb_id})
         await db.execute(delete(Chunk).where(Chunk.kb_id == kb_id))
         await db.execute(delete(Doc).where(Doc.kb_id == kb_id))
+        await db.execute(delete(QaMemory).where(QaMemory.kb_id == kb_id))
         kb = await db.get(KB, kb_id)
         if kb is not None:
             await db.delete(kb)

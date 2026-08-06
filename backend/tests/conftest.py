@@ -13,6 +13,9 @@ os.environ["EMBEDDING_PROVIDER"] = "fake"
 os.environ["LLM_PROVIDER"] = "fake"
 os.environ["RERANK_ENABLED"] = "false"  # 集成测试离线，不走 rerank API
 os.environ["DEBUG"] = "false"
+# 测试集随功能增长注册用户增多，放开 auth/chat 限流避免 429 干扰
+os.environ["AUTH_RATE_LIMIT"] = "1000/minute"
+os.environ["CHAT_RATE_LIMIT"] = "1000/minute"
 
 # 用临时目录隔离数据，避免污染真实数据
 _TMP = tempfile.mkdtemp(prefix="rag_test_")

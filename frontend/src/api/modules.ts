@@ -34,6 +34,16 @@ export const convApi = {
     api.get(`/conversations/${id}/messages`, { params }).then((r) => r.data as { items: MessageOut[]; has_more: boolean }),
 }
 
+// ===== 消息反馈（问答记忆库：👍 沉淀正向记忆 / 👎 沉淀负面记忆 / null 取消）=====
+export const feedbackApi = {
+  send: (convId: number, messageId: number, feedback: 'up' | 'down' | null) =>
+    api
+      .post<{ feedback: 'up' | 'down' | null }>(`/conversations/${convId}/messages/${messageId}/feedback`, {
+        feedback,
+      })
+      .then((r) => r.data),
+}
+
 // ===== 流式问答（SSE，fetch + ReadableStream）=====
 export async function streamChat(opts: {
   conversationId: number

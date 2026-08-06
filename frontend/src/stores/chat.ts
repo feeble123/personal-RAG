@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { convApi, streamChat, type MessageOut } from '@/api/modules'
+import { convApi, feedbackApi, streamChat, type MessageOut } from '@/api/modules'
 import type { Citation, Conversation } from '@/api/types'
 import { useAuthStore } from './auth'
 
@@ -11,6 +11,10 @@ export interface StreamMessage {
   is_complete: boolean
   citations: Citation[]
   error?: string | null
+  // 问答记忆库：服务端落库后回填的真实 message_id / 反馈态 / 记忆来源标记
+  messageId?: number
+  feedback?: 'up' | 'down' | null
+  from_memory?: boolean
 }
 
 interface ChatState {
@@ -41,6 +45,7 @@ interface ChatState {
   deleteConversation: (id: number) => Promise<void>
   send: (content: string, kbId?: number | null, style?: string) => Promise<void>
   stop: () => void
+  giveFeedback: (messageId: number, feedback: 'up' | 'down' | null) => Promise<void>
   reset: () => void
 }
 
@@ -149,11 +154,18 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               return { messages: msgs }
             })
           } else if (ev.event === 'done') {
+            // 服务端已落库：回填真实 message_id（供👍/👎）与 from_memory（记忆复用标记）
+            const done = ev.data as { message_id?: number; from_memory?: boolean } | null
             set((s) => {
               const msgs = [...s.messages]
               const last = msgs[msgs.length - 1]
               if (last && last.role === 'assistant') {
-                msgs[msgs.length - 1] = { ...last, is_complete: true }
+                msgs[msgs.length - 1] = {
+                  ...last,
+                  is_complete: true,
+                  messageId: done?.message_id,
+                  from_memory: done?.from_memory ?? false,
+                }
               }
               return { messages: msgs }
             })
@@ -196,6 +208,21 @@ export const useChatStore = create<ChatState>()((set, get) => ({
 
   stop: () => {
     get().abortCtrl?.abort()
+  },
+
+  giveFeedback: async (messageId, feedback) => {
+    const { currentId } = get()
+    if (!currentId || !messageId) return
+    try {
+      // 以服务端确认后的反馈态为准（同值再点 → 后端置 null 取消）
+      const { feedback: confirmed } = await feedbackApi.send(currentId, messageId, feedback)
+      set((s) => ({
+        messages: s.messages.map((m) => (m.messageId === messageId ? { ...m, feedback: confirmed } : m)),
+        history: s.history.map((m) => (m.id === messageId ? { ...m, feedback: confirmed } : m)),
+      }))
+    } catch {
+      /* 反馈失败由 client.ts 统一弹错 */
+    }
   },
 
   reset: () =>

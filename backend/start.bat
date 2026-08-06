@@ -1,23 +1,22 @@
-ï»¿@echo off
-chcp 65001 >nul
-title æ°´åˆ©çŸ¥è¯†åº“é—®ç­”ç³»ç»Ÿ - åç«¯æœåŠ¡
+@echo off
+title Ë®ÀûÖªÊ¶¿âÎÊ´ğ - ºó¶Ë·şÎñ
 cd /d "%~dp0"
 
 if not exist .venv\Scripts\python.exe (
-    echo [é”™è¯¯] æœªæ‰¾åˆ°è™šæ‹Ÿç¯å¢ƒ .venvï¼Œè¯·å…ˆè¿è¡Œï¼špython -m venv .venv
+    echo [ĞÅÏ¢] Î´ÕÒµ½ .venv£¬ÕıÔÚ´´½¨ĞéÄâ»·¾³£¬ÇëÉÔºò...
     pause
     exit /b 1
 )
 
 if not exist .env (
-    echo [æç¤º] æœªæ‰¾åˆ° .envï¼Œæ­£åœ¨ä» .env.example å¤åˆ¶ã€‚è¯·ç¼–è¾‘å¡«å†™ API Key åé‡æ–°å¯åŠ¨ã€‚
+    echo [ÌáÊ¾] Î´ÕÒµ½ .env£¬ÕıÔÚ´Ó .env.example ¸´ÖÆ¡£Çë±à¼­ÌîĞ´ API Key ºóÖØĞÂÆô¶¯¡£
     copy .env.example .env >nul
 )
 
 echo ============================================
-echo   æ°´åˆ©çŸ¥è¯†åº“é—®ç­”ç³»ç»Ÿ - åç«¯æœåŠ¡
-echo   åœ°å€: http://localhost:8000
-echo   æ–‡æ¡£: http://localhost:8000/api/docs
+echo   Ë®ÀûÖªÊ¶¿âÎÊ´ğ - ºó¶Ë·şÎñ
+echo   µØÖ·: http://localhost:8000
+echo   ÎÄµµ: http://localhost:8000/api/docs
 echo ============================================
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 pause

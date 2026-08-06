@@ -85,6 +85,12 @@ class Message(Base):
     # token 用量（答辩数据）
     usage_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     usage_output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ---- 问答记忆库（反馈 + 来源标记 + 检索作用域）----
+    feedback: Mapped[str | None] = mapped_column(String(10), nullable=True)  # up / down / NULL
+    from_memory: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)  # 答案来自记忆复用
+    kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 该问答的检索作用域（反馈时读取）
+    doc_scope: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    style: Mapped[str | None] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
@@ -232,3 +238,36 @@ class SemanticCache(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class QaMemory(Base):
+    """问答记忆库（AI native 自身长库）：用户点赞(👍)沉淀的正向记忆 + 点踩(👎)沉淀的负面记忆。
+
+    完全独立于 RAG 知识库（chunks/Chroma），作为叠加在检索之上的「经验快通道」。
+    - 按用户隔离（user_id）：不同用户的问答记忆互不可见。
+    - 命中须检索作用域一致（kb_id/doc_scope/style，同 SemanticCache 语义）且主题一致。
+    - status='bad' 的负面记忆命中时，调用方应强制重新检索（跳过记忆复用与语义缓存）。
+    """
+
+    __tablename__ = "qa_memory"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)  # 按用户隔离
+    # 检索作用域（与 SemanticCache 同语义）：kb_id 选库；doc_scope 点名文档排序串；style 回答风格
+    kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    doc_scope: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    style: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default="good", nullable=False)  # good / bad
+    question: Mapped[str] = mapped_column(Text, nullable=False)  # 原始用户问题
+    question_vector_json: Mapped[str] = mapped_column(Text, nullable=False)  # 问题向量
+    subject: Mapped[str | None] = mapped_column(String(200), nullable=True)  # focus_rerank_query 主题词
+    answer: Mapped[str] = mapped_column(Text, default="", nullable=False)  # bad 时存被踩答案（审计）
+    citations_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 最近命中时的余弦分
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_qa_memory_user_scope", "user_id", "kb_id", "updated_at"),)

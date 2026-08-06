@@ -35,6 +35,12 @@ class MessageOut(ORMModel):
     content: str
     is_complete: bool
     error: str | None = None
+    # 问答记忆库：反馈 + 来源标记 + 检索作用域（反馈时读取）
+    feedback: str | None = None
+    from_memory: bool = False
+    kb_id: int | None = None
+    doc_scope: str | None = None
+    style: str | None = None
     created_at: datetime
     # 引用随消息返回（历史会话可还原）
     citations: list[CitationOut] = []

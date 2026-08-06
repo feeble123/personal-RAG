@@ -108,9 +108,17 @@ class Settings(BaseSettings):
     # 会话历史注入条数（多轮记忆）
     history_turns: int = 6
 
+    # ---- 问答记忆库（AI native 自身长库，用户背书数据）----
+    memory_enabled: bool = True
+    memory_threshold: float = 0.93        # 严格复用阈值：近似同题（主题一致）才直接复用记忆答案
+    memory_max_entries: int = 300         # 每用户每 kb 作用域的记忆条数上限
+    memory_pool: int = 100                # 召回候选池（最近 N 条做余弦比对）
+    memory_eviction_ratio: float = 0.2    # 容量超限时淘汰最旧的比例
+
     # ---- 限流 ----
     auth_rate_limit: str = "10/minute"    # 注册/登录（按 IP）
     chat_rate_limit: str = "60/minute"    # 问答（按用户）
+    feedback_rate_limit: str = "30/minute"  # 反馈点赞/踩（按用户）
 
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"

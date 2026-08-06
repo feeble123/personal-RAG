@@ -179,6 +179,160 @@ async def test_semantic_cache(client, user_headers, sample_kb):
     assert e2[-1]["data"].get("cached", False) is True
 
 
+# ================= 问答记忆库（AI native 自身长库）=================
+async def test_memory_feedback_and_reuse(client, user_headers, sample_kb):
+    """👍 沉淀正向记忆 → 同题再问命中记忆（from_memory=True 且带真实 message_id）。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    async def ask(q):
+        ev = []
+        async with client.stream(
+            "POST", f"/api/conversations/{conv_id}/chat", headers=user_headers, json={"content": q, "kb_id": kb_id}
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:"):
+                    ev.append(json.loads(line[5:]))
+        return ev
+
+    e1 = await ask("什么是明渠均匀流的形成条件")
+    assert e1[-1]["event"] == "done"
+    mid = e1[-1]["data"]["message_id"]
+    assert mid is not None  # 正常生成必带真实 message_id
+
+    # 👍 沉淀正向记忆
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{mid}/feedback",
+        headers=user_headers, json={"feedback": "up"},
+    )
+    assert r.status_code == 200
+    assert r.json()["feedback"] == "up"
+
+    # 同题再问 → 命中记忆（先于语义缓存）
+    e2 = await ask("什么是明渠均匀流的形成条件")
+    done = e2[-1]["data"]
+    assert done.get("from_memory") is True
+    assert done.get("cached") is True
+    assert done.get("message_id") is not None
+
+
+async def test_memory_negative_forces_rerank(client, user_headers, sample_kb):
+    """👎 沉淀负面记忆 → 同题再问强制重新检索（跳过记忆复用与语义缓存）。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    async def ask(q):
+        ev = []
+        async with client.stream(
+            "POST", f"/api/conversations/{conv_id}/chat", headers=user_headers, json={"content": q, "kb_id": kb_id}
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:"):
+                    ev.append(json.loads(line[5:]))
+        return ev
+
+    e1 = await ask("什么是明渠均匀流")
+    mid1 = e1[-1]["data"]["message_id"]
+    # 👎 沉淀负面记忆
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{mid1}/feedback",
+        headers=user_headers, json={"feedback": "down"},
+    )
+    assert r.status_code == 200
+    assert r.json()["feedback"] == "down"
+
+    # 同题再问 → 强制重新检索：不出现记忆复用，也不走语义缓存
+    e2 = await ask("什么是明渠均匀流")
+    done = e2[-1]["data"]
+    assert done.get("from_memory") is not True
+    assert done.get("cached") is not True
+    assert done.get("message_id") is not None
+
+
+async def test_feedback_cancel_and_guards(client, user_headers, sample_kb):
+    """取消评价 null；越权/非 assistant 消息 404。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "明渠均匀流的条件", "kb_id": kb_id},
+    ) as resp:
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    mid = events[-1]["data"]["message_id"]
+
+    # 取消评价
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{mid}/feedback",
+        headers=user_headers, json={"feedback": None},
+    )
+    assert r.status_code == 200
+    assert r.json()["feedback"] is None
+
+    # 非 assistant 消息（取 user 消息 id）→ 404
+    msgs = (await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)).json()["items"]
+    user_msg_id = msgs[0]["id"]
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{user_msg_id}/feedback",
+        headers=user_headers, json={"feedback": "up"},
+    )
+    assert r.status_code == 404
+
+    # 越权：他人会话的 message → 404
+    r2 = await client.post("/api/auth/register", json={"username": "intruder", "password": "pass123"})
+    other_headers = {"Authorization": f"Bearer {r2.json()['access_token']}"}
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{mid}/feedback",
+        headers=other_headers, json={"feedback": "up"},
+    )
+    assert r.status_code == 404
+
+
+async def test_kb_delete_cascades_memory(client, admin_headers, user_headers, sample_kb):
+    """删除知识库 → 该库沉淀的问答记忆一并清理（级联），避免悬空记忆污染。"""
+    from sqlalchemy import func, select
+
+    from app.db.models import QaMemory
+    from app.db.session import async_session_factory
+
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "什么是明渠均匀流", "kb_id": kb_id},
+    ) as resp:
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    mid = events[-1]["data"]["message_id"]
+
+    # 👍 沉淀正向记忆（落到该 kb_id）
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{mid}/feedback",
+        headers=user_headers, json={"feedback": "up"},
+    )
+    assert r.status_code == 200
+    async with async_session_factory() as db:
+        cnt = (await db.scalar(select(func.count()).select_from(QaMemory).where(QaMemory.kb_id == kb_id))) or 0
+        assert cnt >= 1
+
+    # 删除知识库 → 记忆级联清理
+    r = await client.delete(f"/api/admin/kbs/{kb_id}", headers=admin_headers)
+    assert r.status_code == 204
+    async with async_session_factory() as db:
+        cnt = (await db.scalar(select(func.count()).select_from(QaMemory).where(QaMemory.kb_id == kb_id))) or 0
+        assert cnt == 0
+
+
 # ================= 统计 =================
 async def test_stats(client, admin_headers):
     r = await client.get("/api/admin/stats", headers=admin_headers)

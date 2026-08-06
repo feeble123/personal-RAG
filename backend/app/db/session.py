@@ -129,4 +129,26 @@ async def init_db() -> None:
                 )
             )
             logger.info("migration: knowledge_bases.answer_style backfilled to 'standard'")
+
+        # 问答记忆库：messages 补反馈 + 来源标记 + 检索作用域列（create_all 不补已有表列）
+        msg_cols = await conn.run_sync(
+            lambda sync_conn: [
+                row[1]
+                for row in sync_conn.execute(text("PRAGMA table_info(messages)")).fetchall()
+            ]
+        )
+        if msg_cols:
+            if "feedback" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(10)"))
+            if "from_memory" not in msg_cols:
+                await conn.execute(
+                    text("ALTER TABLE messages ADD COLUMN from_memory BOOLEAN NOT NULL DEFAULT 0")
+                )
+            if "kb_id" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN kb_id INTEGER"))
+            if "doc_scope" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN doc_scope VARCHAR(100)"))
+            if "style" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN style VARCHAR(30)"))
+            logger.info("migration: messages feedback/from_memory/kb_id/doc_scope/style added")
     logger.info("Database tables ensured.")

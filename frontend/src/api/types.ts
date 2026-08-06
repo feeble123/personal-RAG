@@ -74,6 +74,12 @@ export interface Message {
   content: string
   is_complete: boolean
   error: string | null
+  // 问答记忆库：用户反馈 + 是否来自记忆复用（历史刷新后可还原标签与按钮态）
+  feedback: 'up' | 'down' | null
+  from_memory: boolean
+  kb_id: number | null
+  doc_scope: string | null
+  style: string | null
   created_at: string
 }
 
