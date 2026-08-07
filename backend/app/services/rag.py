@@ -329,6 +329,9 @@ async def retrieve(
         if not hits:
             continue
         max_s = max(s for _, s in hits)
+        if max_s <= 0:
+            # 该库 BM25 全 0（查询匹配不到关键词，如问候语「你好」）→ 跳过，避免除零崩溃
+            continue
         for cid, s in hits:
             bm25_norm[cid] = s / max_s  # 该库内归一化到 0~1
 

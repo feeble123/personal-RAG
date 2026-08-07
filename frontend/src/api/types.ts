@@ -95,6 +95,34 @@ export interface Citation {
   rank: number | null
 }
 
+// 问答记忆条目（记忆库管理系统，镜像后端 MemoryOut）
+export interface MemoryItem {
+  id: number
+  user_id: number
+  username: string | null
+  kb_id: number | null
+  kb_name: string | null
+  doc_scope: string | null
+  style: string | null
+  status: 'good' | 'bad'
+  question: string
+  subject: string | null
+  answer: string
+  citations: Citation[]
+  hit_count: number
+  score: number | null
+  created_at: string
+  updated_at: string
+}
+
+// 记忆统计（前端统计卡片）
+export interface MemoryStats {
+  total: number
+  good: number
+  bad: number
+  total_hits: number
+}
+
 export interface PageResult<T> {
   items: T[]
   total: number

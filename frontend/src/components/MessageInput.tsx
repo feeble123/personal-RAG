@@ -42,7 +42,7 @@ export default function MessageInput() {
   }
 
   return (
-    <div style={{ borderTop: '1px solid #f0f0f0', padding: 12 }}>
+    <div style={{ borderTop: '1px solid rgba(122, 190, 255, 0.12)', padding: 12 }}>
       <Space wrap style={{ marginBottom: 8, width: '100%' }}>
         <Select
           value={kbId}

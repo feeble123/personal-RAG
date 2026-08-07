@@ -4,6 +4,7 @@ import { UserOutlined, LockOutlined } from '@ant-design/icons'
 import { Link, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { useAuthStore } from '@/stores/auth'
+import AuthBackground from '@/components/AuthBackground'
 
 export default function Register() {
   const [loading, setLoading] = useState(false)
@@ -25,9 +26,10 @@ export default function Register() {
 
   return (
     <div className="auth-bg">
+      <AuthBackground />
       <Card style={{ width: 380 }}>
         <Space direction="vertical" style={{ width: '100%', marginBottom: 8 }} align="center">
-          <Typography.Title level={3} style={{ margin: 0 }}>
+          <Typography.Title level={3} className="gradient-title" style={{ margin: 0 }}>
             注册账号
           </Typography.Title>
           <Typography.Text type="secondary">注册后可进行知识库问答</Typography.Text>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { App, Avatar, Dropdown, Form, Input, Modal, Space, Typography } from 'antd'
-import { DatabaseOutlined, KeyOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
+import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate, Link } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { useAuthStore } from '@/stores/auth'
@@ -36,6 +36,13 @@ export default function UserMenu() {
           label: <Link to="/knowledge">知识库管理</Link>,
         }
       : null,
+    user?.role === 'admin'
+      ? {
+          key: 'mem',
+          icon: <BulbOutlined />,
+          label: <Link to="/memories">记忆库管理</Link>,
+        }
+      : null,
     { key: 'pwd', icon: <KeyOutlined />, label: '修改密码', onClick: () => setPwdOpen(true) },
     { type: 'divider' as const },
     {
@@ -54,7 +61,10 @@ export default function UserMenu() {
     <>
       <Dropdown menu={{ items }} placement="bottomRight">
         <Space style={{ cursor: 'pointer' }}>
-          <Avatar style={{ backgroundColor: '#1677ff' }} icon={<UserOutlined />} />
+          <Avatar
+            style={{ background: 'linear-gradient(135deg, #00c6ff, #0a7bff)' }}
+            icon={<UserOutlined />}
+          />
           <Typography.Text>{user?.nickname || user?.username}</Typography.Text>
         </Space>
       </Dropdown>

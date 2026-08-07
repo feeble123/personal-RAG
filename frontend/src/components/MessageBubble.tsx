@@ -27,16 +27,27 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   return (
     <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexDirection: isUser ? 'row-reverse' : 'row' }}>
       <Avatar
-        style={{ backgroundColor: isUser ? '#1677ff' : '#52c41a', flexShrink: 0 }}
+        style={{
+          background: isUser
+            ? 'linear-gradient(135deg, #00c6ff, #0a7bff)'
+            : 'linear-gradient(135deg, #1fd6c0, #0a9cff)',
+          flexShrink: 0,
+        }}
         icon={isUser ? <UserOutlined /> : <RobotOutlined />}
       />
       <div style={{ maxWidth: '82%' }}>
         <div
           className="msg-bubble"
           style={{
-            background: isUser ? '#1677ff' : '#ffffff',
-            color: isUser ? '#fff' : 'inherit',
-            border: isUser ? 'none' : '1px solid #f0f0f0',
+            background: isUser
+              ? 'linear-gradient(135deg, #00c6ff, #0a7bff)'
+              : 'rgba(28, 43, 74, 0.55)',
+            color: isUser ? '#fff' : 'rgba(228, 241, 255, 0.92)',
+            border: isUser ? 'none' : '1px solid rgba(122, 190, 255, 0.16)',
+            boxShadow: isUser
+              ? '0 4px 18px rgba(0, 198, 255, 0.28)'
+              : '0 2px 12px rgba(0, 0, 0, 0.25)',
+            backdropFilter: 'blur(8px)',
           }}
         >
           {isUser ? (

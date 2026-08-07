@@ -92,6 +92,8 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
     except Exception:
         pass
 
+    from app.db.models import QaMemory
+
     return {
         "users": await count(User),
         "conversations": await count(Conversation),
@@ -99,6 +101,7 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
         "knowledge_bases": len(kb_rows),
         "documents": await count(Document),
         "chunks": await count(Chunk),
+        "qa_memory": await count(QaMemory),  # 问答记忆库沉淀数
         "vectors_in_chroma": vector_count,
         "bm25_indexed_kbs": len(bm25.all_kb_ids()),
         "per_kb": [{"name": n, "chunk_count": c} for _, n, c in kb_rows],

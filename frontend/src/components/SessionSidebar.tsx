@@ -92,7 +92,8 @@ export default function SessionSidebar() {
                   borderRadius: 8,
                   cursor: 'pointer',
                   marginBottom: 4,
-                  background: currentId === conv.id ? '#e6f4ff' : 'transparent',
+                  background: currentId === conv.id ? 'rgba(0, 198, 255, 0.16)' : 'transparent',
+                  border: currentId === conv.id ? '1px solid rgba(0, 198, 255, 0.3)' : '1px solid transparent',
                 }}
               >
                 <Dropdown

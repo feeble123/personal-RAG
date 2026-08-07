@@ -127,6 +127,8 @@ def create_app() -> FastAPI:
     from app.modules.qa.routes import router as qa_router
     from app.modules.users.routes import router as users_router
     from app.modules.users.routes import stats_router
+    from app.modules.memory.routes import kb_memories_router as kb_memories_router
+    from app.modules.memory.routes import router as memory_router
 
     api_prefix = "/api"
     app.include_router(auth_router, prefix=api_prefix)
@@ -136,6 +138,8 @@ def create_app() -> FastAPI:
     app.include_router(qa_router, prefix=api_prefix)
     app.include_router(users_router, prefix=api_prefix)
     app.include_router(stats_router, prefix=api_prefix)
+    app.include_router(memory_router, prefix=api_prefix)
+    app.include_router(kb_memories_router, prefix=api_prefix)
 
     # 健康检查
     @app.get("/api/health")

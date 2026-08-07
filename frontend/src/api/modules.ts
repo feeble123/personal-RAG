@@ -1,6 +1,6 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
-import type { ChunkItem, Citation, Conversation, KnowledgeBase, Message, TokenOut, User } from './types'
+import type { ChunkItem, Citation, Conversation, KnowledgeBase, MemoryItem, MemoryStats, Message, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -42,6 +42,36 @@ export const feedbackApi = {
         feedback,
       })
       .then((r) => r.data),
+}
+
+// ===== 问答记忆库管理（仅管理员）=====
+export const memoryApi = {
+  list: (params?: Record<string, unknown>) =>
+    api.get('/admin/memories', { params }).then((r) => r.data as { items: MemoryItem[]; total: number }),
+  stats: (params?: Record<string, unknown>) =>
+    api.get('/admin/memories/stats', { params }).then((r) => r.data as MemoryStats),
+  create: (data: { question: string; answer: string; kb_id?: number | null; style?: string }) =>
+    api.post('/admin/memories', data).then((r) => r.data as MemoryItem),
+  setStatus: (id: number, status: 'good' | 'bad') =>
+    api.patch(`/admin/memories/${id}`, { status }).then((r) => r.data as MemoryItem),
+  remove: (id: number) => api.delete(`/admin/memories/${id}`),
+  batchRemove: (ids: number[]) =>
+    api.request({ method: 'delete', url: '/admin/memories', data: { ids } }),
+  clearKb: (kbId: number) => api.delete(`/admin/kbs/${kbId}/memories`),
+  exportFile: async (fmt: 'csv' | 'json', params?: Record<string, unknown>) => {
+    const res = await api.get('/admin/memories/export', {
+      params: { ...params, fmt },
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(res.data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `qa_memory.${fmt}`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+  // 记忆页用户筛选下拉（管理接口）
+  listUsers: () => api.get('/admin/users').then((r) => r.data as { items: { id: number; username: string }[] }),
 }
 
 // ===== 流式问答（SSE，fetch + ReadableStream）=====

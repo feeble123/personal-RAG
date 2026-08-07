@@ -4,6 +4,7 @@ import { UserOutlined, LockOutlined, ThunderboltOutlined } from '@ant-design/ico
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { useAuthStore } from '@/stores/auth'
+import AuthBackground from '@/components/AuthBackground'
 
 export default function Login() {
   const [loading, setLoading] = useState(false)
@@ -30,10 +31,17 @@ export default function Login() {
 
   return (
     <div className="auth-bg">
+      <AuthBackground />
       <Card style={{ width: 380 }}>
         <Space direction="vertical" style={{ width: '100%', marginBottom: 8 }} align="center">
-          <ThunderboltOutlined style={{ fontSize: 40, color: '#1677ff' }} />
-          <Typography.Title level={3} style={{ margin: 0 }}>
+          <ThunderboltOutlined
+            style={{
+              fontSize: 42,
+              color: '#00c6ff',
+              filter: 'drop-shadow(0 0 12px rgba(0, 198, 255, 0.65))',
+            }}
+          />
+          <Typography.Title level={3} className="gradient-title" style={{ margin: 0 }}>
             水利知识库问答系统
           </Typography.Title>
           <Typography.Text type="secondary">基于 LangChain 的 RAG 智能问答</Typography.Text>

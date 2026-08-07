@@ -393,7 +393,17 @@ export default function KnowledgeBase() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #f0f0f0', paddingInline: 24 }}>
+      <Header
+        className="tech-line"
+        style={{
+          background: 'rgba(10, 17, 34, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderBottom: '1px solid rgba(122, 190, 255, 0.1)',
+          paddingInline: 24,
+        }}
+      >
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/chat')}>
             返回问答
@@ -431,7 +441,8 @@ export default function KnowledgeBase() {
                       borderRadius: 8,
                       cursor: 'pointer',
                       marginBottom: 4,
-                      background: activeKb === kb.id ? '#e6f4ff' : 'transparent',
+                      background: activeKb === kb.id ? 'rgba(0, 198, 255, 0.16)' : 'transparent',
+                      border: activeKb === kb.id ? '1px solid rgba(0, 198, 255, 0.3)' : '1px solid transparent',
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',

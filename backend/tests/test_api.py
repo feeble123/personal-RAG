@@ -179,6 +179,24 @@ async def test_semantic_cache(client, user_headers, sample_kb):
     assert e2[-1]["data"].get("cached", False) is True
 
 
+async def test_chat_greeting_without_bm25_hits(client, user_headers, sample_kb):
+    """问候语（BM25 全 0 命中）不得触发除零崩溃：rag.retrieve max_s==0 时应跳过归一化。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "你好", "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    assert events[-1]["event"] == "done", f"不应报错: {events[-1]}"
+
+
 # ================= 问答记忆库（AI native 自身长库）=================
 async def test_memory_feedback_and_reuse(client, user_headers, sample_kb):
     """👍 沉淀正向记忆 → 同题再问命中记忆（from_memory=True 且带真实 message_id）。"""
@@ -331,6 +349,164 @@ async def test_kb_delete_cascades_memory(client, admin_headers, user_headers, sa
     async with async_session_factory() as db:
         cnt = (await db.scalar(select(func.count()).select_from(QaMemory).where(QaMemory.kb_id == kb_id))) or 0
         assert cnt == 0
+
+
+# ================= 记忆库管理系统（M1 后端 API）=================
+async def test_memories_admin_list_filter_and_names(client, admin_headers, sample_kb):
+    """管理员列表补 username/kb_name；按 kb_id/status/关键词筛选。"""
+    kb_id, _ = sample_kb
+    r = await client.post(
+        "/api/admin/memories",
+        headers=admin_headers,
+        json={"question": "记忆管理系统筛选测试", "answer": "测试答案", "kb_id": kb_id, "style": "standard"},
+    )
+    assert r.status_code == 201
+    mid = r.json()["id"]
+
+    r = await client.get("/api/admin/memories", headers=admin_headers)
+    body = r.json()
+    item = next((i for i in body["items"] if i["id"] == mid), None)
+    assert item is not None
+    assert item["username"] == "admin"
+    assert item["kb_name"]  # join 已补出库名
+
+    r = await client.get(f"/api/admin/memories?kb_id={kb_id}", headers=admin_headers)
+    assert all(i["kb_id"] == kb_id for i in r.json()["items"])
+    r = await client.get("/api/admin/memories?q=记忆管理系统", headers=admin_headers)
+    assert r.json()["total"] >= 1
+    r = await client.get("/api/admin/memories?status=good", headers=admin_headers)
+    assert any(i["id"] == mid for i in r.json()["items"])
+
+
+async def test_memories_403_for_regular_user(client, user_headers):
+    r = await client.get("/api/admin/memories", headers=user_headers)
+    assert r.status_code == 403
+
+
+async def test_memory_delete_single_and_404(client, admin_headers):
+    r = await client.post(
+        "/api/admin/memories", headers=admin_headers, json={"question": "待删除记忆", "answer": "答案"},
+    )
+    assert r.status_code == 201
+    mid = r.json()["id"]
+    r = await client.delete(f"/api/admin/memories/{mid}", headers=admin_headers)
+    assert r.status_code == 204
+    r = await client.get("/api/admin/memories?q=待删除记忆", headers=admin_headers)
+    assert r.json()["total"] == 0
+    r = await client.delete(f"/api/admin/memories/{mid}", headers=admin_headers)
+    assert r.status_code == 404
+
+
+async def test_memory_batch_delete(client, admin_headers):
+    ids = []
+    for q in ("批量删除一", "批量删除二"):
+        r = await client.post("/api/admin/memories", headers=admin_headers, json={"question": q, "answer": "答案"})
+        ids.append(r.json()["id"])
+    r = await client.request(
+        "DELETE",
+        "/api/admin/memories",
+        headers={**admin_headers, "Content-Type": "application/json"},
+        content=json.dumps({"ids": ids}),
+    )
+    assert r.status_code == 204
+    r = await client.get("/api/admin/memories", headers=admin_headers)
+    assert all(i["id"] not in ids for i in r.json()["items"])
+
+
+async def test_clear_kb_memories(client, admin_headers, sample_kb):
+    kb_id, _ = sample_kb
+    await client.post(
+        "/api/admin/memories", headers=admin_headers,
+        json={"question": "清库测试", "answer": "答案", "kb_id": kb_id},
+    )
+    r = await client.get(f"/api/admin/memories?kb_id={kb_id}", headers=admin_headers)
+    assert r.json()["total"] >= 1
+    r = await client.delete(f"/api/admin/kbs/{kb_id}/memories", headers=admin_headers)
+    assert r.status_code == 204
+    r = await client.get(f"/api/admin/memories?kb_id={kb_id}", headers=admin_headers)
+    assert r.json()["total"] == 0
+
+
+async def test_memory_status_correction_triggers_rerank(client, admin_headers, user_headers, sample_kb):
+    """管理员把 good 记忆纠正为 bad → 同题再问强制重检（不再记忆复用/缓存命中）。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    async def ask(q):
+        ev = []
+        async with client.stream(
+            "POST", f"/api/conversations/{conv_id}/chat", headers=user_headers,
+            json={"content": q, "kb_id": kb_id},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:"):
+                    ev.append(json.loads(line[5:]))
+        return ev
+
+    q = "记忆纠偏后应强制重检"
+    e1 = await ask(q)
+    mid1 = e1[-1]["data"]["message_id"]
+    await client.post(
+        f"/api/conversations/{conv_id}/messages/{mid1}/feedback",
+        headers=user_headers, json={"feedback": "up"},
+    )
+    e2 = await ask(q)
+    assert e2[-1]["data"].get("from_memory") is True
+
+    # 管理员查到此记忆并纠正为 bad
+    r = await client.get("/api/admin/memories?q=记忆纠偏后应强制重检", headers=admin_headers)
+    mem_id = r.json()["items"][0]["id"]
+    r = await client.patch(f"/api/admin/memories/{mem_id}", headers=admin_headers, json={"status": "bad"})
+    assert r.status_code == 200 and r.json()["status"] == "bad"
+
+    # 再问 → 强制重检（无记忆复用、非缓存命中）
+    e3 = await ask(q)
+    done = e3[-1]["data"]
+    assert done.get("from_memory") is not True
+    assert done.get("cached") is not True
+
+
+async def test_memory_manual_create_and_recall(client, admin_headers):
+    """管理员手动录入 → 同题再问命中记忆秒回。"""
+    q = "手动录入后应被记忆复用"
+    r = await client.post(
+        "/api/admin/memories", headers=admin_headers,
+        json={"question": q, "answer": "这是管理员手动录入的答案", "style": "standard"},
+    )
+    assert r.status_code == 201
+
+    r = await client.post("/api/conversations", headers=admin_headers, json={})
+    conv_id = r.json()["id"]
+    ev = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat", headers=admin_headers,
+        json={"content": q, "style": "standard"},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                ev.append(json.loads(line[5:]))
+    assert ev[-1]["data"].get("from_memory") is True
+
+
+async def test_memory_export(client, admin_headers):
+    await client.post(
+        "/api/admin/memories", headers=admin_headers,
+        json={"question": "导出验证专用问题", "answer": "导出专用答案"},
+    )
+    r = await client.get("/api/admin/memories/export?fmt=json", headers=admin_headers)
+    assert r.status_code == 200
+    assert "导出验证专用问题" in r.text
+    r = await client.get("/api/admin/memories/export?fmt=csv", headers=admin_headers)
+    assert r.status_code == 200
+    assert "导出验证专用问题" in r.text
+
+
+async def test_stats_has_qa_memory(client, admin_headers):
+    r = await client.get("/api/admin/stats", headers=admin_headers)
+    assert r.status_code == 200
+    assert "qa_memory" in r.json()
 
 
 # ================= 统计 =================

@@ -2,6 +2,10 @@
   box-sizing: border-box;
 }
 
+:root {
+  color-scheme: dark;
+}
+
 html,
 body,
 #root {
@@ -13,29 +17,107 @@ body,
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
+  color: rgba(228, 241, 255, 0.92);
+  /* 深色基底 + 顶部青色光晕 + 右下方紫色光晕 + 细网格纹理 */
+  background-color: #070c1a;
+  background-image:
+    radial-gradient(ellipse 70% 45% at 50% -15%, rgba(0, 198, 255, 0.22), transparent 60%),
+    radial-gradient(ellipse 45% 35% at 90% 110%, rgba(122, 107, 255, 0.16), transparent 60%),
+    linear-gradient(rgba(122, 190, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(122, 190, 255, 0.045) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px;
+  background-attachment: fixed;
 }
 
-/* 登录/注册背景 */
+/* 顶栏底部霓虹渐变线（科技感标识） */
+.tech-line {
+  position: relative;
+}
+.tech-line::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(0, 198, 255, 0.7) 30%,
+    rgba(122, 107, 255, 0.7) 70%,
+    transparent 100%
+  );
+}
+
+/* ==================== 登录/注册背景 ==================== */
 .auth-bg {
+  position: relative;
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #e8f1ff 0%, #f5f7fa 100%);
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 60% 50% at 50% 0%, rgba(0, 198, 255, 0.18), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(122, 107, 255, 0.15), transparent 60%),
+    linear-gradient(180deg, #0a1226 0%, #0a0f1e 100%);
 }
 
-/* 引用卡片高亮 */
+/* 粒子层：铺满且不挡交互 */
+.auth-particles {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* 玻璃拟态卡片 */
+.auth-bg .ant-card {
+  position: relative;
+  z-index: 1;
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  background: rgba(16, 26, 50, 0.55) !important;
+  border: 1px solid rgba(122, 190, 255, 0.18) !important;
+  box-shadow:
+    0 0 0 1px rgba(0, 198, 255, 0.06) inset,
+    0 24px 70px rgba(0, 0, 0, 0.55),
+    0 0 40px rgba(0, 198, 255, 0.12);
+  border-radius: 16px;
+}
+
+/* 渐变标题文字 */
+.gradient-title {
+  background: linear-gradient(120deg, #7ce7ff 0%, #00c6ff 45%, #7a6bff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* 登录/注册主按钮：渐变发光 */
+.auth-bg .ant-btn-primary {
+  background: linear-gradient(120deg, #00c6ff, #0a7bff);
+  border: none;
+  box-shadow: 0 6px 24px rgba(0, 198, 255, 0.35);
+}
+.auth-bg .ant-btn-primary:hover {
+  box-shadow: 0 8px 30px rgba(0, 198, 255, 0.5);
+}
+
+/* ==================== 引用卡片 ==================== */
 .citation-snippet {
   white-space: pre-wrap;
   word-break: break-word;
-  background: #fafafa;
+  background: rgba(122, 190, 255, 0.07);
+  border: 1px solid rgba(122, 190, 255, 0.12);
   border-radius: 6px;
   padding: 8px 12px;
   max-height: 160px;
   overflow-y: auto;
 }
 
-/* 消息气泡 */
+/* ==================== 消息气泡 ==================== */
 .msg-bubble {
   max-width: 78%;
   padding: 10px 14px;
@@ -47,7 +129,8 @@ body {
 
 /* Markdown 代码块 */
 .msg-bubble pre {
-  background: #f6f8fa;
+  background: rgba(8, 13, 26, 0.6);
+  border: 1px solid rgba(122, 190, 255, 0.12);
   border-radius: 6px;
   padding: 10px;
   overflow-x: auto;
@@ -92,11 +175,11 @@ body {
 .msg-bubble blockquote {
   margin: 8px 0;
   padding: 4px 12px;
-  border-left: 3px solid #d9d9d9;
-  color: rgba(0, 0, 0, 0.65);
+  border-left: 3px solid rgba(0, 198, 255, 0.5);
+  color: rgba(163, 190, 220, 0.85);
 }
 .msg-bubble code {
-  background: #f6f8fa;
+  background: rgba(122, 190, 255, 0.12);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 13px;
@@ -113,12 +196,12 @@ body {
 }
 .msg-bubble th,
 .msg-bubble td {
-  border: 1px solid #e8e8e8;
+  border: 1px solid rgba(122, 190, 255, 0.16);
   padding: 6px 10px;
   font-size: 13px;
 }
 .msg-bubble th {
-  background: #fafafa;
+  background: rgba(0, 198, 255, 0.08);
   font-weight: 600;
 }
 
@@ -126,7 +209,8 @@ body {
 .stream-cursor {
   display: inline-block;
   margin-left: 2px;
-  color: #1677ff;
+  color: #00c6ff;
+  text-shadow: 0 0 8px rgba(0, 198, 255, 0.6);
   animation: blink 1s step-start infinite;
 }
 
@@ -134,4 +218,20 @@ body {
   50% {
     opacity: 0;
   }
+}
+
+/* ==================== 深色滚动条 ==================== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(122, 190, 255, 0.22);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 198, 255, 0.4);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }

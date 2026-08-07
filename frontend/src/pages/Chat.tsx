@@ -89,8 +89,8 @@ export default function Chat() {
     <Layout style={{ height: '100vh' }}>
       <Sider
         width={sidebarWidth}
-        theme="light"
-        style={{ borderRight: '1px solid #f0f0f0', position: 'relative' }}
+        theme="dark"
+        style={{ borderRight: '1px solid rgba(122, 190, 255, 0.12)', position: 'relative' }}
       >
         <SessionSidebar />
         {/* 拖拽手柄：调整会话栏宽度 */}
@@ -110,17 +110,21 @@ export default function Chat() {
       </Sider>
       <Content style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <div
+          className="tech-line"
           style={{
             height: 56,
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: '1px solid rgba(122, 190, 255, 0.1)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '0 16px',
+            background: 'rgba(10, 17, 34, 0.4)',
           }}
         >
           <Space>
-            <MessageOutlined style={{ fontSize: 18, color: '#1677ff' }} />
+            <MessageOutlined
+              style={{ fontSize: 18, color: '#00c6ff', textShadow: '0 0 12px rgba(0, 198, 255, 0.7)' }}
+            />
             <Typography.Text strong>知识库问答</Typography.Text>
           </Space>
           <UserMenu />
