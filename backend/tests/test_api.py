@@ -509,6 +509,123 @@ async def test_stats_has_qa_memory(client, admin_headers):
     assert "qa_memory" in r.json()
 
 
+# ================= 账号管理系统（后端扩展）=================
+async def test_admin_create_user_and_validation(client, admin_headers):
+    r = await client.post(
+        "/api/admin/users", headers=admin_headers,
+        json={"username": "created_user", "password": "pass123", "nickname": "创建的用户"},
+    )
+    assert r.status_code == 201
+    body = r.json()
+    assert body["role"] == "user" and body["is_active"] is True
+    assert "created_at" in body
+    uid = body["id"]
+    # 重名 → 409
+    r = await client.post("/api/admin/users", headers=admin_headers, json={"username": "created_user", "password": "pass123"})
+    assert r.status_code == 409
+    # 非法角色 → 422
+    r = await client.post("/api/admin/users", headers=admin_headers, json={"username": "bad_role", "password": "pass123", "role": "super"})
+    assert r.status_code == 422
+    await client.delete(f"/api/admin/users/{uid}", headers=admin_headers)
+
+
+async def test_admin_user_list_search(client, admin_headers):
+    for uname in ("search_alpha", "search_beta"):
+        await client.post("/api/admin/users", headers=admin_headers, json={"username": uname, "password": "pass123"})
+    r = await client.get("/api/admin/users?q=search_alpha", headers=admin_headers)
+    body = r.json()
+    assert body["total"] == 1
+    assert body["items"][0]["username"] == "search_alpha"
+    assert body["items"][0]["created_at"]
+    # 清理
+    r = await client.get("/api/admin/users?q=search_", headers=admin_headers)
+    for u in r.json()["items"]:
+        await client.delete(f"/api/admin/users/{u['id']}", headers=admin_headers)
+
+
+async def test_admin_reset_password(client, admin_headers):
+    r = await client.post("/api/admin/users", headers=admin_headers, json={"username": "reset_me", "password": "oldpass123"})
+    uid = r.json()["id"]
+    r = await client.put(f"/api/admin/users/{uid}/password", headers=admin_headers, json={"new_password": "newpass456"})
+    assert r.status_code == 200
+    # 旧密码失效、新密码可登录
+    r = await client.post("/api/auth/login", json={"username": "reset_me", "password": "oldpass123"})
+    assert r.status_code == 401
+    r = await client.post("/api/auth/login", json={"username": "reset_me", "password": "newpass456"})
+    assert r.status_code == 200
+    # 重置不存在的用户 → 404
+    r = await client.put("/api/admin/users/999999/password", headers=admin_headers, json={"new_password": "newpass456"})
+    assert r.status_code == 404
+    await client.delete(f"/api/admin/users/{uid}", headers=admin_headers)
+
+
+async def test_admin_patch_role_and_active(client, admin_headers):
+    r = await client.post("/api/admin/users", headers=admin_headers, json={"username": "patch_me", "password": "pass123"})
+    uid = r.json()["id"]
+    r = await client.patch(f"/api/admin/users/{uid}", headers=admin_headers, json={"role": "admin"})
+    assert r.status_code == 200 and r.json()["role"] == "admin"
+    # 禁用 → 登录被拒
+    await client.patch(f"/api/admin/users/{uid}", headers=admin_headers, json={"is_active": False})
+    r = await client.post("/api/auth/login", json={"username": "patch_me", "password": "pass123"})
+    assert r.status_code == 403
+    await client.patch(f"/api/admin/users/{uid}", headers=admin_headers, json={"is_active": True})
+    await client.delete(f"/api/admin/users/{uid}", headers=admin_headers)
+
+
+async def test_admin_delete_and_self_guards(client, admin_headers):
+    me = (await client.get("/api/auth/me", headers=admin_headers)).json()
+    # 不能删除自己 / 改自己角色
+    r = await client.delete(f"/api/admin/users/{me['id']}", headers=admin_headers)
+    assert r.status_code == 400
+    r = await client.patch(f"/api/admin/users/{me['id']}", headers=admin_headers, json={"role": "user"})
+    assert r.status_code == 400
+    # 删除不存在 → 404
+    r = await client.delete("/api/admin/users/999999", headers=admin_headers)
+    assert r.status_code == 404
+
+
+async def test_users_403_for_regular_user(client, user_headers):
+    r = await client.get("/api/admin/users", headers=user_headers)
+    assert r.status_code == 403
+    r = await client.post("/api/admin/users", headers=user_headers, json={"username": "x", "password": "pass123"})
+    assert r.status_code == 403
+
+
+async def test_admin_delete_user_cascades_memory(client, admin_headers, sample_kb):
+    """删除用户 → 级联清理其会话/消息，并显式清理其沉淀的问答记忆（QaMemory 无 FK）。"""
+    from sqlalchemy import func, select
+
+    from app.db.models import QaMemory
+    from app.db.session import async_session_factory
+
+    kb_id, _ = sample_kb
+    r = await client.post("/api/auth/register", json={"username": "cascade_u", "password": "pass123"})
+    uh = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    r = await client.post("/api/conversations", headers=uh, json={})
+    conv_id = r.json()["id"]
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=uh, json={"content": "级联清理验证", "kb_id": kb_id},
+    ) as resp:
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    mid = events[-1]["data"]["message_id"]
+    await client.post(f"/api/conversations/{conv_id}/messages/{mid}/feedback", headers=uh, json={"feedback": "up"})
+
+    uid = (await client.get("/api/auth/me", headers=uh)).json()["id"]
+    async with async_session_factory() as db:
+        before = (await db.scalar(select(func.count()).select_from(QaMemory).where(QaMemory.user_id == uid))) or 0
+        assert before >= 1  # 确认用户确实沉淀了记忆
+
+    r = await client.delete(f"/api/admin/users/{uid}", headers=admin_headers)
+    assert r.status_code == 204
+    async with async_session_factory() as db:
+        after = (await db.scalar(select(func.count()).select_from(QaMemory).where(QaMemory.user_id == uid))) or 0
+        assert after == 0  # 记忆已随账号级联清理
+
+
 # ================= 统计 =================
 async def test_stats(client, admin_headers):
     r = await client.get("/api/admin/stats", headers=admin_headers)

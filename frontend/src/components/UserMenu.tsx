@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { App, Avatar, Dropdown, Form, Input, Modal, Space, Typography } from 'antd'
-import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, UserOutlined } from '@ant-design/icons'
+import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate, Link } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { useAuthStore } from '@/stores/auth'
@@ -41,6 +41,13 @@ export default function UserMenu() {
           key: 'mem',
           icon: <BulbOutlined />,
           label: <Link to="/memories">记忆库管理</Link>,
+        }
+      : null,
+    user?.role === 'admin'
+      ? {
+          key: 'users',
+          icon: <TeamOutlined />,
+          label: <Link to="/users">账号管理</Link>,
         }
       : null,
     { key: 'pwd', icon: <KeyOutlined />, label: '修改密码', onClick: () => setPwdOpen(true) },

@@ -6,6 +6,7 @@ export interface User {
   role: 'admin' | 'user'
   nickname: string | null
   is_active: boolean
+  created_at?: string // 账号管理列表补出
 }
 
 export interface TokenOut {

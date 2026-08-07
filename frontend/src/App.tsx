@@ -5,6 +5,7 @@ import Register from '@/pages/Register'
 import Chat from '@/pages/Chat'
 import KnowledgeBase from '@/pages/KnowledgeBase'
 import MemoryManager from '@/pages/MemoryManager'
+import UserManager from '@/pages/UserManager'
 import NotFound from '@/pages/NotFound'
 
 export default function App() {
@@ -37,6 +38,16 @@ export default function App() {
           <RequireAuth>
             <RequireAdmin>
               <MemoryManager />
+            </RequireAdmin>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/users"
+        element={
+          <RequireAuth>
+            <RequireAdmin>
+              <UserManager />
             </RequireAdmin>
           </RequireAuth>
         }

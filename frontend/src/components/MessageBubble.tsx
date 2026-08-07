@@ -1,6 +1,6 @@
 import { memo } from 'react'
-import { Avatar, Button, Space, Tag, Tooltip, Typography } from 'antd'
-import { DislikeOutlined, LikeOutlined, RobotOutlined, StarOutlined, UserOutlined } from '@ant-design/icons'
+import { App, Avatar, Button, Space, Tag, Tooltip, Typography } from 'antd'
+import { CopyOutlined, DislikeOutlined, LikeOutlined, RobotOutlined, StarOutlined, UserOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -23,6 +23,16 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   const streaming = !msg.is_complete && msg.role === 'assistant'
   // 稳定引用（store 创建一次），不破坏 memo 的浅比较
   const giveFeedback = useChatStore((s) => s.giveFeedback)
+  const { message: appMsg } = App.useApp()
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(msg.content)
+      appMsg.success('已复制')
+    } catch {
+      appMsg.error('复制失败')
+    }
+  }
 
   return (
     <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexDirection: isUser ? 'row-reverse' : 'row' }}>
@@ -74,6 +84,15 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
           </Typography.Text>
         )}
 
+        {/* 用户提问：复制按钮 */}
+        {isUser && msg.content && (
+          <div style={{ marginTop: 4, display: 'flex', justifyContent: 'flex-end' }}>
+            <Tooltip title="复制提问">
+              <Button size="small" type="text" icon={<CopyOutlined />} onClick={onCopy} />
+            </Tooltip>
+          </div>
+        )}
+
         {!isUser && showCitations && msg.citations.length > 0 && (
           <Space wrap size={[6, 6]} style={{ marginTop: 6 }}>
             {msg.citations.map((c, i) => (
@@ -82,9 +101,14 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
           </Space>
         )}
 
-        {/* 问答记忆：来源标签 + 👍/👎 反馈（有真实 message_id 才可反馈） */}
+        {/* 问答记忆：来源标签 + 复制 + 👍/👎 反馈（有真实 message_id 才可反馈） */}
         {!isUser && msg.is_complete && (
           <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            {msg.content && (
+              <Tooltip title="复制回答">
+                <Button size="small" type="text" icon={<CopyOutlined />} onClick={onCopy} />
+              </Tooltip>
+            )}
             {msg.from_memory && (
               <Tag color="gold" icon={<StarOutlined />} style={{ marginInlineEnd: 0 }}>
                 来自问答记忆

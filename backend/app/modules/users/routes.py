@@ -1,20 +1,28 @@
-"""用户管理（仅管理员）：列表 / 改角色 / 启停用 / 删除 + 系统统计。"""
+"""用户管理（仅管理员）：列表 / 创建 / 改角色 / 启停用 / 删除 / 重置密码 + 系统统计。"""
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 
 from fastapi import APIRouter, Query
-from pydantic import BaseModel
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import delete, func, select
 
 from app.core.deps import AdminUser, DbSession
 from app.core.exceptions import BizError
-from app.db.models import Chunk, Conversation, Document, KnowledgeBase, Message, User
-from app.modules.auth.schemas import UserOut
+from app.core.security import hash_password
+from app.db.models import Chunk, Conversation, Document, KnowledgeBase, Message, QaMemory, User
+from app.modules.auth.schemas import USERNAME_RE, UserOut
 from app.services import vector_store
 
 router = APIRouter(prefix="/admin/users", tags=["users"])
 stats_router = APIRouter(prefix="/admin", tags=["stats"])
+
+
+class AdminUserOut(UserOut):
+    """账号管理列表用：UserOut + 创建时间。"""
+
+    created_at: datetime
 
 
 class UserPatch(BaseModel):
@@ -22,8 +30,33 @@ class UserPatch(BaseModel):
     is_active: bool | None = None
 
 
+class UserCreateIn(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6, max_length=64)
+    nickname: str | None = Field(None, max_length=50)
+    role: str = "user"
+
+    @field_validator("username")
+    @classmethod
+    def check_username(cls, v: str) -> str:
+        if not USERNAME_RE.match(v):
+            raise ValueError("用户名须为 3-50 位字母/数字/下划线")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def check_role(cls, v: str) -> str:
+        if v not in ("admin", "user"):
+            raise ValueError("角色须为 admin 或 user")
+        return v
+
+
+class PasswordResetIn(BaseModel):
+    new_password: str = Field(..., min_length=6, max_length=64)
+
+
 class UserListOut(BaseModel):
-    items: list[UserOut]
+    items: list[AdminUserOut]
     total: int
 
 
@@ -33,13 +66,36 @@ async def list_users(
     _admin: AdminUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    q: str | None = None,
 ) -> UserListOut:
-    total = (await db.scalar(select(func.count()).select_from(User))) or 0
+    where = []
+    if q:
+        where.append(User.username.contains(q))
+    total = (await db.scalar(select(func.count()).select_from(User).where(*where))) or 0
     rows = await db.execute(
-        select(User).order_by(User.created_at).offset((page - 1) * page_size).limit(page_size)
+        select(User).where(*where).order_by(User.created_at).offset((page - 1) * page_size).limit(page_size)
     )
-    items = [UserOut.model_validate(u) for u in rows.scalars().all()]
+    items = [AdminUserOut.model_validate(u) for u in rows.scalars().all()]
     return UserListOut(items=items, total=total)
+
+
+@router.post("", response_model=AdminUserOut, status_code=201)
+async def create_user(body: UserCreateIn, db: DbSession, _admin: AdminUser) -> AdminUserOut:
+    """管理员直接创建账号（可指定角色），无需用户自助注册。"""
+    existing = await db.scalar(select(User).where(User.username == body.username))
+    if existing:
+        raise BizError("用户名已存在", 409, "USER_EXISTS")
+    user = User(
+        username=body.username,
+        password_hash=hash_password(body.password),
+        nickname=body.nickname or body.username,
+        role=body.role,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return AdminUserOut.model_validate(user)
 
 
 @router.patch("/{user_id}", response_model=UserOut)
@@ -72,8 +128,24 @@ async def delete_user(user_id: int, db: DbSession, admin: AdminUser) -> None:
     user = await db.get(User, user_id)
     if not user:
         raise BizError("用户不存在", 404, "USER_NOT_FOUND")
+    # QaMemory 无 FK 级联，需显式清理该用户沉淀的问答记忆
+    await db.execute(delete(QaMemory).where(QaMemory.user_id == user_id))
     await db.delete(user)
     await db.commit()
+
+
+@router.put("/{user_id}/password", response_model=UserOut)
+async def reset_user_password(
+    user_id: int, body: PasswordResetIn, db: DbSession, _admin: AdminUser
+) -> UserOut:
+    """管理员重置用户密码（不校验旧密码；用户下次用新密码登录）。"""
+    user = await db.get(User, user_id)
+    if not user:
+        raise BizError("用户不存在", 404, "USER_NOT_FOUND")
+    user.password_hash = hash_password(body.new_password)
+    await db.commit()
+    await db.refresh(user)
+    return UserOut.model_validate(user)
 
 
 # ---------------- 系统统计（答辩数据） ----------------

@@ -74,6 +74,19 @@ export const memoryApi = {
   listUsers: () => api.get('/admin/users').then((r) => r.data as { items: { id: number; username: string }[] }),
 }
 
+// ===== 账号管理（仅管理员）=====
+export const usersApi = {
+  list: (params?: Record<string, unknown>) =>
+    api.get('/admin/users', { params }).then((r) => r.data as { items: User[]; total: number }),
+  create: (data: { username: string; password: string; nickname?: string; role?: string }) =>
+    api.post('/admin/users', data).then((r) => r.data as User),
+  patch: (id: number, data: { role?: string; is_active?: boolean }) =>
+    api.patch(`/admin/users/${id}`, data).then((r) => r.data as User),
+  resetPassword: (id: number, newPassword: string) =>
+    api.put(`/admin/users/${id}/password`, { new_password: newPassword }).then((r) => r.data as User),
+  remove: (id: number) => api.delete(`/admin/users/${id}`),
+}
+
 // ===== 流式问答（SSE，fetch + ReadableStream）=====
 export async function streamChat(opts: {
   conversationId: number
