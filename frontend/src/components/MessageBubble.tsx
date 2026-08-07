@@ -35,7 +35,10 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexDirection: isUser ? 'row-reverse' : 'row' }}>
+    <div
+      className="msg-in"
+      style={{ display: 'flex', gap: 10, marginBottom: 20, flexDirection: isUser ? 'row-reverse' : 'row' }}
+    >
       <Avatar
         style={{
           background: isUser
@@ -45,7 +48,7 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
         }}
         icon={isUser ? <UserOutlined /> : <RobotOutlined />}
       />
-      <div style={{ maxWidth: '82%' }}>
+      <div style={{ maxWidth: 'min(82%, 760px)' }}>
         <div
           className="msg-bubble"
           style={{
@@ -56,7 +59,7 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
             border: isUser ? 'none' : '1px solid rgba(122, 190, 255, 0.16)',
             boxShadow: isUser
               ? '0 4px 18px rgba(0, 198, 255, 0.28)'
-              : '0 2px 12px rgba(0, 0, 0, 0.25)',
+              : 'inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 2px 12px rgba(0, 0, 0, 0.25)',
             backdropFilter: 'blur(8px)',
           }}
         >
@@ -67,7 +70,11 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
               {msg.content}
             </ReactMarkdown>
           ) : streaming ? (
-            <Typography.Text type="secondary">正在思考…</Typography.Text>
+            <span className="think-dots" aria-label="正在思考">
+              <i />
+              <i />
+              <i />
+            </span>
           ) : (
             <Typography.Text type="secondary">（空回复）</Typography.Text>
           )}

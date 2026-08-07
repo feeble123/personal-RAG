@@ -42,24 +42,24 @@ export default function MessageInput() {
   }
 
   return (
-    <div style={{ borderTop: '1px solid rgba(122, 190, 255, 0.12)', padding: 12 }}>
+    <div className="glass-bar" style={{ borderTop: '1px solid rgba(122, 190, 255, 0.12)', padding: 12 }}>
       <Space wrap style={{ marginBottom: 8, width: '100%' }}>
         <Select
           value={kbId}
           onChange={onKbChange}
-          style={{ minWidth: 180, maxWidth: 260 }}
+          style={{ minWidth: 'clamp(150px, 22vw, 260px)' }}
           allowClear
           placeholder="全部知识库"
           options={kbs.map((k) => ({ value: k.id, label: `${k.name} (${k.doc_count} 文档)` }))}
         />
         <Space size={4}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          <Typography.Text type="secondary" style={{ fontSize: 'var(--font-xs)' }}>
             风格
           </Typography.Text>
           <Select
             value={style}
             onChange={setStyle}
-            style={{ width: 160 }}
+            style={{ width: 'clamp(130px, 18vw, 180px)' }}
             options={ANSWER_STYLE_OPTIONS}
             placeholder="回答风格"
           />
@@ -72,7 +72,7 @@ export default function MessageInput() {
           onKeyDown={handleKey}
           autoSize={{ minRows: 1, maxRows: 6 }}
           placeholder="输入你的水利工程问题，Enter 发送，Shift+Enter 换行"
-          style={{ flex: 1 }}
+          style={{ flex: 1, fontSize: 'var(--font-md)' }}
         />
         {streaming ? (
           <Button danger icon={<StopOutlined />} onClick={stop} size="large">
@@ -84,7 +84,7 @@ export default function MessageInput() {
           </Button>
         )}
       </Space.Compact>
-      {!currentId && <Typography.Text type="secondary" style={{ fontSize: 12, marginTop: 6, display: 'block' }}>请先新建或选择一个会话</Typography.Text>}
+      {!currentId && <Typography.Text type="secondary" style={{ fontSize: 'var(--font-xs)', marginTop: 6, display: 'block' }}>请先新建或选择一个会话</Typography.Text>}
     </div>
   )
 }

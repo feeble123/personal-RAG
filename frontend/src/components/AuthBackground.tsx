@@ -1,6 +1,11 @@
 import Particles, { ParticlesProvider } from '@tsparticles/react'
 import { loadSlim } from '@tsparticles/slim'
-import type { ISourceOptions } from '@tsparticles/engine'
+import type { Engine, ISourceOptions } from '@tsparticles/engine'
+
+// init 必须为稳定引用（模块级定义），否则 ParticlesProvider 会在重渲染时抛异常导致整页崩溃
+const initParticles = async (engine: Engine): Promise<void> => {
+  await loadSlim(engine)
+}
 
 // 深色科技风粒子背景：电光青蓝粒子 + 连线，hover 聚拢
 const options: ISourceOptions = {
@@ -30,7 +35,7 @@ const options: ISourceOptions = {
 
 export default function AuthBackground() {
   return (
-    <ParticlesProvider init={async (engine) => await loadSlim(engine)}>
+    <ParticlesProvider init={initParticles}>
       <div className="auth-particles" aria-hidden>
         <Particles id="auth-tsparticles" options={options} style={{ width: '100%', height: '100%' }} />
       </div>

@@ -12,9 +12,9 @@ export default function CitationCard({ citation, index }: { citation: Citation; 
       <Tooltip title={`来源：${citation.source}${citation.page ? ` · 第${citation.page}页` : ''}`}>
         <Button
           size="small"
-          icon={<FileTextOutlined />}
+          className="citation-pill"
+          icon={<FileTextOutlined style={{ color: '#00c6ff' }} />}
           onClick={() => setOpen(true)}
-          style={{ fontSize: 12 }}
         >
           [{index}] {citation.source}
           {citation.page ? ` · 第${citation.page}页` : ''}
@@ -35,9 +35,13 @@ export default function CitationCard({ citation, index }: { citation: Citation; 
         <div style={{ marginBottom: 8 }}>
           <Space wrap>
             <Tag color="blue">{citation.source}</Tag>
-            {citation.page && <Tag>第 {citation.page} 页</Tag>}
-            {citation.score != null && <Tag color="green">相关度 {citation.score.toFixed(3)}</Tag>}
-            <Tag>排名 #{citation.rank}</Tag>
+            {citation.page && <Tag className="font-mono">第 {citation.page} 页</Tag>}
+            {citation.score != null && (
+              <Tag color="green" className="font-mono">
+                相关度 {citation.score.toFixed(3)}
+              </Tag>
+            )}
+            <Tag className="font-mono">排名 #{citation.rank}</Tag>
           </Space>
         </div>
         {citation.section && (

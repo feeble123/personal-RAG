@@ -142,18 +142,25 @@ export default function MemoryManager() {
         <Tag color={s === 'good' ? 'success' : 'error'}>{s === 'good' ? '好评' : '差评'}</Tag>
       ),
     },
-    { title: '命中', dataIndex: 'hit_count', width: 60, align: 'center' as const },
+    {
+      title: '命中',
+      dataIndex: 'hit_count',
+      width: 60,
+      align: 'center' as const,
+      render: (v: number) => <span className="font-mono">{v}</span>,
+    },
     {
       title: '相似度',
       dataIndex: 'score',
       width: 85,
-      render: (v: number | null) => (v == null ? '—' : v.toFixed(3)),
+      render: (v: number | null) =>
+        v == null ? '—' : <span className="font-mono">{v.toFixed(3)}</span>,
     },
     {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 140,
-      render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
+      render: (v: string) => <span className="font-mono">{dayjs(v).format('MM-DD HH:mm')}</span>,
     },
     {
       title: '操作',
@@ -206,26 +213,47 @@ export default function MemoryManager() {
       </Header>
 
       <Content style={{ padding: 24, overflowY: 'auto' }}>
-        {/* 统计卡片 */}
+        {/* 统计卡片：等宽数字 + 数据感 */}
         <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
           <Col xs={12} md={6}>
             <Card size="small">
-              <Statistic title="记忆总数" value={stats?.total ?? 0} />
+              <Statistic
+                title="记忆总数"
+                value={stats?.total ?? 0}
+                valueStyle={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}
+              />
             </Card>
           </Col>
           <Col xs={12} md={6}>
             <Card size="small">
-              <Statistic title="好评记忆" value={stats?.good ?? 0} valueStyle={{ color: '#2ee6b8' }} />
+              <Statistic
+                title="好评记忆"
+                value={stats?.good ?? 0}
+                valueStyle={{ color: '#2ee6b8', fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}
+              />
             </Card>
           </Col>
           <Col xs={12} md={6}>
             <Card size="small">
-              <Statistic title="差评记忆" value={stats?.bad ?? 0} valueStyle={{ color: '#ff5c7a' }} />
+              <Statistic
+                title="差评记忆"
+                value={stats?.bad ?? 0}
+                valueStyle={{ color: '#ff5c7a', fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}
+              />
             </Card>
           </Col>
           <Col xs={12} md={6}>
             <Card size="small">
-              <Statistic title="总命中次数" value={stats?.total_hits ?? 0} />
+              <Statistic
+                title="总命中次数"
+                value={stats?.total_hits ?? 0}
+                valueStyle={{
+                  color: '#00c6ff',
+                  textShadow: '0 0 12px rgba(0, 198, 255, 0.4)',
+                  fontFamily: 'var(--font-mono)',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              />
             </Card>
           </Col>
         </Row>
@@ -351,11 +379,15 @@ export default function MemoryManager() {
               <Descriptions.Item label="风格">
                 {detail.style ? STYLE_LABEL[detail.style] ?? detail.style : '—'}
               </Descriptions.Item>
-              <Descriptions.Item label="命中次数">{detail.hit_count}</Descriptions.Item>
-              <Descriptions.Item label="相似度">{detail.score?.toFixed(3) ?? '—'}</Descriptions.Item>
+              <Descriptions.Item label="命中次数">
+                <span className="font-mono">{detail.hit_count}</span>
+              </Descriptions.Item>
+              <Descriptions.Item label="相似度">
+                <span className="font-mono">{detail.score?.toFixed(3) ?? '—'}</span>
+              </Descriptions.Item>
               <Descriptions.Item label="主题词">{detail.subject ?? '—'}</Descriptions.Item>
               <Descriptions.Item label="更新时间">
-                {dayjs(detail.updated_at).format('YYYY-MM-DD HH:mm')}
+                <span className="font-mono">{dayjs(detail.updated_at).format('YYYY-MM-DD HH:mm')}</span>
               </Descriptions.Item>
               <Descriptions.Item label="问题" span={2}>
                 <Typography.Text>{detail.question}</Typography.Text>

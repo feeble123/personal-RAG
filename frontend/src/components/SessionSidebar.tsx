@@ -112,12 +112,16 @@ export default function SessionSidebar() {
                   <div style={{ width: '100%' }}>
                     <Typography.Text
                       ellipsis
-                      style={{ fontSize: 13, display: 'block', width: '100%' }}
+                      style={{ fontSize: 'var(--font-sm)', display: 'block', width: '100%' }}
                     >
                       <MessageOutlined style={{ marginRight: 6 }} />
                       {conv.title}
                     </Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    <Typography.Text
+                      type="secondary"
+                      className="font-mono"
+                      style={{ fontSize: 'var(--font-xs)' }}
+                    >
                       {dayjs(conv.last_message_at).format('MM-DD HH:mm')}
                     </Typography.Text>
                   </div>
