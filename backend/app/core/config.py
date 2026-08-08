@@ -115,6 +115,16 @@ class Settings(BaseSettings):
     memory_pool: int = 100                # 召回候选池（最近 N 条做余弦比对）
     memory_eviction_ratio: float = 0.2    # 容量超限时淘汰最旧的比例
 
+    # ---- 证据等级（检索质量判级，U3）----
+    # 依据 rerank 后 top1 分数 + 强相关块数判定四级证据质量：
+    #   sufficient 充足 / partial 部分 / weak 较弱 / none 不足
+    # 动态放行：仅「实时/外部信息」类问题（天气/时间/新闻等）且证据不强时拒答；
+    # 其余（问候/闲聊/能力咨询/规范概述/领域问答）一律放行，由 LLM 诚实作答。
+    evidence_strong_threshold: float = 0.6      # 强相关块分数阈值（>= 该分块数 >= 2 → 交叉印证充足）
+    evidence_sufficient_threshold: float = 0.8  # top1 单块达到该分 → 充足
+    evidence_partial_threshold: float = 0.5     # top1 达到该分 → 部分
+    evidence_weak_threshold: float = 0.3        # top1 达到该分 → 较弱；低于该分 → 不足
+
     # ---- 限流 ----
     auth_rate_limit: str = "10/minute"    # 注册/登录（按 IP）
     chat_rate_limit: str = "60/minute"    # 问答（按用户）

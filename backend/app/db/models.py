@@ -91,6 +91,9 @@ class Message(Base):
     kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 该问答的检索作用域（反馈时读取）
     doc_scope: Mapped[str | None] = mapped_column(String(100), nullable=True)
     style: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # ---- 证据等级（U3）：检索质量判级，用于拒答机制 + 检索质量分布报表 ----
+    evidence_level: Mapped[str | None] = mapped_column(String(20), nullable=True)  # sufficient/partial/weak/none
+    evidence_top_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 判级依据的 top1 分数
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")

@@ -1,6 +1,6 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
-import type { ChunkItem, Citation, Conversation, KnowledgeBase, MemoryItem, MemoryStats, Message, TokenOut, User } from './types'
+import type { ChunkItem, Citation, Conversation, KnowledgeBase, MemoryItem, MemoryStats, Message, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -85,6 +85,11 @@ export const usersApi = {
   resetPassword: (id: number, newPassword: string) =>
     api.put(`/admin/users/${id}/password`, { new_password: newPassword }).then((r) => r.data as User),
   remove: (id: number) => api.delete(`/admin/users/${id}`),
+}
+
+// ===== 系统统计（管理员：检索证据质量分布等答辩数据）=====
+export const statsApi = {
+  system: () => api.get<SystemStats>('/admin/stats').then((r) => r.data),
 }
 
 // ===== 流式问答（SSE，fetch + ReadableStream）=====

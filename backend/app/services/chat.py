@@ -151,11 +151,13 @@ def build_prompt(
     cites: list[RetrievedChunk],
     history: list[tuple[str, str]] | None = None,
     style: str = DEFAULT_STYLE,
+    evidence_weak: bool = False,
 ) -> list[tuple[str, str]]:
     """组装消息列表：[system, (history...), human]。返回 ChatMessages 输入。
 
     style：回答风格 key（standard/logical/summary/expanded/tutorial），
     系统提示 = 基础 RAG 底线 + 风格专属指令。
+    evidence_weak：检索证据等级为「较弱」时追加约束——据实作答、不编造、不强行凑数。
     """
     if not cites:
         ref_section = "（没有检索到相关参考资料）"
@@ -174,6 +176,13 @@ def build_prompt(
     parts.append(f"【当前问题】\n{query}")
 
     style_block = ANSWER_STYLES.get(style, ANSWER_STYLES[DEFAULT_STYLE])
+    if evidence_weak:
+        # U3：证据等级「较弱」时追加约束，防止强行引用弱相关资料凑数
+        style_block += (
+            "\n【证据提示】本次检索到的参考资料相关性较弱，可能与问题只是部分相关。"
+            "请据实作答：能依据资料回答的部分明确回答；资料不足以支撑的部分，"
+            "如实说明「知识库资料未覆盖该内容」，不得编造、不得强行引用弱相关资料凑数。"
+        )
     system = BASE_PROMPT + "\n\n" + style_block
     messages: list[tuple[str, str]] = [("system", system)]
     if history:

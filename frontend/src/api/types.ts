@@ -81,6 +81,9 @@ export interface Message {
   kb_id: number | null
   doc_scope: string | null
   style: string | null
+  // 证据等级（U3）：检索质量判级
+  evidence_level: 'sufficient' | 'partial' | 'weak' | 'none' | null
+  evidence_top_score: number | null
   created_at: string
 }
 
@@ -122,6 +125,30 @@ export interface MemoryStats {
   good: number
   bad: number
   total_hits: number
+}
+
+// 检索证据质量分布（U3：系统统计中的 evidence 字段）
+export interface EvidenceStats {
+  total: number
+  sufficient: number
+  partial: number
+  weak: number
+  none: number
+}
+
+// 系统统计（/admin/stats，含证据质量分布）
+export interface SystemStats {
+  users: number
+  conversations: number
+  messages: number
+  knowledge_bases: number
+  documents: number
+  chunks: number
+  qa_memory: number
+  evidence: EvidenceStats
+  vectors_in_chroma: number
+  bm25_indexed_kbs: number
+  per_kb: { name: string; chunk_count: number }[]
 }
 
 export interface PageResult<T> {

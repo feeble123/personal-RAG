@@ -92,6 +92,8 @@ export default function Chat() {
       messageId: m.id,
       feedback: m.feedback,
       from_memory: m.from_memory,
+      evidence_level: m.evidence_level ?? null,
+      evidence_top_score: m.evidence_top_score ?? null,
     })),
     ...messages,
   ]

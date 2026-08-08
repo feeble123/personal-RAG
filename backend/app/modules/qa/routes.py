@@ -27,7 +27,7 @@ from app.db.session import async_session_factory
 from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
 from app.schemas import CitationOut
-from app.services import memory, rag, semantic_cache
+from app.services import intent, memory, rag, semantic_cache
 from app.services.chat import (
     ANSWER_STYLES,
     DEFAULT_STYLE,
@@ -171,6 +171,48 @@ async def chat(
                     doc_ids=doc_ids or None,
                     top_k=settings.top_k_final,
                 )
+                # U3 证据等级：按检索分数四级判级
+                scores = [c.score for c in cites if c.score is not None]
+                evidence_level = rag.judge_evidence_level(scores)
+                evidence_top_score = scores[0] if scores else None
+                # U3 动态放行：仅当「实时/外部信息」类问题（天气/时间/新闻/汇率等，系统无此能力）
+                # 且 KB 无强证据时拒答；问候/闲聊/能力咨询/规范概述/领域问答一律放行，
+                # 由 LLM 依据证据等级诚实作答（规则8 + 较弱约束，不强行引用弱相关资料）。
+                # 核心原则：知识库有内容（partial/sufficient）就必须放行。
+                if evidence_level in ("none", "weak") and intent.is_real_time_query(body.content):
+                    refusal = (
+                        "抱歉，这类问题需要实时或外部信息（如天气、时间、最新动态），"
+                        "我目前不具备联网与实时数据获取能力。"
+                        "我是水利工程知识库问答助手，可解答水利工程相关的规范条文、设计施工、防汛调度等专业问题。"
+                    )
+                    yield _sse({"event": "citations", "data": []})
+                    for piece in _chunk_answer(refusal):
+                        yield _sse({"event": "delta", "data": piece})
+                    async with async_session_factory() as ss:
+                        asst = Message(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=refusal,
+                            is_complete=True,
+                            from_memory=False,
+                            kb_id=body.kb_id,
+                            doc_scope=doc_scope,
+                            style=style,
+                            evidence_level=evidence_level,
+                            evidence_top_score=evidence_top_score,
+                        )
+                        ss.add(asst)
+                        conv2 = await ss.get(Conversation, conv.id)
+                        if conv2:
+                            conv2.last_message_at = _now()
+                        await ss.commit()
+                        asst_id = asst.id
+                    yield _sse(
+                        {"event": "done",
+                         "data": {"message_id": asst_id, "evidence_level": evidence_level,
+                                  "evidence_top_score": evidence_top_score}}
+                    )
+                    return
                 # 5) 语义缓存（仅严谨风格；负面记忆命中时跳过）：相似、主题一致且**作用域一致**直接秒回
                 cached = None
                 if cacheable and not skip_cache:
@@ -233,9 +275,11 @@ async def chat(
                 history = await _load_history(sdb, conv.id, settings.history_turns)
                 yield _sse({"event": "citations", "data": [c.to_citation().model_dump() for c in cites]})
 
-            # 5) 流式生成（按回答风格组装 SYSTEM_PROMPT + 对应温度）
+            # 5) 流式生成（按回答风格组装 SYSTEM_PROMPT + 对应温度；证据较弱/不足时追加据实约束）
             llm = build_chat_model(style_temp)
-            messages = build_prompt(body.content, cites, history, style=style)
+            messages = build_prompt(
+                body.content, cites, history, style=style, evidence_weak=(evidence_level in ("weak", "none"))
+            )
             buffer = ""
             usage_in = usage_out = None
             async for chunk in llm.astream(messages):
@@ -263,6 +307,8 @@ async def chat(
                     kb_id=body.kb_id,
                     doc_scope=doc_scope,
                     style=style,
+                    evidence_level=evidence_level,
+                    evidence_top_score=evidence_top_score,
                 )
                 sdb.add(asst)
                 await sdb.flush()
@@ -304,7 +350,11 @@ async def chat(
                         )
                 except Exception:
                     logger.debug("语义缓存写入失败，忽略")
-            yield _sse({"event": "done", "data": {"message_id": asst_id}})
+            yield _sse(
+                {"event": "done",
+                 "data": {"message_id": asst_id, "evidence_level": evidence_level,
+                          "evidence_top_score": evidence_top_score}}
+            )
 
         except Exception as exc:
             logger.exception("问答流异常 conv=%s", conv.id)

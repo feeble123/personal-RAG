@@ -11,6 +11,7 @@ import {
   Layout,
   Modal,
   Popconfirm,
+  Progress,
   Row,
   Select,
   Space,
@@ -30,8 +31,22 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import UserMenu from '@/components/UserMenu'
-import { kbApi, memoryApi } from '@/api/modules'
-import { ANSWER_STYLE_OPTIONS, type KnowledgeBase, type MemoryItem } from '@/api/types'
+import { kbApi, memoryApi, statsApi } from '@/api/modules'
+import {
+  ANSWER_STYLE_OPTIONS,
+  type EvidenceStats,
+  type KnowledgeBase,
+  type MemoryItem,
+  type SystemStats,
+} from '@/api/types'
+
+// 检索证据质量分布（U3）四档展示配置
+const EVIDENCE_ROWS: { key: keyof EvidenceStats; label: string; color: string }[] = [
+  { key: 'sufficient', label: '证据充足', color: '#2ee6b8' },
+  { key: 'partial', label: '证据部分', color: '#0a9cff' },
+  { key: 'weak', label: '证据较弱', color: '#ffc25e' },
+  { key: 'none', label: '证据不足', color: '#ff5c7a' },
+]
 
 const { Header, Content } = Layout
 
@@ -79,6 +94,12 @@ export default function MemoryManager() {
   const statsQuery = useQuery({
     queryKey: ['memory-stats', filters],
     queryFn: () => memoryApi.stats(filterParams()),
+  })
+  // U3 检索证据质量分布（系统统计）
+  const { data: sysStats } = useQuery<SystemStats>({
+    queryKey: ['system-stats'],
+    queryFn: statsApi.system,
+    staleTime: 30_000,
   })
   const listQuery = useQuery({
     queryKey: ['memories', page, pageSize, filters],
@@ -257,6 +278,42 @@ export default function MemoryManager() {
             </Card>
           </Col>
         </Row>
+
+        {/* 检索证据质量分布（U3：四级判级 + 动态放行） */}
+        <Card size="small" style={{ marginBottom: 16 }} title="检索证据质量分布（四级判级 · 动态放行）">
+          <Row gutter={[16, 12]}>
+            {EVIDENCE_ROWS.map((item) => {
+              const n = sysStats?.evidence[item.key] ?? 0
+              const total = sysStats?.evidence.total ?? 0
+              const pct = total > 0 ? Math.round((n / total) * 100) : 0
+              return (
+                <Col key={item.key} xs={12} md={6}>
+                  <div style={{ marginBottom: 4, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                    <Typography.Text style={{ fontSize: 'var(--font-xs)', color: item.color }}>
+                      ● {item.label}
+                    </Typography.Text>
+                    <Typography.Text className="font-mono" style={{ fontSize: 'var(--font-xs)' }}>
+                      {n} · {pct}%
+                    </Typography.Text>
+                  </div>
+                  <Progress
+                    percent={pct}
+                    showInfo={false}
+                    strokeColor={item.color}
+                    trailColor="rgba(122, 190, 255, 0.1)"
+                    size="small"
+                  />
+                </Col>
+              )
+            })}
+          </Row>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: 'var(--font-xs)', display: 'block', marginTop: 10 }}
+          >
+            动态放行：仅「实时/外部信息」类问题（天气/时间/新闻等）且证据不强时拒答；问候/闲聊/能力咨询/规范概述一律放行，由模型诚实作答。知识库有内容（部分/充足）必放行。判级分数用于「反幻觉能力」评估（论文数据来源）。
+          </Typography.Text>
+        </Card>
 
         {/* 筛选 + 操作栏 */}
         <Card size="small" style={{ marginBottom: 16 }}>

@@ -41,6 +41,9 @@ class MessageOut(ORMModel):
     kb_id: int | None = None
     doc_scope: str | None = None
     style: str | None = None
+    # 证据等级（U3）：sufficient/partial/weak/none + 判级依据分数
+    evidence_level: str | None = None
+    evidence_top_score: float | None = None
     created_at: datetime
     # 引用随消息返回（历史会话可还原）
     citations: list[CitationOut] = []

@@ -166,6 +166,27 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
 
     from app.db.models import QaMemory
 
+    # U3 检索证据质量分布：按 evidence_level 统计助手消息（论文「检索质量演化」数据来源）
+    from sqlalchemy import func as sa_func, select as sa_select
+
+    ev_rows = (
+        await db.execute(
+            sa_select(Message.evidence_level, sa_func.count())
+            .where(Message.evidence_level.isnot(None))
+            .group_by(Message.evidence_level)
+        )
+    ).all()
+    evidence = {
+        "total": sum(int(c) for _, c in ev_rows),
+        "sufficient": 0,
+        "partial": 0,
+        "weak": 0,
+        "none": 0,
+    }
+    for level, cnt in ev_rows:
+        if level in evidence:
+            evidence[level] = int(cnt)
+
     return {
         "users": await count(User),
         "conversations": await count(Conversation),
@@ -174,6 +195,7 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
         "documents": await count(Document),
         "chunks": await count(Chunk),
         "qa_memory": await count(QaMemory),  # 问答记忆库沉淀数
+        "evidence": evidence,  # U3：检索证据质量分布
         "vectors_in_chroma": vector_count,
         "bm25_indexed_kbs": len(bm25.all_kb_ids()),
         "per_kb": [{"name": n, "chunk_count": c} for _, n, c in kb_rows],

@@ -150,5 +150,10 @@ async def init_db() -> None:
                 await conn.execute(text("ALTER TABLE messages ADD COLUMN doc_scope VARCHAR(100)"))
             if "style" not in msg_cols:
                 await conn.execute(text("ALTER TABLE messages ADD COLUMN style VARCHAR(30)"))
-            logger.info("migration: messages feedback/from_memory/kb_id/doc_scope/style added")
+            # U3：证据等级判级列（sufficient/partial/weak/none + 依据分数）
+            if "evidence_level" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN evidence_level VARCHAR(20)"))
+            if "evidence_top_score" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN evidence_top_score FLOAT"))
+            logger.info("migration: messages feedback/from_memory/kb_id/doc_scope/style/evidence added")
     logger.info("Database tables ensured.")

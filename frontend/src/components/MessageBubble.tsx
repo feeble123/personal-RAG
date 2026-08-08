@@ -2,6 +2,14 @@ import { memo } from 'react'
 import { App, Avatar, Button, Space, Tag, Tooltip, Typography } from 'antd'
 import { CopyOutlined, DislikeOutlined, LikeOutlined, RobotOutlined, StarOutlined, UserOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
+
+// 证据等级（U3）：标签文案 + 颜色映射
+const EVIDENCE_META: Record<string, { label: string; color: string }> = {
+  sufficient: { label: '证据充足', color: 'green' },
+  partial: { label: '证据部分', color: 'blue' },
+  weak: { label: '证据较弱', color: 'orange' },
+  none: { label: '证据不足', color: 'red' },
+}
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -119,6 +127,16 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
             {msg.from_memory && (
               <Tag color="gold" icon={<StarOutlined />} style={{ marginInlineEnd: 0 }}>
                 来自问答记忆
+              </Tag>
+            )}
+            {msg.evidence_level && EVIDENCE_META[msg.evidence_level] && (
+              <Tag color={EVIDENCE_META[msg.evidence_level].color} style={{ marginInlineEnd: 0 }}>
+                {EVIDENCE_META[msg.evidence_level].label}
+                {msg.evidence_top_score != null && (
+                  <span className="font-mono" style={{ marginLeft: 4 }}>
+                    {msg.evidence_top_score.toFixed(2)}
+                  </span>
+                )}
               </Tag>
             )}
             {msg.messageId && (

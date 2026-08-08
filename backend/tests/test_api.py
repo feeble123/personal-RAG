@@ -633,3 +633,151 @@ async def test_stats(client, admin_headers):
     body = r.json()
     for key in ("users", "conversations", "messages", "knowledge_bases", "chunks"):
         assert key in body
+    # U3：证据质量分布字段存在且分档合计等于总数
+    ev = body["evidence"]
+    assert ev["total"] == ev["sufficient"] + ev["partial"] + ev["weak"] + ev["none"]
+
+
+# ================= 证据等级（U3：四级判级 + 不足拒答）=================
+def test_judge_evidence_level():
+    """四级判级边界：充足 / 部分 / 较弱 / 不足。"""
+    from app.services.rag import judge_evidence_level
+
+    assert judge_evidence_level([]) == "none"
+    assert judge_evidence_level([0.9]) == "sufficient"  # top1 高分
+    assert judge_evidence_level([0.7, 0.65]) == "sufficient"  # 多块强相关交叉印证
+    assert judge_evidence_level([0.55, 0.1]) == "partial"
+    assert judge_evidence_level([0.4]) == "weak"
+    assert judge_evidence_level([0.2, 0.1]) == "none"
+
+
+async def test_chat_evidence_level_persisted(client, user_headers, sample_kb):
+    """正常问答：证据判级随 done 事件返回，并落库到历史消息。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "明渠均匀流的形成条件", "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    done = events[-1]["data"]
+    assert done["evidence_level"] in ("sufficient", "partial", "weak", "none")
+    # 历史消息还原判级
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    assert asst["evidence_level"] == done["evidence_level"]
+    assert asst["evidence_top_score"] is None or isinstance(asst["evidence_top_score"], float)
+
+
+async def test_chat_evidence_none_real_time_refuses(client, user_headers, sample_kb, monkeypatch):
+    """证据不足 + 实时/外部类问题（现在几点了）→ 直接拒答、引用为空、落库 none 判级。"""
+    from app.services import rag as rag_mod
+
+    monkeypatch.setattr(rag_mod, "judge_evidence_level", lambda scores: "none")
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "现在几点了", "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    assert events[0]["event"] == "citations" and events[0]["data"] == []  # 无引用
+    refusal = "".join(e.get("data", "") for e in events if e["event"] == "delta")
+    assert "实时" in refusal
+    assert events[-1]["event"] == "done"
+    assert events[-1]["data"]["evidence_level"] == "none"
+    # 历史中该回答标记为证据不足
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    assert asst["evidence_level"] == "none"
+
+
+async def test_chat_evidence_none_greeting_allowed(client, user_headers, sample_kb, monkeypatch):
+    """证据不足 + 问候/闲聊类 → 动态放行（不拒答），由 LLM 正常回答并落库 none 判级。"""
+    from app.services import rag as rag_mod
+
+    monkeypatch.setattr(rag_mod, "judge_evidence_level", lambda scores: "none")
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "你好", "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    content = "".join(e.get("data", "") for e in events if e["event"] == "delta")
+    assert "实时" not in content  # 未走拒答
+    assert events[-1]["event"] == "done"
+    assert events[-1]["data"]["evidence_level"] == "none"
+
+
+async def test_admin_stats_evidence_distribution(client, admin_headers, user_headers, sample_kb, monkeypatch):
+    """管理端统计的证据质量分布：正常问答 + 实时类拒答各计一档，合计一致。"""
+    from app.services import rag as rag_mod
+
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "明渠均匀流", "kb_id": kb_id},
+    ) as resp:
+        async for _ in resp.aiter_lines():
+            pass
+
+    monkeypatch.setattr(rag_mod, "judge_evidence_level", lambda scores: "none")
+    r2 = await client.post("/api/conversations", headers=user_headers, json={})
+    conv2 = r2.json()["id"]
+    async with client.stream(
+        "POST", f"/api/conversations/{conv2}/chat",
+        headers=user_headers, json={"content": "现在几点了", "kb_id": kb_id},
+    ) as resp:
+        async for _ in resp.aiter_lines():
+            pass
+
+    r = await client.get("/api/admin/stats", headers=admin_headers)
+    assert r.status_code == 200
+    ev = r.json()["evidence"]
+    assert ev["total"] >= 2
+    assert ev["none"] >= 1
+    assert ev["total"] == ev["sufficient"] + ev["partial"] + ev["weak"] + ev["none"]
+
+
+def test_is_real_time_query():
+    """意图分类：实时/外部信息类识别，领域/问候/概述/能力咨询一律放行。"""
+    from app.services.intent import is_real_time_query
+
+    # 实时/外部 → True（拒答）
+    assert is_real_time_query("现在几点了") is True
+    assert is_real_time_query("当前时间是多少") is True
+    assert is_real_time_query("今天几号") is True
+    assert is_real_time_query("今天天气怎么样") is True
+    assert is_real_time_query("明天会下雨吗") is True
+    assert is_real_time_query("未来24小时降雨情况") is True
+    assert is_real_time_query("今天有什么新闻") is True
+    assert is_real_time_query("最新消息") is True
+    assert is_real_time_query("人民币兑美元汇率") is True
+
+    # 领域/问候/概述/能力咨询 → False（放行）
+    assert is_real_time_query("你好") is False
+    assert is_real_time_query("你能做什么") is False
+    assert is_real_time_query("介绍一下你的功能") is False
+    assert is_real_time_query("明渠均匀流的形成条件是什么") is False
+    assert is_real_time_query("水库汛期调度运用计划包含哪些内容") is False
+    assert is_real_time_query("今天这个水库的水位是多少") is False
+    assert is_real_time_query("《水闸设计规范》大概在讲什么") is False
+    assert is_real_time_query("请问你能为我做什么") is False

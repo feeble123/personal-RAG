@@ -212,6 +212,30 @@ async def _expand_chapter_sections(
     return sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)[:15]
 
 
+def judge_evidence_level(scores: list[float]) -> str:
+    """依据检索重排后的相关分数判定证据等级（四级：sufficient/partial/weak/none）。
+
+    - sufficient 充足：top1 高分 或 ≥2 块强相关（交叉印证）
+    - partial 部分：top1 中等相关（有据可答但可能不完整）
+    - weak 较弱：top1 弱相关（LLM 据实作答并提示资料有限）
+    - none 不足：无高分块（系统直接拒答，不调 LLM —— 防幻觉 + 省 token）
+    阈值见 settings.evidence_*，可在 .env 调优。
+    """
+    if not scores:
+        return "none"
+    top1 = max(0.0, float(scores[0]))
+    strong = sum(1 for s in scores if float(s) >= settings.evidence_strong_threshold)
+    if top1 >= settings.evidence_sufficient_threshold:
+        return "sufficient"
+    if strong >= 2:
+        return "sufficient"
+    if top1 >= settings.evidence_partial_threshold:
+        return "partial"
+    if top1 >= settings.evidence_weak_threshold:
+        return "weak"
+    return "none"
+
+
 @dataclass
 class RetrievedChunk:
     chunk_id: int

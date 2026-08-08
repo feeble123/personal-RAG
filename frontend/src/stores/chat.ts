@@ -15,6 +15,9 @@ export interface StreamMessage {
   messageId?: number
   feedback?: 'up' | 'down' | null
   from_memory?: boolean
+  // 证据等级（U3）：检索质量判级（充足/部分/较弱/不足）
+  evidence_level?: 'sufficient' | 'partial' | 'weak' | 'none' | null
+  evidence_top_score?: number | null
 }
 
 interface ChatState {
@@ -154,8 +157,15 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               return { messages: msgs }
             })
           } else if (ev.event === 'done') {
-            // 服务端已落库：回填真实 message_id（供👍/👎）与 from_memory（记忆复用标记）
-            const done = ev.data as { message_id?: number; from_memory?: boolean } | null
+            // 服务端已落库：回填真实 message_id（供👍/👎）与 from_memory（记忆复用标记）+ 证据判级（U3）
+            const done = ev.data as
+              | {
+                  message_id?: number
+                  from_memory?: boolean
+                  evidence_level?: 'sufficient' | 'partial' | 'weak' | 'none'
+                  evidence_top_score?: number
+                }
+              | null
             set((s) => {
               const msgs = [...s.messages]
               const last = msgs[msgs.length - 1]
@@ -165,6 +175,8 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   is_complete: true,
                   messageId: done?.message_id,
                   from_memory: done?.from_memory ?? false,
+                  evidence_level: done?.evidence_level ?? null,
+                  evidence_top_score: done?.evidence_top_score ?? null,
                 }
               }
               return { messages: msgs }
