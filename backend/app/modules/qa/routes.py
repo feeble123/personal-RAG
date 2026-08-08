@@ -27,7 +27,7 @@ from app.db.session import async_session_factory
 from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
 from app.schemas import CitationOut
-from app.services import intent, memory, rag, semantic_cache
+from app.services import intent, memory, query_rewrite, rag, semantic_cache
 from app.services.chat import (
     ANSWER_STYLES,
     DEFAULT_STYLE,
@@ -92,8 +92,31 @@ async def chat(
     async def gen():
         try:
             async with async_session_factory() as sdb:
+                # 追问改写（BUG-追问引用错位）：短/指代性追问（「可以以表格形式呈现吗」等）
+                # 合并上一轮「主题问题」，让新问题自行检索到同主题切片，避免模型抄历史答案+沿用历史编号。
+                # 注意要跳过本身是追问的问题（如「可以以表格吗」「6-11呢」），回退找最近一条主题问题。
+                prev_user_q = None
+                prev_rows = (
+                    await sdb.execute(
+                        select(Message.content)
+                        .where(
+                            Message.conversation_id == conv.id,
+                            Message.role == "user",
+                            Message.id < user_msg.id,
+                        )
+                        .order_by(Message.id.desc())
+                        .limit(6)
+                    )
+                ).all()
+                for (content,) in prev_rows:
+                    if content and not query_rewrite.needs_followup_rewrite(content):
+                        prev_user_q = content
+                        break
+                if prev_user_q is None and prev_rows:
+                    prev_user_q = prev_rows[0][0]  # 全为追问时退化到最近一条
+                search_query = query_rewrite.rewrite_followup_query(body.content, prev_user_q)
                 # 2) 检索：问题点名《书名》/「XXX中」→ 限定只搜该文档（BUG-A）
-                doc_ids = await rag.resolve_documents_by_title(sdb, body.content)
+                doc_ids = await rag.resolve_documents_by_title(sdb, search_query)
                 # 缓存检索作用域（BUG-B）：选库 kb_id + 点名文档 doc_scope，命中须完全一致
                 doc_scope = ",".join(map(str, sorted(doc_ids))) if doc_ids else None
                 # 回答风格（单元 F）：会话指定 > 知识库默认；同题不同风格答案不同
@@ -163,10 +186,10 @@ async def chat(
                         skip_cache = True
                         logger.info("负面记忆命中 mem=%s，强制重新检索", mem.memory_id)
 
-                # 4) 检索（记忆未命中才执行）：问题点名《书名》/「XXX中」→ 限定只搜该文档（BUG-A）
+                # 4) 检索（记忆未命中才执行）：用改写后的查询检索（追问合并主题，保证新问题自行检索）
                 cites = await rag.retrieve(
                     sdb,
-                    body.content,
+                    search_query,
                     kb_id=body.kb_id,
                     doc_ids=doc_ids or None,
                     top_k=settings.top_k_final,

@@ -124,6 +124,9 @@ class Settings(BaseSettings):
     evidence_sufficient_threshold: float = 0.8  # top1 单块达到该分 → 充足
     evidence_partial_threshold: float = 0.5     # top1 达到该分 → 部分
     evidence_weak_threshold: float = 0.3        # top1 达到该分 → 较弱；低于该分 → 不足
+    # 完整性扩展：枚举/清单类问题（完整/所有/全部/名单…）拉取整个列表章节切片的上限，
+    # 保证「专家名单」等多页列表类回答不遗漏成员（每次漏一部分的根因是 top_k 只覆盖部分页）
+    complete_expansion_cap: int = 40
 
     # ---- 限流 ----
     auth_rate_limit: str = "10/minute"    # 注册/登录（按 IP）

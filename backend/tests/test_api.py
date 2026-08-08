@@ -757,6 +757,119 @@ async def test_admin_stats_evidence_distribution(client, admin_headers, user_hea
     assert ev["total"] == ev["sufficient"] + ev["partial"] + ev["weak"] + ev["none"]
 
 
+# ================= 追问改写（BUG-追问引用错位）=================
+def test_completeness_helpers():
+    """完整性扩展辅助：列表章节识别 + 直接归属（排除嵌套附件）+ 完整性意图检测。"""
+    from app.services.rag import (
+        _COMPLETENESS_RE,
+        _list_section_component,
+        _under_component,
+    )
+
+    sec = "7 附则 / 二、成员单位职责 / 附件4 / 市应急管理专家防汛抗旱组成员名单"
+    assert _list_section_component(sec) == "市应急管理专家防汛抗旱组成员名单"
+    # 直接归属：不含嵌套附件
+    assert _under_component(sec, "市应急管理专家防汛抗旱组成员名单") is True
+    nested = sec + " / 附件5 / 市应急管理专家应急救援组成员名单"
+    assert _under_component(nested, "市应急管理专家防汛抗旱组成员名单") is False  # 排除嵌套附件5
+    # 非列表章节
+    assert _list_section_component("4 应急响应 / 4.5 响应措施") is None
+    # 完整性意图
+    for q in ("请给我一份完整的专家信息", "所有专家有哪些", "还有其他单位吗", "我要完整的版本"):
+        assert _COMPLETENESS_RE.search(q), q
+    assert not _COMPLETENESS_RE.search("明渠均匀流的形成条件是什么")
+
+
+async def test_completeness_expansion_covers_full_list(client, user_headers, admin_headers):
+    """完整性查询（完整的专家名单）→ 检索扩展覆盖列表章节全部切片（> top_k），不遗漏。"""
+    import asyncio
+
+    from app.core.config import settings
+    from app.db.session import async_session_factory
+    from app.services import rag
+
+    name = f"完整性测试库"
+    r = await client.post("/api/admin/kbs", headers=admin_headers, json={"name": name})
+    assert r.status_code == 201, r.text
+    kb_id = r.json()["id"]
+    # 生成足够长（> top_k 块）的「附件1 专家名单」章节
+    entries = "\n\n".join(
+        f"第{i}位专家 专家名{i} 正高级工程师 从事水利水电工程设计与咨询 主要研究方向为水工结构与岩土工程 "
+        f"工作单位某设计院 联系方式 1380000{i:04d} 从业二十余年 参与多个大型水利工程与防汛抗旱项目 "
+        f"擅长流域防洪与水库调度 曾获省部级科技进步奖 具备注册土木工程师执业资格"
+        for i in range(1, 40)
+    )
+    md = f"# 测试规范\n\n## 附件1 专家名单\n\n{entries}\n"
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("list.md", md.encode("utf-8"), "text/markdown")},
+    )
+    doc_id = r.json()["id"]
+    for _ in range(40):
+        r = await client.get(f"/api/admin/kbs/{kb_id}/documents", headers=admin_headers)
+        status = r.json()["items"][0]["status"]
+        if status in ("ready", "failed"):
+            break
+        await asyncio.sleep(0.2)
+    assert status == "ready", f"入库未完成: {status}"
+
+    async with async_session_factory() as db:
+        cites = await rag.retrieve(db, "请给我一份完整的专家名单", kb_id=kb_id, top_k=settings.top_k_final)
+    assert len(cites) > settings.top_k_final, f"完整性查询应扩展超过 top_k({settings.top_k_final}): 实际 {len(cites)}"
+    for c in cites:
+        assert "名单" in (c.section or ""), f"引用应来自名单章节: {c.section}"
+
+    await client.delete(f"/api/admin/kbs/{kb_id}", headers=admin_headers)
+
+
+def test_followup_rewrite():
+    """追问改写：短/指代性追问合并上一轮问题；独立问题与纯问候不改写。"""
+    from app.services.query_rewrite import needs_followup_rewrite, rewrite_followup_query
+
+    prev = "重庆市水利电力勘测设计研究院的专家有哪些呢？"
+    # 追问 → 需改写并合并上一轮问题
+    assert needs_followup_rewrite("可以以表格的形式来呈现吗") is True
+    assert rewrite_followup_query("可以以表格的形式来呈现吗", prev).startswith(prev.rstrip("？"))
+    assert needs_followup_rewrite("帮我总结一下") is True
+    assert needs_followup_rewrite("还有呢") is True
+    # 独立问题 → 不改写
+    assert needs_followup_rewrite("水库汛期调度运用计划包含哪些内容？") is False
+    assert rewrite_followup_query("水库汛期调度运用计划包含哪些内容？", prev) == "水库汛期调度运用计划包含哪些内容？"
+    # 纯问候 → 不改写
+    assert needs_followup_rewrite("你好") is False
+    assert needs_followup_rewrite("谢谢") is False
+
+
+async def test_followup_question_reretrieves_same_topic(client, user_headers, sample_kb):
+    """追问（可以给我总结一下吗）改写后重新检索到同主题切片，而非抄历史/检索错位。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    async def ask(q):
+        ev = []
+        async with client.stream(
+            "POST", f"/api/conversations/{conv_id}/chat",
+            headers=user_headers, json={"content": q, "kb_id": kb_id},
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if line.startswith("data:"):
+                    ev.append(json.loads(line[5:]))
+        return ev
+
+    e1 = await ask("明渠均匀流的形成条件包括哪些")
+    src1 = {c["source"] for c in e1[0]["data"]}
+    assert src1, "第一轮应有引用"
+
+    e2 = await ask("可以给我总结一下吗")
+    assert e2[0]["event"] == "citations" and e2[-1]["event"] == "done"
+    src2 = {c["source"] for c in e2[0]["data"]}
+    assert src2, "追问应重新检索到引用"
+    # 改写后应命中同一份文档（同主题切片），而不是检索到无关来源
+    assert src2 & src1, f"追问未命中同主题切片: {src2} vs {src1}"
+
+
 def test_is_real_time_query():
     """意图分类：实时/外部信息类识别，领域/问候/概述/能力咨询一律放行。"""
     from app.services.intent import is_real_time_query

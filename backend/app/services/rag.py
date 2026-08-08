@@ -165,10 +165,114 @@ def _match_section_component(focused: str, section: str | None) -> str | None:
 
 
 def _under_component(sec: str | None, comp: str) -> bool:
-    """章节路径是否包含指定组件（组件级匹配，防「5 应急保障」误中「15 应急保障」）。"""
+    """章节路径是否「直接归属」指定组件（组件级匹配，防「5 应急保障」误中「15 应急保障」；
+    且组件之后不再嵌套更深「附件N」——避免把嵌套的附件5 等子列表混入当前列表，造成来源混乱）。"""
     if not sec:
         return False
-    return any(p.strip() == comp or p.strip().startswith(comp) for p in sec.split("/"))
+    parts = [p.strip() for p in sec.split("/") if p.strip()]
+    idx = -1
+    for j, p in enumerate(parts):
+        if p == comp or p.startswith(comp):
+            idx = j
+            break
+    if idx < 0:
+        return False
+    for p in parts[idx + 1:]:
+        if re.match(r"附件\d", p):
+            return False
+    return True
+
+
+# 完整性意图：查询要求完整/所有/全部/清单等枚举类回答（触发列表章节全量扩展）
+_COMPLETENESS_RE = re.compile(
+    r"完整|所有|全部|清单|一览|全貌|补全|还有|其他|其余|全都|所有的|全部的|都要|都有|只要.*都|只.*(?:吗|？|\?)"
+)
+# 列表类章节组件：附件/名单/清单/成员/组成/一览/列表
+_LIST_COMPONENT_RE = re.compile(r"附件\d|名单|清单|成员|组成|一览|列表")
+
+
+def _list_section_component(sec: str | None) -> str | None:
+    """从章节路径中找最深的「列表类」组件（附件/名单/清单/成员…），找不到返回 None。"""
+    if not sec:
+        return None
+    comps = [p.strip() for p in sec.split("/") if p.strip()]
+    for comp in reversed(comps):
+        if _LIST_COMPONENT_RE.search(comp):
+            return comp
+    return None
+
+
+async def _expand_complete_list(
+    db: AsyncSession,
+    query: str,
+    cand_sorted: list[tuple[int, float]],
+    section_by_id: dict[int, str | None],
+    top_k: int,
+    candidates_full: dict[int, float] | None = None,
+) -> list[tuple[int, float]] | None:
+    """完整性扩展：查询要求「完整/所有/全部/清单」时，纳入相关列表章节的**全部切片**
+    （直接归属、排除嵌套附件），保证枚举/清单类回答不遗漏任何成员。
+
+    背景：专家名单等多页列表类章节，top_k=5 只覆盖部分页面 → 模型「每次漏一部分答案」。
+    扩展上限 complete_expansion_cap（默认 40），足以覆盖几十条的完整列表。
+    """
+    if not cand_sorted:
+        return None
+    if not _COMPLETENESS_RE.search(query):
+        return None
+    # 在整个候选池中找「列表类章节」，选候选分最高者所属章节。
+    # 不能只看 top1：自然问法（完整/所有/清单）经 rerank 后 top1 往往不在列表章节，
+    # 名单块被挤到候选池深处——须扫描全部候选，再从 DB 拉该章节全部切片。
+    best_comp: str | None = None
+    best_score = -1.0
+    for cid, sc in cand_sorted:
+        comp = _list_section_component(section_by_id.get(cid))
+        if comp and sc > best_score:
+            best_score = sc
+            best_comp = comp
+    # 放宽：top-100 候选里没有列表块（名单块 fused 分可能排到 100 名外）时，
+    # 扫描完整候选集，动态补查章节，确保列表章节不因候选截断而漏检。
+    if not best_comp and candidates_full:
+        extra_ids = [cid for cid in candidates_full if cid not in section_by_id]
+        extra_section: dict[int, str | None] = {}
+        if extra_ids:
+            rows = (
+                await db.execute(
+                    select(Chunk.id, Chunk.section).where(Chunk.id.in_(extra_ids))
+                )
+            ).all()
+            extra_section = {cid: sec for cid, sec in rows}
+        for cid, sc in candidates_full.items():
+            comp = _list_section_component(extra_section.get(cid))
+            if comp and sc > best_score:
+                best_score = sc
+                best_comp = comp
+    if not best_comp:
+        return None
+    rows = (
+        await db.execute(
+            select(Chunk, Document)
+            .join(Document, Chunk.doc_id == Document.id)
+            .where(Chunk.section.contains(best_comp))
+        )
+    ).all()
+    members = [(c, d) for c, d in rows if _under_component(c.section, best_comp)]
+    members = members[: settings.complete_expansion_cap * 2]  # 超大列表防失控
+    if len(members) < 4:
+        return None  # 章节块太少（≤3）不扩展，top_k 已覆盖；≥4 则全部纳入防遗漏
+    ids = [c.id for c, _ in members]
+    if settings.rerank_enabled:
+        docs = [c.content for c, _ in members]
+        try:
+            scores = await rerank(focus_rerank_query(query), docs)
+            ranked = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
+        except Exception:
+            logger.warning("完整性扩展 rerank 失败，按原文顺序", exc_info=True)
+            ranked = sorted(zip(ids, [0.0] * len(ids)), key=lambda x: x[0])
+    else:
+        # 离线/降级：按原文顺序（chunk.id），保证列表不乱序
+        ranked = sorted(zip(ids, [0.0] * len(ids)), key=lambda x: x[0])
+    return ranked[: settings.complete_expansion_cap]
 
 
 async def _expand_chapter_sections(
@@ -190,6 +294,8 @@ async def _expand_chapter_sections(
     """
     if not cand_sorted:
         return None
+    if not settings.rerank_enabled:
+        return None  # 章节扩展依赖 rerank 排序；离线/未开启时跳过，避免无意义网络调用
     top1 = cand_sorted[0][0]
     comp = _match_section_component(focus_rerank_query(query), section_by_id.get(top1))
     if not comp:
@@ -200,8 +306,8 @@ async def _expand_chapter_sections(
         )
     ).all()
     members = [(c, d) for c, d in rows if _under_component(c.section, comp)]
-    if len(members) < 4 or len(members) <= top_k:
-        return None  # 不是「整章多子节」问题，或 top_k 已覆盖 → 维持原样
+    if len(members) < 4:
+        return None  # 章节块太少（≤3）不扩展；≥4 则全部纳入，防 top_k 截断漏块（如名单章节 5 块只取 5 块=top_k 也会被旧守卫拦掉）
     ids = [c.id for c, _ in members]
     docs = [c.content for c, _ in members]
     try:
@@ -376,7 +482,8 @@ async def retrieve(
     ]
     rerank_ok = False
     section_by_id: dict[int, str | None] = {}
-    if settings.rerank_enabled and cand_sorted:
+    if cand_sorted:
+        # 预先取候选的章节信息：rerank 与两种扩展共用；rerank 关闭时扩展仍可用
         ids = [cid for cid, _ in cand_sorted]
         rows = (
             await db.execute(
@@ -388,22 +495,26 @@ async def retrieve(
         content_by_id = {c.id: c.content for c, _ in rows}
         section_by_id = {c.id: c.section for c, _ in rows}
         docs = [content_by_id.get(cid, "") for cid in ids]
-        try:
-            # 用聚焦主题词重排：长查询会稀释关键项（BGE 局限），
-            # 聚焦「引用标准」后正确规则节 0.98+（原文案仅 0.81 被前言压过）
-            r_scores = await rerank(focus_rerank_query(query), docs)
-            cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
-            rerank_ok = True
-        except Exception:
-            logger.warning("rerank 失败，回退到混合排序", exc_info=True)
-            cand_sorted = cand_sorted[:top_k]
+        if settings.rerank_enabled:
+            try:
+                # 用聚焦主题词重排：长查询会稀释关键项（BGE 局限），
+                # 聚焦「引用标准」后正确规则节 0.98+（原文案仅 0.81 被前言压过）
+                r_scores = await rerank(focus_rerank_query(query), docs)
+                cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
+                rerank_ok = True
+            except Exception:
+                logger.warning("rerank 失败，回退到混合排序", exc_info=True)
+                cand_sorted = cand_sorted[:top_k]
 
-    # 6) 取 top_k；综合型问题（主题命中整章多子节）扩展覆盖整章，避免答案不完整
+    # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再完整性扩展（枚举/清单类问题不遗漏）
     ranked = cand_sorted[:top_k]
-    if rerank_ok:
-        expanded = await _expand_chapter_sections(db, query, cand_sorted, section_by_id, top_k)
-        if expanded:
-            ranked = expanded
+    expanded = await _expand_chapter_sections(db, query, cand_sorted, section_by_id, top_k)
+    if not expanded:
+        expanded = await _expand_complete_list(
+            db, query, cand_sorted, section_by_id, top_k, candidates_full=candidates
+        )
+    if expanded:
+        ranked = expanded
     return await _hydrate(db, ranked, include_snippet)
 
 
