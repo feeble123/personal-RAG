@@ -94,7 +94,9 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com/v1"
     llm_model: str = "deepseek-chat"
     llm_temperature: float = 0.2
-    llm_max_tokens: int = 2000
+    # 输出 token 上限：DeepSeek-chat 输出天花板 8192。曾设 2000 导致「36份台账」这类长表
+    # 每次在第 17~23 行截断（根因），拉到上限后完整表格可一次生成；普通短答模型自然收尾。
+    llm_max_tokens: int = 8192
     llm_max_retries: int = 3
     llm_timeout: int = 120
 
@@ -127,6 +129,15 @@ class Settings(BaseSettings):
     # 完整性扩展：枚举/清单类问题（完整/所有/全部/名单…）拉取整个列表章节切片的上限，
     # 保证「专家名单」等多页列表类回答不遗漏成员（每次漏一部分的根因是 top_k 只覆盖部分页）
     complete_expansion_cap: int = 40
+    # ---- 答案校验（层2/层3）----
+    # LLM 完备性校验默认关闭（opt-in）：用户对回答不满意时，通过回答气泡上的
+    # 「🤖 LLM优化」按钮触发 /optimize（整文档扩展证据 + 补全要求重生成 + 校验循环）。
+    # 如需恢复自动校验（每次枚举题生成后自动补全重生成），在 .env 置 ANSWER_VERIFY_ENABLED=true。
+    answer_verify_enabled: bool = False
+    # 校验 LLM 的最大输出 token（校验只需简短判定，控制成本）
+    answer_verify_max_tokens: int = 200
+    # /optimize 补全重生成的最大尝试次数（每次先校验，仍不完整再带「补全要求」重生成）
+    answer_verify_max_retries: int = 2
 
     # ---- 限流 ----
     auth_rate_limit: str = "10/minute"    # 注册/登录（按 IP）

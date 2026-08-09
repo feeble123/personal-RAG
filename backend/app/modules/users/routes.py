@@ -187,6 +187,22 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
         if level in evidence:
             evidence[level] = int(cnt)
 
+    # 层2 完备率：经完备性校验的枚举类回答，第一遍即完整 / 触发补全重生成
+    ac_rows = (
+        await db.execute(
+            select(Message.answer_complete, func.count())
+            .where(Message.answer_complete.isnot(None))
+            .group_by(Message.answer_complete)
+        )
+    ).all()
+    answer_verify = {"verified": 0, "complete": 0, "incomplete": 0}
+    for val, cnt in ac_rows:
+        answer_verify["verified"] += int(cnt)
+        if val:
+            answer_verify["complete"] += int(cnt)
+        else:
+            answer_verify["incomplete"] += int(cnt)
+
     return {
         "users": await count(User),
         "conversations": await count(Conversation),
@@ -196,6 +212,7 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
         "chunks": await count(Chunk),
         "qa_memory": await count(QaMemory),  # 问答记忆库沉淀数
         "evidence": evidence,  # U3：检索证据质量分布
+        "answer_verify": answer_verify,  # 层2：答案完备率
         "vectors_in_chroma": vector_count,
         "bm25_indexed_kbs": len(bm25.all_kb_ids()),
         "per_kb": [{"name": n, "chunk_count": c} for _, n, c in kb_rows],

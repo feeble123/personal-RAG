@@ -55,6 +55,9 @@ async def _warmup_bm25() -> None:
 
         from app.db.models import Chunk
         from app.services import bm25
+        # jieba 默认 DEBUG 级并自带无格式 stderr handler，启动时刷屏「分词词典加载」日志；
+        # 提到 WARNING 让启动日志干净。注意必须在 import 之后设置（jieba import 时强制回 DEBUG）。
+        logging.getLogger("jieba").setLevel(logging.WARNING)
 
         async with async_session_factory() as db:
             rows = await db.execute(

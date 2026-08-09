@@ -183,26 +183,14 @@ def _under_component(sec: str | None, comp: str) -> bool:
     return True
 
 
-# 完整性意图：查询要求完整/所有/全部/清单等枚举类回答（触发列表章节全量扩展）
-_COMPLETENESS_RE = re.compile(
-    r"完整|所有|全部|清单|一览|全貌|补全|还有|其他|其余|全都|所有的|全部的|都要|都有|只要.*都|只.*(?:吗|？|\?)"
+# 枚举/概述类问题检测（跨库通用问句，不依赖知识库内容：台账/名单/章节等任何结构都适用）
+_ENUMERATION_RE = re.compile(
+    r"有哪些|包含哪些|包括哪些|都有哪些|哪几个|多少|所有|全部|完整|完整的|列出来|列出|"
+    r"概述|介绍|一览|全貌|总结|汇总|清单|一览表|都要|都有|还有|其他|其余|别的"
 )
-# 列表类章节组件：附件/名单/清单/成员/组成/一览/列表
-_LIST_COMPONENT_RE = re.compile(r"附件\d|名单|清单|成员|组成|一览|列表")
 
 
-def _list_section_component(sec: str | None) -> str | None:
-    """从章节路径中找最深的「列表类」组件（附件/名单/清单/成员…），找不到返回 None。"""
-    if not sec:
-        return None
-    comps = [p.strip() for p in sec.split("/") if p.strip()]
-    for comp in reversed(comps):
-        if _LIST_COMPONENT_RE.search(comp):
-            return comp
-    return None
-
-
-async def _expand_complete_list(
+async def _expand_enumeration_sections(
     db: AsyncSession,
     query: str,
     cand_sorted: list[tuple[int, float]],
@@ -210,56 +198,72 @@ async def _expand_complete_list(
     top_k: int,
     candidates_full: dict[int, float] | None = None,
 ) -> list[tuple[int, float]] | None:
-    """完整性扩展：查询要求「完整/所有/全部/清单」时，纳入相关列表章节的**全部切片**
-    （直接归属、排除嵌套附件），保证枚举/清单类回答不遗漏任何成员。
+    """枚举/概述类问题的证据完备检索：纳入查询最可能指向的章节单元的**全部切片**。
 
-    背景：专家名单等多页列表类章节，top_k=5 只覆盖部分页面 → 模型「每次漏一部分答案」。
-    扩展上限 complete_expansion_cap（默认 40），足以覆盖几十条的完整列表。
+    取代按内容关键词（台账/名单）猜列表的正则补丁，纯结构判定，对任何知识库通用：
+    - 看 top-K 候选切片归属哪些「章节单元」（完整章节路径），取出现最多者
+      ——「这个问题最关心哪个章节」由检索结果投票，不依赖章节叫什么名；
+    - 平局时选库里切片数多的章节（更可能是清单/台账类大单元）。
+    再从 DB 拉该章节全部切片（直接归属、排除嵌套附件），保证枚举类回答不遗漏任何成员。
+    扩展上限 complete_expansion_cap（默认 40）。
     """
     if not cand_sorted:
         return None
-    if not _COMPLETENESS_RE.search(query):
+    if not _ENUMERATION_RE.search(query):
         return None
-    # 在整个候选池中找「列表类章节」，选候选分最高者所属章节。
-    # 不能只看 top1：自然问法（完整/所有/清单）经 rerank 后 top1 往往不在列表章节，
-    # 名单块被挤到候选池深处——须扫描全部候选，再从 DB 拉该章节全部切片。
-    best_comp: str | None = None
-    best_score = -1.0
-    for cid, sc in cand_sorted:
-        comp = _list_section_component(section_by_id.get(cid))
-        if comp and sc > best_score:
-            best_score = sc
-            best_comp = comp
-    # 放宽：top-100 候选里没有列表块（名单块 fused 分可能排到 100 名外）时，
-    # 扫描完整候选集，动态补查章节，确保列表章节不因候选截断而漏检。
-    if not best_comp and candidates_full:
-        extra_ids = [cid for cid in candidates_full if cid not in section_by_id]
-        extra_section: dict[int, str | None] = {}
-        if extra_ids:
-            rows = (
-                await db.execute(
-                    select(Chunk.id, Chunk.section).where(Chunk.id.in_(extra_ids))
-                )
-            ).all()
-            extra_section = {cid: sec for cid, sec in rows}
-        for cid, sc in candidates_full.items():
-            comp = _list_section_component(extra_section.get(cid))
-            if comp and sc > best_score:
-                best_score = sc
-                best_comp = comp
-    if not best_comp:
+    # 取候选集：优先完整 fused 候选集（覆盖更全），否则 top-K
+    pool = candidates_full or dict(cand_sorted)
+    ranked_pool = sorted(pool.items(), key=lambda x: x[1], reverse=True)[:200]
+    if not ranked_pool:
         return None
-    rows = (
+    # 补齐章节信息（候选可能超出 top-100 的 section_by_id 范围）
+    sec_map: dict[int, str | None] = dict(section_by_id)
+    missing = [cid for cid, _ in ranked_pool if cid not in sec_map]
+    if missing:
+        rows = (
+            await db.execute(select(Chunk.id, Chunk.section).where(Chunk.id.in_(missing)))
+        ).all()
+        sec_map.update({cid: sec for cid, sec in rows})
+    # 全量章节-切片结构表（统计章节大小 + 拉取全量用）
+    all_chunks = (
         await db.execute(
-            select(Chunk, Document)
-            .join(Document, Chunk.doc_id == Document.id)
-            .where(Chunk.section.contains(best_comp))
+            select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
         )
     ).all()
-    members = [(c, d) for c, d in rows if _under_component(c.section, best_comp)]
-    members = members[: settings.complete_expansion_cap * 2]  # 超大列表防失控
-    if len(members) < 4:
-        return None  # 章节块太少（≤3）不扩展，top_k 已覆盖；≥4 则全部纳入防遗漏
+    # 章节大小：库内直接切片数（排除嵌套附件）
+    size_by_sec: dict[str, int] = {}
+    for sec in {s for s in sec_map.values() if s}:
+        comp = sec.split("/")[-1].strip()
+        size_by_sec[sec] = sum(
+            1
+            for c, _ in all_chunks
+            if c.section
+            and (c.section == sec or c.section.startswith(sec + " /"))
+            and _under_component(c.section, comp)
+        )
+    # 章节相关性 = 该章节候选分数之和：枚举题的答案在「分数广泛分布」的数据章节
+    # （37 块方案数据表每块都有一定相关分 → 和最高；表头章节只有几块 → 和低）。
+    # 不只看 top-K 少数块（表头可能恰好排前），避免选错章节。
+    score_by_sec: dict[str, float] = {}
+    for cid, sc in ranked_pool:
+        sec = sec_map.get(cid)
+        if sec:
+            score_by_sec[sec] = score_by_sec.get(sec, 0.0) + max(0.0, sc)
+    if not score_by_sec:
+        return None
+    # 选「分数和最高」的章节；平局取块数多者
+    best_sec = max(score_by_sec, key=lambda s: (score_by_sec[s], size_by_sec.get(s, 0)))
+    if size_by_sec.get(best_sec, 0) < 4:
+        return None  # 章节块太少（≤3）不扩展，top_k 已覆盖
+    comp = best_sec.split("/")[-1].strip()
+    members = [
+        (c, d)
+        for c, d in all_chunks
+        if c.section
+        and (c.section == best_sec or c.section.startswith(best_sec + " /"))
+        and _under_component(c.section, comp)
+    ]
+    members = members[: settings.complete_expansion_cap * 2]
     ids = [c.id for c, _ in members]
     if settings.rerank_enabled:
         docs = [c.content for c, _ in members]
@@ -267,7 +271,7 @@ async def _expand_complete_list(
             scores = await rerank(focus_rerank_query(query), docs)
             ranked = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
         except Exception:
-            logger.warning("完整性扩展 rerank 失败，按原文顺序", exc_info=True)
+            logger.warning("枚举扩展 rerank 失败，按原文顺序", exc_info=True)
             ranked = sorted(zip(ids, [0.0] * len(ids)), key=lambda x: x[0])
     else:
         # 离线/降级：按原文顺序（chunk.id），保证列表不乱序
@@ -506,11 +510,11 @@ async def retrieve(
                 logger.warning("rerank 失败，回退到混合排序", exc_info=True)
                 cand_sorted = cand_sorted[:top_k]
 
-    # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再完整性扩展（枚举/清单类问题不遗漏）
+    # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再枚举扩展（枚举/清单类问题拉全量章节）
     ranked = cand_sorted[:top_k]
     expanded = await _expand_chapter_sections(db, query, cand_sorted, section_by_id, top_k)
     if not expanded:
-        expanded = await _expand_complete_list(
+        expanded = await _expand_enumeration_sections(
             db, query, cand_sorted, section_by_id, top_k, candidates_full=candidates
         )
     if expanded:
@@ -559,6 +563,54 @@ async def _hydrate(
             )
         )
     items.sort(key=lambda x: order[x.chunk_id])
+    for i, it in enumerate(items):
+        it.rank = i + 1
+    return items
+
+
+async def retrieve_document_wide(
+    db: AsyncSession,
+    query: str,
+    kb_id: int | None = None,
+    top_k: int = 5,
+    cap: int = 60,
+    _cites: list[RetrievedChunk] | None = None,
+) -> list[RetrievedChunk]:
+    """补全重生成用：先普通检索定位问题所属文档，再返回该文档**全部切片**（上限 cap）。
+
+    层2 完备性校验判定「枚举题遗漏」时，单章节扩展可能仍不全（答案横跨多个 sheet/章节），
+    此时扩大到整份相关文档，保证模型看到完整数据。按 chunk.id 保持原文顺序。
+    _cites：调用方已做普通检索（如 /optimize 需要同时拿证据等级分数）时传入，避免二次检索。
+    """
+    cites = _cites if _cites is not None else await retrieve(db, query, kb_id=kb_id, top_k=top_k)
+    if not cites:
+        return []
+    doc_id = cites[0].doc_id
+    rows = (
+        await db.execute(
+            select(Chunk, Document)
+            .join(Document, Chunk.doc_id == Document.id)
+            .where(Chunk.doc_id == doc_id)
+        )
+    ).all()
+    items: list[RetrievedChunk] = []
+    for chunk, doc in rows:
+        if len(chunk.content.strip()) < settings.min_content_len:
+            continue
+        items.append(
+            RetrievedChunk(
+                chunk_id=chunk.id,
+                kb_id=chunk.kb_id,
+                doc_id=chunk.doc_id,
+                source=doc.filename,
+                page=chunk.page,
+                section=chunk.section,
+                snippet=chunk.content,
+                score=0.0,
+            )
+        )
+    items.sort(key=lambda x: x.chunk_id)
+    items = items[:cap]
     for i, it in enumerate(items):
         it.rank = i + 1
     return items

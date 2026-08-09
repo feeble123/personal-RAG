@@ -1,6 +1,15 @@
 import { memo } from 'react'
 import { App, Avatar, Button, Space, Tag, Tooltip, Typography } from 'antd'
-import { CopyOutlined, DislikeOutlined, LikeOutlined, RobotOutlined, StarOutlined, UserOutlined } from '@ant-design/icons'
+import {
+  CopyOutlined,
+  DislikeOutlined,
+  LikeOutlined,
+  RobotOutlined,
+  StarOutlined,
+  ThunderboltOutlined,
+  UserOutlined,
+  WarningOutlined,
+} from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 
 // 证据等级（U3）：标签文案 + 颜色映射
@@ -31,6 +40,8 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   const streaming = !msg.is_complete && msg.role === 'assistant'
   // 稳定引用（store 创建一次），不破坏 memo 的浅比较
   const giveFeedback = useChatStore((s) => s.giveFeedback)
+  const optimizeMessage = useChatStore((s) => s.optimizeMessage)
+  const anyStreaming = useChatStore((s) => s.streaming)
   const { message: appMsg } = App.useApp()
 
   const onCopy = async () => {
@@ -139,8 +150,32 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
                 )}
               </Tag>
             )}
+            {msg.answer_complete === false && (
+              <Tooltip title="本次生成因长度受限被截断或校验未通过，内容可能不完整">
+                <Tag color="volcano" icon={<WarningOutlined />} style={{ marginInlineEnd: 0 }}>
+                  回答可能不完整
+                </Tag>
+              </Tooltip>
+            )}
+            {msg.optimized && (
+              <Tag color="purple" icon={<ThunderboltOutlined />} style={{ marginInlineEnd: 0 }}>
+                LLM优化结果
+              </Tag>
+            )}
             {msg.messageId && (
               <>
+                {!msg.optimized && (
+                  <Tooltip title="对回答不满意？点此让 LLM 用完整证据重新生成优化版">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<ThunderboltOutlined />}
+                      aria-label="LLM优化"
+                      disabled={anyStreaming}
+                      onClick={() => optimizeMessage(msg.messageId as number)}
+                    />
+                  </Tooltip>
+                )}
                 <Tooltip title={msg.feedback === 'up' ? '取消点赞' : '点赞：沉淀为正向记忆，同题下次秒回'}>
                   <Button
                     size="small"

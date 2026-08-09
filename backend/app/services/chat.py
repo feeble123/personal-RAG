@@ -153,12 +153,15 @@ def build_prompt(
     history: list[tuple[str, str]] | None = None,
     style: str = DEFAULT_STYLE,
     evidence_weak: bool = False,
+    note_incomplete: bool = False,
 ) -> list[tuple[str, str]]:
     """组装消息列表：[system, (history...), human]。返回 ChatMessages 输入。
 
     style：回答风格 key（standard/logical/summary/expanded/tutorial），
     系统提示 = 基础 RAG 底线 + 风格专属指令。
     evidence_weak：检索证据等级为「较弱」时追加约束——据实作答、不编造、不强行凑数。
+    note_incomplete：用户对上次回答不满意 / 上次回答未列全时，追加「补全要求」——
+    必须把参考资料中相关条目逐一完整列出，不得省略、不得因篇幅中途停止。
     """
     if not cites:
         ref_section = "（没有检索到相关参考资料）"
@@ -183,6 +186,14 @@ def build_prompt(
             "\n【证据提示】本次检索到的参考资料相关性较弱，可能与问题只是部分相关。"
             "请据实作答：能依据资料回答的部分明确回答；资料不足以支撑的部分，"
             "如实说明「知识库资料未覆盖该内容」，不得编造、不得强行引用弱相关资料凑数。"
+        )
+    if note_incomplete:
+        # LLM 优化（/optimize）或补全重生成：上次回答未列全/被截断，必须完整作答
+        style_block += (
+            "\n【补全要求】用户对之前的回答不满意，本次必须完整作答："
+            "若问题要求列出/枚举/概述全部内容（方案、成员、要求、条目等），"
+            "必须把【参考资料】中相关的全部条目逐一完整列出，"
+            "不得省略、不得用「等」「…」「略」代替、不得因篇幅长而中途停止。"
         )
     system = BASE_PROMPT + "\n\n" + style_block
     messages: list[tuple[str, str]] = [("system", system)]

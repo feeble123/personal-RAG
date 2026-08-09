@@ -636,6 +636,129 @@ async def test_stats(client, admin_headers):
     # U3：证据质量分布字段存在且分档合计等于总数
     ev = body["evidence"]
     assert ev["total"] == ev["sufficient"] + ev["partial"] + ev["weak"] + ev["none"]
+    # 层2：答案完备率统计字段
+    av = body["answer_verify"]
+    assert av["verified"] == av["complete"] + av["incomplete"]
+
+
+# ================= 层2：答案完备性校验 + LLM优化（opt-in 按钮） =================
+def test_verify_parse_json():
+    from app.services import verify
+
+    assert verify._parse_json('{"enumeration": true, "complete": false}') == {
+        "enumeration": True,
+        "complete": False,
+    }
+    assert verify._parse_json('前缀 {"ok": true} 后缀')["ok"] is True
+    assert verify._parse_json("没有 json") == {}
+    # 长回答首尾压缩：截断发生在尾部，校验器必须能看到结尾
+    assert verify._head_tail("a" * 100) == "a" * 100
+    ht = verify._head_tail("头" + "中" * 5000 + "尾", head=10, tail=2)
+    assert ht.startswith("头")
+    assert ht.endswith("尾")
+    assert "省略" in ht
+
+
+async def _ask(client, conv_id, q, kb_id, headers):
+    """发一条普通问答，返回 SSE 事件列表。"""
+    ev = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=headers, json={"content": q, "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                ev.append(json.loads(line[5:]))
+    return ev
+
+
+async def test_auto_verify_disabled_by_default(client, user_headers, sample_kb):
+    """完备性校验默认关闭（opt-in）：普通问答不触发 reset，answer_complete 未打标。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    ev = await _ask(client, conv_id, "明渠均匀流的形成条件有哪些", kb_id, user_headers)
+    assert "reset" not in [e["event"] for e in ev]
+    assert ev[-1]["data"].get("answer_complete") is None
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    assert asst["answer_complete"] is None
+    assert asst["optimized"] is False
+
+
+async def _chat_then_optimize(client, conv_id, q, kb_id, headers):
+    """发一条普通问答，再对该回答触发 /optimize，返回 (原回答id, 优化事件列表)。"""
+    await _ask(client, conv_id, q, kb_id, headers)
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=headers)
+    asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    ev = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/messages/{asst['id']}/optimize",
+        headers=headers, json={},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                ev.append(json.loads(line[5:]))
+    return asst["id"], ev
+
+
+async def test_optimize_generates_new_message(client, user_headers, sample_kb):
+    """点「LLM优化」→ 整文档扩展证据重生成 → 落库新消息（optimized=True，原回答保留）。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    orig_id, ev = await _chat_then_optimize(client, conv_id, "明渠均匀流的形成条件有哪些", kb_id, user_headers)
+    kinds = [e["event"] for e in ev]
+    assert kinds[0] == "citations"
+    assert "delta" in kinds
+    assert kinds[-1] == "done"
+    assert ev[-1]["data"].get("optimized") is True
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    assts = [m for m in r.json()["items"] if m["role"] == "assistant"]
+    assert len(assts) == 2, "优化应新增一条消息（原回答保留可对比）"
+    assert assts[0]["id"] == orig_id and assts[0]["optimized"] is False
+    new = assts[1]
+    assert new["optimized"] is True and new["is_complete"] and new["citations"]
+
+
+async def test_optimize_resets_when_incomplete(client, user_headers, sample_kb, monkeypatch):
+    """校验判定「枚举且不完整」→ 优化流程触发 reset 重生成；最终仍不全则 answer_complete=False。"""
+    from app.services import verify as verify_mod
+
+    async def fake_verify(query, answer, cites):
+        return verify_mod.CompletenessVerdict(enumeration=True, complete=False, note="缺章节")
+
+    monkeypatch.setattr(verify_mod, "verify_completeness", fake_verify)
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    _, ev = await _chat_then_optimize(client, conv_id, "明渠均匀流的形成条件有哪些", kb_id, user_headers)
+    assert "reset" in [e["event"] for e in ev], "校验不完整应触发 reset 重生成"
+    assert ev[-1]["data"].get("answer_complete") is False
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    new = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    assert new["answer_complete"] is False and new["optimized"] is True
+
+
+async def test_optimize_guards(client, user_headers, sample_kb):
+    """optimize 端点守卫：消息不存在 / 不是助手消息 → 404。"""
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/999999/optimize", headers=user_headers, json={}
+    )
+    assert r.status_code == 404
+    # 用户消息不可优化
+    await _ask(client, conv_id, "明渠均匀流的形成条件", kb_id, user_headers)
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    user_msg = r.json()["items"][0]
+    r = await client.post(
+        f"/api/conversations/{conv_id}/messages/{user_msg['id']}/optimize", headers=user_headers, json={}
+    )
+    assert r.status_code == 404
 
 
 # ================= 证据等级（U3：四级判级 + 不足拒答）=================
@@ -759,25 +882,29 @@ async def test_admin_stats_evidence_distribution(client, admin_headers, user_hea
 
 # ================= 追问改写（BUG-追问引用错位）=================
 def test_completeness_helpers():
-    """完整性扩展辅助：列表章节识别 + 直接归属（排除嵌套附件）+ 完整性意图检测。"""
-    from app.services.rag import (
-        _COMPLETENESS_RE,
-        _list_section_component,
-        _under_component,
-    )
+    """枚举/概述检测（跨库通用）+ 章节直接归属（排除嵌套附件）。"""
+    from app.services.rag import _ENUMERATION_RE, _under_component
 
-    sec = "7 附则 / 二、成员单位职责 / 附件4 / 市应急管理专家防汛抗旱组成员名单"
-    assert _list_section_component(sec) == "市应急管理专家防汛抗旱组成员名单"
     # 直接归属：不含嵌套附件
+    sec = "7 附则 / 二、成员单位职责 / 附件4 / 市应急管理专家防汛抗旱组成员名单"
     assert _under_component(sec, "市应急管理专家防汛抗旱组成员名单") is True
     nested = sec + " / 附件5 / 市应急管理专家应急救援组成员名单"
     assert _under_component(nested, "市应急管理专家防汛抗旱组成员名单") is False  # 排除嵌套附件5
-    # 非列表章节
-    assert _list_section_component("4 应急响应 / 4.5 响应措施") is None
-    # 完整性意图
-    for q in ("请给我一份完整的专家信息", "所有专家有哪些", "还有其他单位吗", "我要完整的版本"):
-        assert _COMPLETENESS_RE.search(q), q
-    assert not _COMPLETENESS_RE.search("明渠均匀流的形成条件是什么")
+    # 枚举/概述类（跨库通用问句）
+    for q in (
+        "请给我一份完整的专家信息",
+        "所有专家有哪些",
+        "还有其他单位吗",
+        "我要完整的版本",
+        "请问这份资料中包含哪些方案",
+        "请列列出该文件中所有的方案名称",
+        "这份资料里有哪几个清单",
+    ):
+        assert _ENUMERATION_RE.search(q), q
+    # 单点取值 / 聚焦查询 → 不触发枚举扩展
+    assert not _ENUMERATION_RE.search("明渠均匀流的形成条件是什么")
+    assert not _ENUMERATION_RE.search("工作脚手架专项施工方案是什么时候进行专家论证的")
+    assert not _ENUMERATION_RE.search("高支模专项施工方案的报审时间")
 
 
 async def test_completeness_expansion_covers_full_list(client, user_headers, admin_headers):

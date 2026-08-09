@@ -27,7 +27,7 @@ from app.db.session import async_session_factory
 from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
 from app.schemas import CitationOut
-from app.services import intent, memory, query_rewrite, rag, semantic_cache
+from app.services import intent, memory, query_rewrite, rag, semantic_cache, verify
 from app.services.chat import (
     ANSWER_STYLES,
     DEFAULT_STYLE,
@@ -55,6 +55,18 @@ def _chunk_answer(text: str, size: int = 50) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)] or [""]
 
 
+def _finish_reason(chunk) -> str | None:
+    """从流式 chunk 里取 finish_reason（== 'length' 表示生成因超出 max_tokens 被截断）。"""
+    meta = getattr(chunk, "response_metadata", None)
+    if isinstance(meta, dict) and meta.get("finish_reason"):
+        return str(meta["finish_reason"])
+    gi = getattr(chunk, "generation_info", None)
+    if isinstance(gi, dict) and gi.get("finish_reason"):
+        return str(gi["finish_reason"])
+    fr = getattr(chunk, "finish_reason", None)
+    return str(fr) if fr else None
+
+
 async def _load_history(db, conv_id: int, turns: int) -> list[tuple[str, str]]:
     from sqlalchemy import select
 
@@ -67,7 +79,16 @@ async def _load_history(db, conv_id: int, turns: int) -> list[tuple[str, str]]:
         )
     ).scalars().all()
     msgs = list(reversed(rows))  # 时间正序
-    return [(m.role, m.content) for m in msgs if m.role in ("user", "assistant")]
+    out: list[tuple[str, str]] = []
+    for m in msgs:
+        if m.role not in ("user", "assistant"):
+            continue
+        text = (m.content or "").strip()
+        # 长回答（表格/长清单）只保留开头概要，防止历史注水稀释当前证据（长对话变笨）
+        if m.role == "assistant" and len(text) > 500:
+            text = text[:400] + "\n…[该回答较长，历史注入仅保留开头概要]"
+        out.append((m.role, text))
+    return out
 
 
 @router.post("/conversations/{conv_id}/chat")
@@ -305,6 +326,7 @@ async def chat(
             )
             buffer = ""
             usage_in = usage_out = None
+            finish_reason = None
             async for chunk in llm.astream(messages):
                 text = chunk.content
                 if isinstance(text, list):
@@ -316,7 +338,46 @@ async def chat(
                 if usage:
                     usage_in = usage.get("input_tokens") or usage_in
                     usage_out = usage.get("output_tokens") or usage_out
+                fr = _finish_reason(chunk)
+                if fr:
+                    finish_reason = fr
                 yield _sse({"event": "delta", "data": text})
+
+            # 5.5) 完备性校验（opt-in，默认关；用户不满意可点「🤖 LLM优化」触发 /optimize）。
+            #      硬信号兜底：生成因超出 max_tokens 被截断（finish_reason=length）→ 诚实标记不完整。
+            truncated = finish_reason == "length"
+            answer_complete = False if truncated else None
+            if settings.answer_verify_enabled and buffer and cites:
+                verdict = await verify.verify_completeness(body.content, buffer, cites)
+                if verdict.enumeration and not verdict.complete:
+                    async with async_session_factory() as vsdb:
+                        broader = await rag.retrieve_document_wide(
+                            vsdb, search_query, kb_id=body.kb_id, top_k=settings.top_k_final
+                        )
+                    if broader:
+                        logger.info("完备性校验不通过(note=%s)，扩大证据重生成", verdict.note[:80])
+                        yield _sse({"event": "reset"})  # 前端清空本回答，重新流式
+                        yield _sse(
+                            {"event": "citations",
+                             "data": [c.to_citation().model_dump() for c in broader]}
+                        )
+                        llm2 = build_chat_model(style_temp)
+                        messages2 = build_prompt(
+                            body.content, broader, history=None, style=style, note_incomplete=True
+                        )
+                        buffer = ""
+                        async for chunk in llm2.astream(messages2):
+                            text = chunk.content
+                            if isinstance(text, list):
+                                text = "".join(x.get("text", "") for x in text if isinstance(x, dict))
+                            if not text:
+                                continue
+                            buffer += text
+                            yield _sse({"event": "delta", "data": text})
+                        cites = broader
+                    answer_complete = False
+                elif verdict.enumeration:
+                    answer_complete = True
 
             # 6) 落库助手消息 + 引用
             async with async_session_factory() as sdb:
@@ -332,6 +393,7 @@ async def chat(
                     style=style,
                     evidence_level=evidence_level,
                     evidence_top_score=evidence_top_score,
+                    answer_complete=answer_complete,
                 )
                 sdb.add(asst)
                 await sdb.flush()
@@ -357,8 +419,9 @@ async def chat(
                     conv2.last_message_at = _now()
                 await sdb.commit()
                 asst_id = asst.id
-            # 7) 写入语义缓存（仅严谨风格；发散风格不缓存，保证每次重新生成出变化）
-            if cacheable:
+            # 7) 写入语义缓存（仅严谨风格；发散风格不缓存；被截断的坏答案不缓存，
+            #    否则长对话里近似问法会秒回截断坏答案——「越问越笨」的根因之一）
+            if cacheable and not truncated:
                 try:
                     async with async_session_factory() as sdb:
                         await semantic_cache.store(
@@ -376,7 +439,8 @@ async def chat(
             yield _sse(
                 {"event": "done",
                  "data": {"message_id": asst_id, "evidence_level": evidence_level,
-                          "evidence_top_score": evidence_top_score}}
+                          "evidence_top_score": evidence_top_score,
+                          "answer_complete": answer_complete}}
             )
 
         except Exception as exc:
@@ -397,6 +461,159 @@ async def chat(
                     await sdb.commit()
             except Exception:
                 pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/conversations/{conv_id}/messages/{message_id}/optimize")
+@limiter.limit(settings.chat_rate_limit)
+async def optimize_message(
+    request: Request,
+    conv_id: int,
+    message_id: int,
+    db: DbSession,
+    user: CurrentUser,
+) -> StreamingResponse:
+    """LLM 优化（opt-in）：用户对回答不满意时触发。
+
+    用该回答对应的问题重新走「整文档扩展证据 + 补全要求重生成 + 完备性校验循环」，
+    落库为**新的** assistant 消息（原回答保留可对比），SSE 流式返回。
+    事件协议同 /chat：citations → delta（→ reset+delta 重试）→ done / error。
+    """
+    conv = await get_owned_conversation(db, conv_id, user.id)
+    asst = await db.get(Message, message_id)
+    if asst is None or asst.conversation_id != conv.id or asst.role != "assistant" or not asst.is_complete:
+        raise BizError("消息不存在", 404, "MSG_NOT_FOUND")
+    prev = await db.scalar(
+        select(Message)
+        .where(Message.conversation_id == conv.id, Message.role == "user", Message.id < asst.id)
+        .order_by(Message.id.desc())
+        .limit(1)
+    )
+    if prev is None:
+        raise BizError("找不到该回答对应的问题", 400, "NO_PREV_USER_MSG")
+
+    # 问题可能是追问（「只要方案的，不要制度的」）→ 合并最近主题问题，让新问题自行检索同主题切片
+    question = prev.content
+    topic = question
+    for (content,) in (
+        await db.execute(
+            select(Message.content)
+            .where(Message.conversation_id == conv.id, Message.role == "user", Message.id < prev.id)
+            .order_by(Message.id.desc())
+            .limit(6)
+        )
+    ).all():
+        if content and not query_rewrite.needs_followup_rewrite(content):
+            topic = content
+            break
+    search_query = query_rewrite.rewrite_followup_query(question, topic if topic != question else None)
+    kb_id = asst.kb_id
+    style = asst.style or DEFAULT_STYLE
+
+    async def gen():
+        try:
+            async with async_session_factory() as sdb:
+                # 先普通检索拿证据等级（供新消息打标），再整文档扩展证据（复用已检索结果避免二次检索）
+                cites = await rag.retrieve(sdb, search_query, kb_id=kb_id, top_k=settings.top_k_final)
+                scores = [c.score for c in cites if c.score is not None]
+                evidence_level = rag.judge_evidence_level(scores)
+                evidence_top_score = scores[0] if scores else None
+                broader = await rag.retrieve_document_wide(
+                    sdb, search_query, kb_id=kb_id, top_k=settings.top_k_final, _cites=cites
+                )
+                if not broader:
+                    yield _sse({"event": "error", "data": "未能检索到相关资料，无法优化。"})
+                    return
+                cites = broader
+                yield _sse({"event": "citations", "data": [c.to_citation().model_dump() for c in cites]})
+
+            style_cfg = STYLE_CONFIG.get(style, STYLE_CONFIG[DEFAULT_STYLE])
+            style_temp = float(style_cfg["temperature"])
+            buffer = ""
+            verdict = verify.CompletenessVerdict()
+            truncated = False
+            incomplete = True
+            attempts = 0
+            while incomplete and attempts < max(1, settings.answer_verify_max_retries):
+                attempts += 1
+                llm = build_chat_model(style_temp)
+                messages = build_prompt(
+                    question, cites, history=None, style=style, note_incomplete=(attempts > 1)
+                )
+                buffer = ""
+                truncated = False
+                async for chunk in llm.astream(messages):
+                    text = chunk.content
+                    if isinstance(text, list):
+                        text = "".join(x.get("text", "") for x in text if isinstance(x, dict))
+                    if not text:
+                        continue
+                    buffer += text
+                    if _finish_reason(chunk) == "length":
+                        truncated = True
+                    yield _sse({"event": "delta", "data": text})
+                # 完备性校验：枚举题遗漏 / 输出被截断 → 再带「补全要求」重生成
+                verdict = await verify.verify_completeness(question, buffer, cites)
+                incomplete = (verdict.enumeration and not verdict.complete) or truncated
+                if incomplete and attempts < max(1, settings.answer_verify_max_retries):
+                    yield _sse({"event": "reset"})  # 前端清空本次优化气泡，重新流式
+                    yield _sse(
+                        {"event": "citations", "data": [c.to_citation().model_dump() for c in cites]}
+                    )
+            # 枚举题/被截断 → 按最终校验结果打标；非枚举题不适用完备性
+            answer_complete = (not incomplete) if (verdict.enumeration or truncated) else None
+            # 落库新消息（原回答保留对比）
+            async with async_session_factory() as sdb:
+                new_asst = Message(
+                    conversation_id=conv.id,
+                    role="assistant",
+                    content=buffer,
+                    is_complete=True,
+                    kb_id=kb_id,
+                    doc_scope=asst.doc_scope,
+                    style=style,
+                    evidence_level=evidence_level,
+                    evidence_top_score=evidence_top_score,
+                    answer_complete=answer_complete,
+                    is_optimized=True,
+                )
+                sdb.add(new_asst)
+                await sdb.flush()
+                for c in cites:
+                    sdb.add(
+                        Citation(
+                            message_id=new_asst.id,
+                            chunk_id=c.chunk_id,
+                            kb_id=c.kb_id,
+                            doc_id=c.doc_id,
+                            source=c.source,
+                            page=c.page,
+                            section=c.section,
+                            snippet=c.snippet[:1000],
+                            score=c.score,
+                            rank=c.rank,
+                        )
+                    )
+                conv2 = await sdb.get(Conversation, conv.id)
+                if conv2:
+                    conv2.last_message_at = _now()
+                await sdb.commit()
+                new_id = new_asst.id
+            yield _sse(
+                {"event": "done",
+                 "data": {"message_id": new_id, "optimized": True,
+                          "answer_complete": answer_complete,
+                          "evidence_level": evidence_level,
+                          "evidence_top_score": evidence_top_score}}
+            )
+        except Exception as exc:
+            logger.exception("LLM优化流异常 conv=%s msg=%s", conv.id, message_id)
+            yield _sse({"event": "error", "data": _user_friendly_error(exc)})
 
     return StreamingResponse(
         gen(),

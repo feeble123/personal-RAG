@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { convApi, feedbackApi, streamChat, type MessageOut } from '@/api/modules'
+import { convApi, feedbackApi, streamChat, streamOptimize, type MessageOut } from '@/api/modules'
 import type { Citation, Conversation } from '@/api/types'
 import { useAuthStore } from './auth'
 
@@ -18,6 +18,10 @@ export interface StreamMessage {
   // 证据等级（U3）：检索质量判级（充足/部分/较弱/不足）
   evidence_level?: 'sufficient' | 'partial' | 'weak' | 'none' | null
   evidence_top_score?: number | null
+  // 层2 完备性：True=校验完整 / False=不完整（生成被截断或优化后仍不全，前端提示） / null=未校验
+  answer_complete?: boolean | null
+  // LLM 优化（opt-in）：true = 用户点「🤖 LLM优化」产生的结果
+  optimized?: boolean
 }
 
 interface ChatState {
@@ -47,6 +51,7 @@ interface ChatState {
   renameConversation: (id: number, title: string) => Promise<void>
   deleteConversation: (id: number) => Promise<void>
   send: (content: string, kbId?: number | null, style?: string) => Promise<void>
+  optimizeMessage: (messageId: number) => Promise<void>
   stop: () => void
   giveFeedback: (messageId: number, feedback: 'up' | 'down' | null) => Promise<void>
   reset: () => void
@@ -156,6 +161,16 @@ export const useChatStore = create<ChatState>()((set, get) => ({
               }
               return { messages: msgs }
             })
+          } else if (ev.event === 'reset') {
+            // 层2 完备性校验触发补全重生成：清空本回答内容与引用，等待重新流式输出
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, content: '', citations: [] }
+              }
+              return { messages: msgs }
+            })
           } else if (ev.event === 'done') {
             // 服务端已落库：回填真实 message_id（供👍/👎）与 from_memory（记忆复用标记）+ 证据判级（U3）
             const done = ev.data as
@@ -164,6 +179,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   from_memory?: boolean
                   evidence_level?: 'sufficient' | 'partial' | 'weak' | 'none'
                   evidence_top_score?: number
+                  answer_complete?: boolean
                 }
               | null
             set((s) => {
@@ -177,6 +193,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
                   from_memory: done?.from_memory ?? false,
                   evidence_level: done?.evidence_level ?? null,
                   evidence_top_score: done?.evidence_top_score ?? null,
+                  answer_complete: done?.answer_complete ?? null,
                 }
               }
               return { messages: msgs }
@@ -214,6 +231,127 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     } finally {
       set({ streaming: false, abortCtrl: null })
       // 刷新会话侧栏（标题自动生成 + last_message_at 排序）
+      await get().refreshConversations()
+    }
+  },
+
+  optimizeMessage: async (messageId) => {
+    const state = get()
+    const convId = state.currentId
+    if (!convId || state.streaming || !messageId) return
+
+    const abortCtrl = new AbortController()
+    set((s) => ({
+      streaming: true,
+      abortCtrl,
+      // 追加一条「LLM优化」气泡（原回答保留可对比），流式填充
+      messages: [
+        ...s.messages,
+        {
+          id: `a${++msgSeq}`,
+          role: 'assistant',
+          content: '',
+          is_complete: false,
+          citations: [],
+          error: null,
+          optimized: true,
+        },
+      ],
+    }))
+
+    try {
+      await streamOptimize({
+        conversationId: convId,
+        messageId,
+        signal: abortCtrl.signal,
+        onEvent: (ev) => {
+          if (ev.event === 'citations') {
+            const citations = ev.data as Citation[]
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, citations }
+              }
+              return { messages: msgs }
+            })
+          } else if (ev.event === 'delta') {
+            const text = ev.data as string
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, content: last.content + text }
+              }
+              return { messages: msgs }
+            })
+          } else if (ev.event === 'reset') {
+            // 优化重试：清空本次优化气泡，重新流式
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, content: '', citations: [] }
+              }
+              return { messages: msgs }
+            })
+          } else if (ev.event === 'done') {
+            const done = ev.data as
+              | {
+                  message_id?: number
+                  evidence_level?: 'sufficient' | 'partial' | 'weak' | 'none'
+                  evidence_top_score?: number
+                  answer_complete?: boolean
+                }
+              | null
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = {
+                  ...last,
+                  is_complete: true,
+                  messageId: done?.message_id,
+                  evidence_level: done?.evidence_level ?? null,
+                  evidence_top_score: done?.evidence_top_score ?? null,
+                  answer_complete: done?.answer_complete ?? null,
+                  optimized: true,
+                }
+              }
+              return { messages: msgs }
+            })
+          } else if (ev.event === 'error') {
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = {
+                  ...last,
+                  error: (ev.data as string) || '优化失败',
+                  is_complete: true,
+                }
+              }
+              return { messages: msgs }
+            })
+          }
+        },
+      })
+    } catch (e) {
+      const aborted = abortCtrl.signal.aborted
+      set((s) => {
+        const msgs = [...s.messages]
+        const last = msgs[msgs.length - 1]
+        if (last && last.role === 'assistant') {
+          msgs[msgs.length - 1] = {
+            ...last,
+            error: aborted ? '已停止优化' : String((e as Error).message || e),
+            is_complete: true,
+          }
+        }
+        return { messages: msgs }
+      })
+    } finally {
+      set({ streaming: false, abortCtrl: null })
       await get().refreshConversations()
     }
   },

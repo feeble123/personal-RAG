@@ -94,12 +94,21 @@ class Message(Base):
     # ---- 证据等级（U3）：检索质量判级，用于拒答机制 + 检索质量分布报表 ----
     evidence_level: Mapped[str | None] = mapped_column(String(20), nullable=True)  # sufficient/partial/weak/none
     evidence_top_score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 判级依据的 top1 分数
+    # ---- 层2 完备性校验：枚举类问题是否答全（True=完整/False=触发补全重生成/None=未校验或非枚举）----
+    answer_complete: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # ---- LLM 优化（opt-in）：True = 用户点「🤖 LLM优化」产生的结果（刷新后可还原标签）----
+    is_optimized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     citations: Mapped[list["Citation"]] = relationship(
         back_populates="message", cascade="all, delete-orphan", lazy="selectin"
     )
+
+    @property
+    def optimized(self) -> bool:
+        """LLM优化标记（Pydantic from_attributes 用属性名 optimized 映射 is_optimized 列）。"""
+        return self.is_optimized
 
     __table_args__ = (Index("ix_messages_conv_created", "conversation_id", "created_at"),)
 

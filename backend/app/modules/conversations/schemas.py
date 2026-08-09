@@ -44,6 +44,10 @@ class MessageOut(ORMModel):
     # 证据等级（U3）：sufficient/partial/weak/none + 判级依据分数
     evidence_level: str | None = None
     evidence_top_score: float | None = None
+    # 层2 完备性校验：True=完整 / False=触发补全 / None=未校验
+    answer_complete: bool | None = None
+    # LLM优化（opt-in）：True = 用户点「🤖 LLM优化」产生的结果（映射 Message.is_optimized）
+    optimized: bool = False
     created_at: datetime
     # 引用随消息返回（历史会话可还原）
     citations: list[CitationOut] = []

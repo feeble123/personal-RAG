@@ -155,5 +155,13 @@ async def init_db() -> None:
                 await conn.execute(text("ALTER TABLE messages ADD COLUMN evidence_level VARCHAR(20)"))
             if "evidence_top_score" not in msg_cols:
                 await conn.execute(text("ALTER TABLE messages ADD COLUMN evidence_top_score FLOAT"))
+            # 层2：答案完备性校验结果列
+            if "answer_complete" not in msg_cols:
+                await conn.execute(text("ALTER TABLE messages ADD COLUMN answer_complete BOOLEAN"))
+            # LLM优化（opt-in）：标记用户点「🤖 LLM优化」产生的结果
+            if "is_optimized" not in msg_cols:
+                await conn.execute(
+                    text("ALTER TABLE messages ADD COLUMN is_optimized BOOLEAN NOT NULL DEFAULT 0")
+                )
             logger.info("migration: messages feedback/from_memory/kb_id/doc_scope/style/evidence added")
     logger.info("Database tables ensured.")

@@ -92,7 +92,37 @@ export const statsApi = {
   system: () => api.get<SystemStats>('/admin/stats').then((r) => r.data),
 }
 
-// ===== 流式问答（SSE，fetch + ReadableStream）=====
+// ===== 流式 SSE（fetch + ReadableStream）：解析 `data: {json}\n\n` 事件 =====
+async function readSSE(
+  res: Response,
+  onEvent: (ev: { event: string; data: unknown }) => void,
+): Promise<void> {
+  if (!res.ok || !res.body) {
+    throw new Error(`流式请求失败 (${res.status})`)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const raw = buf.slice(0, idx).trim()
+      buf = buf.slice(idx + 2)
+      if (!raw.startsWith('data:')) continue
+      try {
+        const msg = JSON.parse(raw.replace(/^data:\s?/, ''))
+        onEvent(msg)
+      } catch {
+        /* 忽略解析失败的分片 */
+      }
+    }
+  }
+}
+
+// 普通问答流
 export async function streamChat(opts: {
   conversationId: number
   content: string
@@ -111,29 +141,30 @@ export async function streamChat(opts: {
     body: JSON.stringify({ content: opts.content, kb_id: opts.kbId ?? null, style: opts.style ?? null }),
     signal: opts.signal,
   })
-  if (!res.ok || !res.body) {
-    throw new Error(`问答请求失败 (${res.status})`)
-  }
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buf = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
-    let idx: number
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const raw = buf.slice(0, idx).trim()
-      buf = buf.slice(idx + 2)
-      if (!raw.startsWith('data:')) continue
-      try {
-        const msg = JSON.parse(raw.replace(/^data:\s?/, ''))
-        opts.onEvent(msg)
-      } catch {
-        /* 忽略解析失败的分片 */
-      }
-    }
-  }
+  await readSSE(res, opts.onEvent)
+}
+
+// LLM 优化流（opt-in）：用户对某条回答不满意 → 触发 /optimize 重生成
+export async function streamOptimize(opts: {
+  conversationId: number
+  messageId: number
+  signal: AbortSignal
+  onEvent: (ev: { event: string; data: unknown }) => void
+}): Promise<void> {
+  const token = useAuthStore.getState().token
+  const res = await fetch(
+    `/api/conversations/${opts.conversationId}/messages/${opts.messageId}/optimize`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: '{}',
+      signal: opts.signal,
+    },
+  )
+  await readSSE(res, opts.onEvent)
 }
 
 // ===== 知识库 / 文档（管理员）=====

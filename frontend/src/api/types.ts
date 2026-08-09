@@ -84,6 +84,10 @@ export interface Message {
   // 证据等级（U3）：检索质量判级
   evidence_level: 'sufficient' | 'partial' | 'weak' | 'none' | null
   evidence_top_score: number | null
+  // 层2 完备性校验：True=完整 / False=触发补全 / null=未校验
+  answer_complete: boolean | null
+  // LLM优化（opt-in）：True = 用户点「🤖 LLM优化」产生的结果
+  optimized: boolean
   created_at: string
 }
 

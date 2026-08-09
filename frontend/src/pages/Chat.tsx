@@ -94,6 +94,8 @@ export default function Chat() {
       from_memory: m.from_memory,
       evidence_level: m.evidence_level ?? null,
       evidence_top_score: m.evidence_top_score ?? null,
+      answer_complete: m.answer_complete ?? null,
+      optimized: m.optimized ?? false,
     })),
     ...messages,
   ]
