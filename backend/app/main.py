@@ -77,9 +77,10 @@ async def _warmup_bm25() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 准备数据目录
+    # 准备数据目录（quarantine 隔离区随 uploads 一并创建）
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.upload_dir_path.mkdir(parents=True, exist_ok=True)
+    settings.quarantine_dir_path.mkdir(parents=True, exist_ok=True)
     settings.chroma_dir_path.mkdir(parents=True, exist_ok=True)
     # 建表 + 种子 + 预热 + 清空语义缓存（防旧检索答案残留劫持新检索）
     await init_db()

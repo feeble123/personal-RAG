@@ -22,8 +22,10 @@
 - ✅ 单元2：认证加固（access 短期 15min + refresh 轮换 + auth_sessions 表 + session_version 改密/禁用立即失效 + 前端 token 改内存 + 401 自动 refresh）+ 10 测试
 - ⬜ 单元3：全量回归 + 分支提交
 
-### P0-10 上传隔离（P0-1 之后）
-- 上传只有文件大小限制，无 MIME/signature 校验、无 quarantine、无路径 resolve 检查
+### P0-10 上传隔离（进行中）
+- ✅ 单元1：MIME/signature 校验（pdf %PDF / docx/xlsx PK zip）+ zip bomb 防护（压缩比 500 倍/解压 200MB）+ 文本二进制伪装拦截 + 13 测试
+- ✅ 单元2：quarantine 隔离（上传先进 .quarantine → 校验通过移入 uploads）+ 解析前二次 verify（防 TOCTOU）+ 失败清理不留垃圾 + 3 测试
+- ⬜ 单元3：收尾 + 全量回归 + 分支提交
 
 ### P1 系列（P0 全部完成后）
 - P1-1 统一 DocumentElement IR（下一步核心重构）

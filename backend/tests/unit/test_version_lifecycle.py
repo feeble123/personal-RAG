@@ -23,15 +23,26 @@ _cnt = {"n": 0}
 
 
 async def _mk_doc() -> tuple[int, int]:
-    """建一个库 + 一个文档（无版本），返回 (kb_id, doc_id)。"""
+    """建一个库 + 一个文档（无版本），返回 (kb_id, doc_id)。
+
+    P0-10 单元2：manager._process_document 开头会二次 verify 文件内容，
+    故这里必须写一个真实 md 文件（否则 verify 先于注入的 parse 异常触发）。
+    """
+    from app.core.config import settings
+
     _cnt["n"] += 1
     n = _cnt["n"]
+    settings.upload_dir_path.mkdir(parents=True, exist_ok=True)
+    stored = f"life{n}.md"
+    (settings.upload_dir_path / stored).write_text(
+        "# 水利测试\n\n## 章\n\n内容内容内容\n", encoding="utf-8"
+    )
     async with async_session_factory() as db:
         kb = KnowledgeBase(name=f"life库{n}", status="ready")
         db.add(kb)
         await db.flush()
         doc = Document(
-            kb_id=kb.id, filename=f"life{n}.md", stored_path=f"life{n}.md",
+            kb_id=kb.id, filename=f"life{n}.md", stored_path=stored,
             file_type="md", status="pending",
         )
         db.add(doc)

@@ -467,6 +467,15 @@ async def _process_document(doc_id: int) -> None:
         if kb is None:
             return
 
+        # P0-10 单元2：解析前二次验证（防 TOCTOU——上传时校验通过、解析前文件被换）。
+        # 抛异常 → 走 _execute_job 失败路径：job failed + doc failed + 旧 active 版本保留。
+        from app.modules.knowledge.upload_guard import verify_file
+
+        verify_file(
+            doc.file_type,
+            settings.upload_dir_path / doc.stored_path,
+        )
+
         clear_progress(doc.stored_path)  # 清除残留进度，开始全新一轮
         doc.status = "parsing"
         doc.error_message = None

@@ -119,12 +119,15 @@ async def upload_document(
             "UNSUPPORTED_FORMAT",
         )
 
-    # 流式写盘（200MB 限制，不整文件进内存）
+    # P0-10 单元2：先进 quarantine 隔离区 → 校验通过 → 移入正式 uploads
     stored_name = f"{uuid4().hex}.{ext}"
+    quarantine_path = settings.quarantine_dir_path / stored_name
     dest = settings.upload_dir_path / stored_name
     size = 0
     try:
-        with dest.open("wb") as out:
+        # 1. 流式写盘到隔离区（200MB 限制，不整文件进内存）
+        quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+        with quarantine_path.open("wb") as out:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > settings.max_upload_size:
@@ -134,8 +137,16 @@ async def upload_document(
                         "FILE_TOO_LARGE",
                     )
                 out.write(chunk)
+
+        # 2. 内容校验（伪造扩展名 / zip bomb / 二进制伪装）
+        from app.modules.knowledge.upload_guard import verify_file
+
+        verify_file(ext, quarantine_path)
+
+        # 3. 校验通过 → 移入正式 uploads（同文件系统原子 move，无 TOCTOU 半成品）
+        quarantine_path.replace(dest)
     except BizError:
-        dest.unlink(missing_ok=True)
+        quarantine_path.unlink(missing_ok=True)  # 校验失败清理隔离区，不留垃圾
         raise
 
     doc = Document(

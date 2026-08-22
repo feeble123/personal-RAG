@@ -219,6 +219,11 @@ class Settings(BaseSettings):
         return Path(self.upload_dir)
 
     @property
+    def quarantine_dir_path(self) -> Path:
+        """quarantine 隔离区：始终位于 upload_dir 下（测试覆盖 UPLOAD_DIR 时自动跟随）。"""
+        return self.upload_dir_path / ".quarantine"
+
+    @property
     def chroma_dir_path(self) -> Path:
         return Path(self.chroma_dir)
 
