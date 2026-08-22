@@ -13,6 +13,7 @@
 | P0-8 版本化入库 | ✅ | 影子索引+原子发布 |
 | P0-9 持久 job | ✅ c5be4c6 | job 表+worker+心跳/reaper/取消（315 绿） |
 | P0-11 DSH 接口 | ✅ 936165a | 契约+出处元数据+README（291 绿） |
+| P0-1 生产安全 | ✅ 21bb31a | APP_ENV fail-safe + session 认证加固（338 绿） |
 
 ## 未完成（按计划顺序）
 
