@@ -253,6 +253,40 @@ class DocumentVersion(Base):
     )
 
 
+class IngestionJob(Base):
+    """入库任务（P0-9 持久化 job）：DB 是任务真相源，进程重启可恢复、失败可定位 stage。
+
+    stage: queued → parsing → chunking → embedding → indexing → publishing → verifying
+           → succeeded | failed | cancelled
+    - 幂等：API 只创建 job 并 commit，worker 用 CAS（UPDATE..WHERE stage=queued）领任务
+    - 恢复：进程重启后 reaper 把「lease 过期且未完成」的 job 标 failed（旧 active 不动）
+    - 取消：协作式——worker 在解析/分块/嵌入批次间检查 cancel_requested
+    """
+
+    __tablename__ = "ingestion_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(10), default="ingest", nullable=False)  # ingest / reparse
+    stage: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 租约：当前 worker 身份 + 到期时间（reaper 回收超时 job）
+    lease_owner: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 进度（解析/OCR 阶段）：{stage, done, total, percent}
+    progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class IndexVersion(Base):
     """索引版本（P0-8 影子索引）：每次全量重建产生一个 target 索引。
 

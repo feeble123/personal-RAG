@@ -152,8 +152,8 @@ async def upload_document(
     await db.commit()
     await db.refresh(doc)
 
-    # 后台入库
-    ingestion.enqueue_ingestion(doc.id)
+    # 后台入库（P0-9：写 DB job，worker 轮询执行；不 create_task）
+    await ingestion.enqueue_ingestion_async(doc.id, kind="ingest")
     return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type)
 
 
@@ -229,7 +229,8 @@ async def reparse_document(doc_id: int, db: DbSession, _admin: AdminUser) -> Doc
     doc.status = "pending"
     doc.error_message = None
     await db.commit()
-    ingestion.enqueue_ingestion(doc_id)
+    # P0-9：写 DB job（kind=reparse），worker 轮询执行
+    await ingestion.enqueue_ingestion_async(doc_id, kind="reparse")
     await db.refresh(doc)
     return doc
 
@@ -311,3 +312,54 @@ async def list_kb_chunks(
             for c in rows.scalars().all()
         ],
     }
+
+
+# ---------------- 入库任务（P0-9 持久化 job） ----------------
+@router.get("/jobs", response_model=dict)
+async def list_jobs(
+    db: DbSession,
+    _admin: AdminUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+):
+    """入库任务列表（管理员监控）：stage/attempt/progress/error/cancel 状态一览。"""
+    from app.db.models import IngestionJob
+
+    total = (await db.scalar(select(func.count()).select_from(IngestionJob))) or 0
+    rows = await db.execute(
+        select(IngestionJob)
+        .order_by(IngestionJob.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = []
+    for j in rows.scalars().all():
+        items.append(
+            {
+                "id": j.id,
+                "document_id": j.document_id,
+                "kind": j.kind,
+                "stage": j.stage,
+                "attempt": j.attempt,
+                "progress": j.progress,
+                "error_code": j.error_code,
+                "error_detail": j.error_detail,
+                "cancel_requested": j.cancel_requested,
+                "created_at": j.created_at.isoformat() if j.created_at else None,
+                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
+            }
+        )
+    return {"total": total, "items": items}
+
+
+@router.post("/documents/{doc_id}/cancel", status_code=200)
+async def cancel_document_ingestion(doc_id: int, _db: DbSession, _admin: AdminUser) -> dict:
+    """取消文档入库（协作式）：置位 cancel_requested，worker 在批次间中断。
+
+    仅当存在活跃 job 时返回已取消；无任务/已终态返回 200 且 cancelled=False。
+    """
+    doc = await _db.get(Document, doc_id)
+    if not doc:
+        raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
+    ok = await ingestion.cancel_ingestion(doc_id)
+    return {"cancelled": ok}

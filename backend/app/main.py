@@ -90,8 +90,14 @@ async def lifespan(app: FastAPI):
     from app.services import semantic_cache
 
     await semantic_cache.clear_cache()
+    # P0-9：启动后台入库 worker（轮询 DB job 表；进程内常驻）
+    from app.modules.ingestion import manager as ingestion_manager
+
+    ingestion_manager.start_worker()
     logger.info("应用启动完成: %s", settings.app_name)
     yield
+    # 优雅关闭：停掉 worker（置停止标记 + 取消轮询），避免任务残留
+    ingestion_manager.stop_worker()
     logger.info("应用关闭")
 
 
