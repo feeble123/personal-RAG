@@ -96,6 +96,7 @@ async def upload_document(
     _admin: AdminUser,
     file: UploadFile = File(...),
     chunk_strategy: str = Form(settings.chunk_strategy_default),
+    doc_type: str = Form("other"),
 ) -> UploadResult:
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb:
@@ -104,6 +105,10 @@ async def upload_document(
     # 切片策略（供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全；非法值回退默认
     if chunk_strategy not in ("old", "new"):
         chunk_strategy = settings.chunk_strategy_default
+
+    # P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other；非法值回退 other
+    if doc_type not in ("textbook", "standard", "manual", "other"):
+        doc_type = "other"
 
     original = file.filename or "untitled"
     ext = Path(original).suffix.lower().lstrip(".")
@@ -141,6 +146,7 @@ async def upload_document(
         file_size=size,
         status="pending",
         chunk_strategy=chunk_strategy,
+        doc_type=doc_type,
     )
     db.add(doc)
     await db.commit()
@@ -148,7 +154,7 @@ async def upload_document(
 
     # 后台入库
     ingestion.enqueue_ingestion(doc.id)
-    return UploadResult(id=doc.id, filename=original, status="pending")
+    return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type)
 
 
 @router.get("/kbs/{kb_id}/documents", response_model=DocumentListOut)
@@ -239,9 +245,26 @@ async def search_preview(
 ) -> SearchResult:
     # 预览与问答一致：问题点名《书名》/「XXX中」时限定到该文档
     # P0-2 scope 隔离：书名解析限定当前库
+    # P0-11：检索统一走 retriever（对外契约层），再转成前端 CitationOut 结构
+    from app.schemas import CitationOut
+    from app.services import retriever
+
     doc_ids = await rag.resolve_documents_by_title(db, q, kb_id=kb_id)
-    hits = await rag.retrieve(db, q, kb_id=kb_id, doc_ids=doc_ids or None, top_k=top_k)
-    return SearchResult(hits=[h.to_citation() for h in hits])
+    results = await retriever.retrieve(q, top_k=top_k, kb_id=kb_id, doc_ids=doc_ids or None)
+    hits = [
+        CitationOut(
+            chunk_id=r.source.chunk_id,
+            doc_id=r.source.doc_id,
+            source=r.source.document_name,
+            page=r.source.page,
+            section=r.source.section,
+            snippet=r.text,
+            score=r.score,
+            rank=i + 1,
+        )
+        for i, r in enumerate(results)
+    ]
+    return SearchResult(hits=hits)
 
 
 @router.get("/kbs/{kb_id}/chunks")

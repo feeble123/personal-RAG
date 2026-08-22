@@ -48,6 +48,8 @@ export interface DocumentItem {
   quality: Record<string, unknown> | null
   // 切片策略（上传时选择，供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
   chunk_strategy: string
+  // P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other
+  doc_type: string
   created_at: string
   parsed_at: string | null
   // 入库进度（解析中实时填充，如 OCR 页数）：{stage, done, total, percent}

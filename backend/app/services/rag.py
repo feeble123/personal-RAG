@@ -397,6 +397,11 @@ class RetrievedChunk:
     snippet: str = ""
     score: float = 0.0
     rank: int = 0
+    # P0-11 检索出处元数据（未来 DSH 引用来源）：块类型 / 条款号 / 公式编号 / 文档类型
+    block_type: str = "text"
+    clause_no: str | None = None
+    formula_no: str | None = None
+    doc_type: str = "other"
 
     def to_citation(self) -> CitationOut:
         return CitationOut(
@@ -619,6 +624,11 @@ async def _hydrate(
                 section=chunk.section,
                 snippet=snippet,
                 score=round(score, 4),
+                # P0-11 出处元数据：从 DB 落库字段带出（旧数据 NULL 回退默认）
+                block_type=chunk.block_type or "text",
+                clause_no=chunk.clause_no,
+                formula_no=chunk.formula_no,
+                doc_type=getattr(doc, "doc_type", None) or "other",
             )
         )
     items.sort(key=lambda x: order[x.chunk_id])

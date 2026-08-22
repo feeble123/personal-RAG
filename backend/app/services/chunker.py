@@ -26,6 +26,9 @@ class Chunk:
     section: str | None
     page: int | None
     content_hash: str
+    # P0-11 块类型（出处元数据）：text / table / formula / figure。
+    # 解析器块是表格 → table；正文/标题 → text；目录页 → text。
+    block_type: str = "text"
 
 
 def _normalize(text: str) -> str:
@@ -125,7 +128,7 @@ class StructureAwareChunker:
         current_section: str | None = None
         current_page: int | None = None
 
-        def flush():
+        def flush(block_type: str = "text"):
             nonlocal buffer, buffer_len, breaks, buffer_page
             if not buffer:
                 buffer_page = None
@@ -136,11 +139,11 @@ class StructureAwareChunker:
                 for group in _group_by_breaks(buffer, breaks, self.chunk_size * 1.5):
                     text = "\n".join(group).strip()
                     if text:
-                        chunks.extend(self._emit(text, current_section, buffer_page))
+                        chunks.extend(self._emit(text, current_section, buffer_page, block_type))
             else:
                 text = "\n".join(buffer).strip()
                 if text:
-                    chunks.extend(self._emit(text, current_section, buffer_page))
+                    chunks.extend(self._emit(text, current_section, buffer_page, block_type))
             buffer = []
             buffer_len = 0
             breaks = set()
@@ -191,8 +194,8 @@ class StructureAwareChunker:
             page = block.page if block.page else current_page
             if block.block_type == "table":
                 flush()
-                # 表格单独成块（行很多时按行二次切分）
-                for t in self._emit(block.text, current_section, page):
+                # 表格单独成块（行很多时按行二次切分）；标记 block_type=table（出处元数据）
+                for t in self._emit(block.text, current_section, page, block_type="table"):
                     chunks.append(t)
                 continue
 
@@ -210,10 +213,20 @@ class StructureAwareChunker:
         flush()
         return chunks
 
-    def _emit(self, text: str, section: str | None, page: int | None) -> list[Chunk]:
+    def _emit(
+        self, text: str, section: str | None, page: int | None, block_type: str = "text"
+    ) -> list[Chunk]:
         prefixed = _section_prefix(section) + text
         if len(prefixed) <= self.chunk_size * 1.5:
-            return [Chunk(content=prefixed, section=section, page=page, content_hash=_hash(prefixed))]
+            return [
+                Chunk(
+                    content=prefixed,
+                    section=section,
+                    page=page,
+                    content_hash=_hash(prefixed),
+                    block_type=block_type,
+                )
+            ]
         # 超长：二次切分
         pieces = self._splitter.split_text(text)
         out = []
@@ -222,7 +235,15 @@ class StructureAwareChunker:
             if not p:
                 continue
             content = _section_prefix(section) + p
-            out.append(Chunk(content=content, section=section, page=page, content_hash=_hash(content)))
+            out.append(
+                Chunk(
+                    content=content,
+                    section=section,
+                    page=page,
+                    content_hash=_hash(content),
+                    block_type=block_type,
+                )
+            )
         return out
 
 
@@ -251,6 +272,8 @@ def merge_tiny_chunks(chunks: list[Chunk], min_len: int = 40) -> list[Chunk]:
                     section=c.section,
                     page=c.page or prev.page,
                     content_hash=_hash(content),
+                    # 合并后取「table 优先」（表格块合并进正文时仍算表格）
+                    block_type="table" if (c.block_type == "table" or prev.block_type == "table") else "text",
                 )
             )
         else:
@@ -274,5 +297,7 @@ def chunk_toc_pages(toc_texts: dict[int, str]) -> list[Chunk]:
         if not text:
             continue
         content = f"## 目录\n{text}"
-        chunks.append(Chunk(content=content, section="目录", page=pno, content_hash=_hash(content)))
+        chunks.append(
+            Chunk(content=content, section="目录", page=pno, content_hash=_hash(content))
+        )
     return chunks

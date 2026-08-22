@@ -65,6 +65,8 @@ class DocumentOut(ORMModel):
     quality: dict[str, Any] | None
     # 切片策略（上传时选择）：old=经典启发式 / new=目录+LLM断号补全
     chunk_strategy: str = "old"
+    # P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other
+    doc_type: str = "other"
     created_at: datetime
     parsed_at: datetime | None
     # P0-8 版本历史（重灌审计）：最近若干版本
@@ -82,6 +84,8 @@ class UploadResult(BaseModel):
     id: int
     filename: str
     status: str = "pending"
+    # P0-11 文档类型（上传时选择，落库回显）
+    doc_type: str = "other"
 
 
 class SearchResult(BaseModel):

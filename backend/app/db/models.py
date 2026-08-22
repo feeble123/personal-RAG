@@ -165,6 +165,9 @@ class Document(Base):
     quality: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # 切片策略（上传时选择，供策略 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
     chunk_strategy: Mapped[str] = mapped_column(String(10), default="old", nullable=False)
+    # P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
+    # 上传时手动选择，随检索结果返回。旧数据默认 other。
+    doc_type: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # P0-8：当前可查询的文档版本指针（原子发布切点）；NULL 表示尚无可用版本。
@@ -200,6 +203,11 @@ class Chunk(Base):
     # P0-7：content_hash 不再唯一——同内容跨文档保留独立 chunk（来源正确、互不牵连）；
     # embedding 缓存仍按 content_hash 复用向量（见 EmbeddingCache）
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # P0-11 检索出处元数据：块类型（text/table/formula/figure）、条款号、公式编号。
+    # 全部可空（旧数据/解析器拿不到就 NULL），供未来 DSH 检索接口返回出处。
+    block_type: Mapped[str | None] = mapped_column(String(10), nullable=True, default="text")
+    clause_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    formula_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     doc: Mapped[Document] = relationship(back_populates="chunks")
     version: Mapped["DocumentVersion"] = relationship(back_populates="chunks")

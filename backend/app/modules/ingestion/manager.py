@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -51,6 +52,33 @@ def _source_hash(path) -> str | None:
         return h.hexdigest()
     except Exception:
         return None
+
+
+# 条款号：章节路径末尾的编号，如 "7.4 明渠均匀流" → "7.4"、"3.2 引用标准" → "3.2"
+_CLAUSE_RE = re.compile(r"(\d+(?:\.\d+){1,3})(?:[ \t]|$)")
+# 公式编号：正文中的 "(x.y.z-N)" 或 "式(x.y.z-N)" 结尾标记
+_FORMULA_RE = re.compile(r"[（(](\d+(?:\.\d+){0,3}-\d+)[）)]")
+
+
+def _extract_clause_no(section: str | None) -> str | None:
+    """从章节路径提取条款号（如 "7.4 明渠均匀流 / 7.4.1 一般规定" → "7.4.1"）。"""
+    if not section:
+        return None
+    # 取最后一个 / 之后的段
+    last = section.split("/")[-1].strip()
+    m = _CLAUSE_RE.search(last)
+    return m.group(1) if m else None
+
+
+def _extract_formula_no(content: str) -> str | None:
+    """从块内容提取公式编号（如 "(7.4.3-1)" 或 "（5.48）"）。"""
+    # 优先匹配带连字符的规范式编号 (x.y.z-N)
+    m = _FORMULA_RE.search(content)
+    if m:
+        return m.group(1)
+    # 回退：普通 "(x.y)" 编号（教材式，如 (3.45)）
+    m2 = re.search(r"[（(](\d+\.\d{1,3})[）)]", content)
+    return m2.group(1) if m2 else None
 
 
 def enqueue_ingestion(doc_id: int) -> None:
@@ -267,6 +295,8 @@ async def _write_chunks(
             await store_cache_vectors(db, vec_map)
 
         # DB 入库（拿自增 chunk id）——挂 target 版本，chunk_index = 原始切片序号
+        # P0-11 出处元数据：block_type（table/text）、clause_no（章节末尾条款号）、
+        # formula_no（内容里的公式编号，如 (7.4.3-1)）；拿不到就 None。
         for i, c in enumerate(chunks):
             db.add(
                 Chunk(
@@ -278,6 +308,9 @@ async def _write_chunks(
                     section=c.section,
                     page=c.page,
                     content_hash=c.content_hash,
+                    block_type=getattr(c, "block_type", "text") or "text",
+                    clause_no=_extract_clause_no(c.section),
+                    formula_no=_extract_formula_no(c.content),
                 )
             )
         target.chunk_count = len(chunks)

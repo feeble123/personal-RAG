@@ -177,10 +177,17 @@ export const kbApi = {
   remove: (id: number) => api.delete(`/admin/kbs/${id}`).then((r) => r.data),
   documents: (kbId: number, params?: Record<string, unknown>) =>
     api.get(`/admin/kbs/${kbId}/documents`, { params }).then((r) => r.data),
-  upload: (kbId: number, file: File, chunkStrategy?: string, onProgress?: (pct: number) => void) => {
+  upload: (
+    kbId: number,
+    file: File,
+    chunkStrategy?: string,
+    docType?: string,
+    onProgress?: (pct: number) => void,
+  ) => {
     const form = new FormData()
     form.append('file', file)
     form.append('chunk_strategy', chunkStrategy ?? 'old')
+    form.append('doc_type', docType ?? 'other')
     return api
       .post(`/admin/kbs/${kbId}/documents/upload`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },

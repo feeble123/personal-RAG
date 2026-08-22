@@ -51,6 +51,15 @@ const STATUS_META: Record<string, { text: string; color: string }> = {
   failed: { text: '失败', color: 'error' },
 }
 
+// P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
+export type DocType = 'textbook' | 'standard' | 'manual' | 'other'
+export const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
+  { value: 'textbook', label: '教材' },
+  { value: 'standard', label: '规范' },
+  { value: 'manual', label: '手册' },
+  { value: 'other', label: '其他' },
+]
+
 // 解析阶段 → 进度百分比（阶段标记，非精确进度）
 const STAGE_PCT: Record<string, number> = {
   pending: 5,
@@ -175,6 +184,8 @@ export default function KnowledgeBase() {
   const [activeKb, setActiveKb] = useState<number | null>(null)
   // 切片策略（上传时选择，供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
   const [chunkStrategy, setChunkStrategy] = useState<'old' | 'new'>('old')
+  // P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
+  const [docType, setDocType] = useState<DocType>('other')
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
   const [kbForm, setKbForm] = useState({ name: '', description: '', answer_style: 'standard' })
   const [detailDoc, setDetailDoc] = useState<DocumentItem | null>(null)
@@ -204,8 +215,8 @@ export default function KnowledgeBase() {
 
   // ---- 上传 ----
   const uploadMutation = useMutation({
-    mutationFn: ({ file, kbId, strategy }: { file: File; kbId: number; strategy: string }) =>
-      kbApi.upload(kbId, file, strategy, () => {}),
+    mutationFn: ({ file, kbId, strategy, type }: { file: File; kbId: number; strategy: string; type: DocType }) =>
+      kbApi.upload(kbId, file, strategy, type, () => {}),
     onSuccess: () => {
       message.success('上传成功，正在后台入库')
       queryClient.invalidateQueries({ queryKey: ['kb-docs'] })
@@ -508,6 +519,14 @@ export default function KnowledgeBase() {
             extra={
               activeKb ? (
                 <Space>
+                  <Select
+                    size="small"
+                    value={docType}
+                    onChange={setDocType}
+                    style={{ width: 110 }}
+                    options={DOC_TYPE_OPTIONS}
+                    placeholder="文档类型"
+                  />
                   <Tooltip
                     overlayStyle={{ maxWidth: 380 }}
                     title={
@@ -541,7 +560,7 @@ export default function KnowledgeBase() {
                         message.error('文件超过 200MB 限制')
                         return Upload.LIST_IGNORE
                       }
-                      uploadMutation.mutate({ file, kbId: activeKb, strategy: chunkStrategy })
+                      uploadMutation.mutate({ file, kbId: activeKb, strategy: chunkStrategy, type: docType })
                       return false
                     }}
                   >

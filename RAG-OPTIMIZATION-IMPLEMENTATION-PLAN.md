@@ -93,6 +93,8 @@ flowchart TD
 | 5 | P0-7、P0-5 schema expand | 正确 chunk/cache 身份、引用快照 | 双写/回填 count 校验通过 |
 | 6 | P0-8 | 不可变文档/索引版本和原子发布 | 故障时旧 active 100% 可用 |
 | 7 | P0-9 | 持久 job、幂等、恢复/取消 | worker kill/重复投递测试通过 |
+| 7.5 | P0-11 DSH 检索接口准备（契约+出处元数据+文档类型+README） | 检索服务单一入口、契约冻结、全量测试绿、README 可照做启动 |
+| 7.6 | P0-9 补序：按 P0-11 之后执行（用户 2026-08-22 选定先 P0-11 后 P0-9） | 同上 |
 | 8 | P1-1；并行 P1-2 离线实验 | 统一 IR 和 parser 选型依据 | IR validator/snapshot 与 bake-off 报告 |
 | 9 | P1-3、P1-4、P1-5 | PDF/Office 保真和安全清洗 | 扫描/Excel 关键 gold 达标 |
 | 10 | P1-6、P1-7 | parent-child chunk 与 embedding profile | chunk/fact coverage/维度门禁通过 |
@@ -602,6 +604,70 @@ queued → validating → parsing → chunking → embedding → indexing
 
 **验收**：伪造扩展、zip bomb、超页数 PDF、巨幅图、路径穿越、CSV 公式注入测试全部被阻断；解析 worker 超限只杀当前 job，不拖垮 API。  
 **工作量**：4–6 人日。
+
+### P0-11 DSH 检索接口准备：稳定契约 + 出处元数据 + 文档类型 + README
+
+**目标**：RAG 未来被本地 AI 智能体底座（DeepSeek Harness，DSH）通过 HTTP 调用「检索接口」（query + top_k → 相关片段 + 出处），再由 DSH 的 AI 综合成带引用的回答。本包**不实现 DSH 对接**（下一阶段），只把「检索服务」做成稳定、解耦、可被一层 HTTP 直接包住的形态，并把每片段出处元数据补齐。
+
+**知识域约束（用户 2026-08-22 确认）**：本 RAG **只针对水利工程领域**——只用水利相关的知识训练/入库（基础教材、行业规范、行业计算手册等）；不混入其他领域内容。因此 `document_type`（教材/规范/手册/其他）是未来 DSH 判断引用来源可信度与适用性的关键字段，须上传时手动标注、随片段返回。
+
+**现状基础（本包基于已完成的，不重做）**：
+- 检索已是独立函数（`rag.retrieve`），QA/搜索预览只调用它 → 解耦基本满足
+- PDF 表格已能抽取（`page.find_tables()` → 管道分隔文本块，`block_type=table`）
+- chunk 已有出处：来源文件名（`source`）、章节（`section`）、页码（`page`）
+- 章节/条款切分已有：TOC 目录大纲 + LLM 断号补全 + 结构感知 chunker（P0-8 前已完成）
+- 注意：深水区（OCR 公式识别 / 版面模型 / 复杂表格结构化）属 P1-2/P1-3，本包只做「能拿到的出处标记与元数据」
+
+**新增数据模型（均可空，能拿到就存）**：
+- `chunks` 加 3 列：
+  - `block_type` String(10)：text / table / formula / figure（引用时告知「这是表格/公式/图」）
+  - `clause_no` String(30)：条款号（如 4.7.2，从 section 或内容正则提取）
+  - `formula_no` String(30)：公式编号（如 7.4.3-1，从内容正则 `(x.y.z-N)` 提取）
+- `documents` 加 1 列：
+  - `doc_type` String(20)：textbook（教材）/ standard（规范）/ manual（手册）/ other（其他），上传时选择
+
+**稳定检索契约（字段名一经确认不再更改；本包先用内部服务实现，不做 HTTP）**：
+
+```json
+// 输入（未来 HTTP body）
+{ "query": "明渠均匀流形成条件", "top_k": 5, "kb_id": 3 }
+// 输出
+{ "results": [ {
+    "text": "明渠均匀流的形成条件包括：……",
+    "score": 0.93,
+    "source": {
+      "document_name": "水力学.pdf",
+      "document_type": "textbook",
+      "section": "7.4 明渠均匀流",
+      "page": 215,
+      "clause_no": null,
+      "formula_no": null,
+      "block_type": "text",
+      "doc_id": 5,
+      "chunk_id": 1882
+    }
+} ] }
+```
+
+**实施步骤（单元划分，每单元完成后确认再下一个）**：
+1. **单元1 Schema + 出处元数据落库**：`models.py` 加 4 列；Alembic 迁移 `d6e7f8a9b0c1`（down_revision=c3d4e5f6a7b8，batch add column 可空）；`chunker.Chunk` dataclass 加 block_type，`chunk_blocks` 保留表格块标记；`manager._write_chunks` 落库新字段。测试：迁移 compare_metadata 无 diff + 表格块带 block_type。
+2. **单元2 检索服务 + 稳定契约**：新增 `backend/app/services/retriever.py`：`async def retrieve(query, top_k, kb_id=None, doc_ids=None) -> list[RetrievalResult]`，内部调 `rag.retrieve` + 从 DB 补全 source 元数据；定义 `RetrievalResult` / `RetrievalSource` dataclass（字段名=契约）。`search_preview` 改走 retriever（QA 后续包）。测试：契约字段冻结 + 元数据补全正确。
+3. **单元3 文档类型 + 条款/公式编号提取**：上传接口收 `doc_type` Form（可选，默认 other）；`DocumentOut`/`KBOut` 带 doc_type；前端上传区加「文档类型」下拉（教材/规范/手册/其他）；`clause_no` 从 section/内容正则提取、`formula_no` 从内容正则提取（能拿到就存）。测试：上传选类型落库 + 条款号/公式号提取。
+4. **单元4 README + 全量回归 + 分支提交**：根目录新增 `README.md`（项目简介/技术栈/目录结构/依赖安装（阿里云镜像）/后端启动/前端启动/测试/配置说明/数据目录）；`pytest` 全量回归；提交到 `feature/rag-optimization` 分支（不 push 远程、不并 main）。
+
+**测试**：
+- 契约字段冻结测试（增删字段会失败，防止未来无意改动契约）
+- 迁移 compare_metadata 无 diff
+- 检索服务返回的 source 元数据正确（doc_type/section/page/clause_no/formula_no/block_type）
+- 表格块 block_type=table 贯穿 parser→chunker→DB→检索输出
+
+**验收**：检索服务成为「检索单一入口」（QA/搜索预览/未来 HTTP 都调它）；契约字段冻结；全量 pytest 绿；按 README 能在另一台机器启动。
+
+**回滚**：纯增量列 + 新增模块，不改现有 `rag.retrieve` 内核；新字段全可空，缺失时兼容默认值；retriever 只是包装，去掉即回到现状。
+
+**工作量**：2–4 人日（不含深水区：OCR 公式识别 / 版面模型，属 P1-2/P1-3）。
+
+**与 DSH 边界**：本包**不**写 HTTP 检索端点、**不**写 DSH 插件/对接代码；只交付「稳定契约 + 检索服务 + 出处元数据 + README」。下一阶段（P2）在 `retriever.py` 外套一层只读 HTTP router 即可对外。
 
 ---
 

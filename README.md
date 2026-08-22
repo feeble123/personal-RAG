@@ -8,6 +8,8 @@
 |---|---|
 | **知识库管理**（仅管理员） | 多知识库管理、PDF/Word/Markdown/TXT/Excel 上传（≤200MB）、后台异步入库 + 进度、文档重解析、检索质量预览 |
 | **知识库问答 + 引用** | 基于 RAG 生成回答，前端显示引用卡片（来源文件 / 页码 / 章节 / 原文片段），点击可查看全文 |
+| **文档类型标注**（P0-11） | 上传时选择「教材 / 规范 / 手册 / 其他」，随每个知识片段保留，供未来 AI 判断引用来源可信度 |
+| **对外检索服务**（P0-11） | 独立的 `retriever.py` 检索服务，输出稳定契约（片段 + 出处元数据），未来可套一层 HTTP 供外部 AI 调用 |
 | **多用户多会话** | 每个用户独立的会话列表，会话归属强隔离（他人访问返回 404） |
 | **历史持久化** | 消息与引用全部落库，任意时间登录可完整找回历史对话（含引用还原） |
 | **账号体系** | 注册 / 登录 / 修改密码；管理员 `admin` / `123456`（首启自动创建） |
@@ -42,7 +44,8 @@
 ```bash
 cd backend
 python -m venv .venv
-.venv/Scripts/pip install -r requirements.txt
+# 国内网络建议用阿里云镜像安装依赖（快且稳定）：
+.venv/Scripts/pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
 copy .env.example .env        # 编辑填入两个 API Key
 .venv/Scripts/python scripts/seed_demo_data.py   # （可选）导入演示数据
 start.bat                      # 启动后端 http://localhost:8000
@@ -75,7 +78,7 @@ npm run build
 │   │   ├── core/           # 配置 / 安全 / 依赖注入 / 异常 / 限流
 │   │   ├── db/             # SQLAlchemy 模型 + async session
 │   │   ├── modules/        # auth / users / conversations / knowledge / qa / ingestion
-│   │   └── services/       # parser / chunker / embedding / vector_store / bm25 / rag / chat / semantic_cache
+│   │   └── services/       # parser / chunker / embedding / vector_store / bm25 / rag / chat / semantic_cache / retriever(P0-11)
 │   ├── scripts/            # 演示数据种子
 │   ├── tests/              # pytest 端到端测试（离线 FAKE 模式）
 │   └── data/               # 数据库 / 上传文件 / Chroma（运行时生成）
@@ -96,6 +99,36 @@ npm run build
 **文档入库流**：上传(≤200MB 流式写盘) → 后台任务（信号量限并发）→ 分层解析(文字层/OCR) → 结构感知分块（注入章节上下文）→ embedding 缓存向量化 → Chroma + BM25 更新。
 
 **问答流（SSE）**：鉴权 → 存用户消息 → 混合检索（向量 + BM25 加权 → **bge-reranker 重排**）→ 语义缓存检查 → LCEL 组装 prompt（引用编号）→ DeepSeek 流式生成 → 引用落库 → 前端渲染引用卡片。
+
+## 🔌 对外检索服务（P0-11，为 DSH 预留）
+
+本项目检索逻辑已抽成独立服务 `backend/app/services/retriever.py`，与页面代码解耦。未来本地 AI 智能体底座（DeepSeek Harness，DSH）可通过 HTTP 调用它获取「相关片段 + 出处」，再综合成带引用的回答。**当前只做了服务层，未实现 HTTP 端点**（下一阶段在 `retriever.py` 外套一层只读 HTTP router 即可）。
+
+**稳定契约（字段名已冻结，不再更改）**：
+
+```json
+// 输入（未来 HTTP body）
+{ "query": "明渠均匀流形成条件", "top_k": 5, "kb_id": 3 }
+
+// 输出
+{ "results": [ {
+    "text": "明渠均匀流的形成条件包括：……",
+    "score": 0.93,
+    "source": {
+      "document_name": "水力学.pdf",
+      "document_type": "textbook",   // textbook 教材 / standard 规范 / manual 手册 / other 其他
+      "section": "7.4 明渠均匀流",
+      "page": 215,
+      "clause_no": null,
+      "formula_no": null,
+      "block_type": "text",          // text / table / formula / figure
+      "doc_id": 5,
+      "chunk_id": 1882
+    }
+} ] }
+```
+
+每个知识片段在入库时保留出处元数据：来源文档名、文档类型（上传时选择）、章节、页码、条款号、公式编号、块类型。未来 AI 引用答案时靠这些信息注明出处。
 
 ## ⚡ 性能优化（企业级）
 
@@ -129,7 +162,8 @@ npm run build
 ```bash
 cd backend
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q
-# 11 个端到端测试：认证 / 权限 / 知识库 / 入库 / 检索 / 会话隔离 / SSE 问答 / 引用还原 / 语义缓存 / 统计
+# 全量 ~291 个测试：认证 / 权限 / 知识库 / 入库 / 检索 / 会话隔离 / SSE 问答 / 引用还原 /
+# 语义缓存 / 统计 / 版本化入库 / 检索契约 / 出处元数据 等（离线 FAKE 模式，无需真实 API Key）
 ```
 
 ## 📚 常见问题
