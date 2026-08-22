@@ -365,11 +365,18 @@ class Citation(Base):
 
 
 class EmbeddingCache(Base):
-    """文档向量缓存：按内容哈希去重，重入库同内容秒回，省 embedding API 调用。"""
+    """文档向量缓存：按内容哈希 + embedding profile 指纹去重。
+
+    P1-3：加 profile_fingerprint——同一 content_hash 在不同 embedding 配置
+    （模型/维度/instruction）下是不同向量，必须分开缓存，防止配置漂移后错配。
+    """
 
     __tablename__ = "embedding_cache"
 
     content_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # P1-3：embedding profile 指纹（provider/model/base_url/dim/instruction 的 sha256）
+    # 旧行默认 ""（兼容既有缓存）；新写入必带指纹
+    profile_fingerprint: Mapped[str] = mapped_column(String(32), primary_key=True, default="")
     model_version: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     vector_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON 数组
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)

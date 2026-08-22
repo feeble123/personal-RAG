@@ -78,6 +78,27 @@ def reset_collection() -> None:
         _collection = _client.create_collection(name=name)
 
 
+def _assert_dimension(col, embeddings: list[list[float]]) -> None:
+    """P1-3：写入前校验向量维度与 collection 一致（防配置漂移后错配）。"""
+    if not embeddings:
+        return
+    dim = len(embeddings[0])
+    # 用 collection 现有第一条向量的维度作参照（空 collection 跳过）
+    try:
+        existing = col.get(limit=1, include=["embeddings"])
+        exist_emb = existing.get("embeddings")
+        # numpy 数组不能用 `or []`（truth value 歧义），用显式长度判断
+        if exist_emb is not None and len(exist_emb) > 0:
+            if len(exist_emb[0]) != dim:
+                raise ValueError(
+                    f"向量维度不匹配: 写入 {dim} 维 vs collection 已有 {len(exist_emb[0])} 维"
+                )
+    except ValueError:
+        raise
+    except Exception:
+        pass  # 读参照失败（新 collection 等）跳过
+
+
 def add_vectors(
     ids: list[str],
     embeddings: list[list[float]],
@@ -85,6 +106,7 @@ def add_vectors(
     metadatas: list[dict[str, Any]],
 ) -> None:
     col = _get_collection()
+    _assert_dimension(col, embeddings)
     col.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
 
 
@@ -127,6 +149,24 @@ def build_shadow(
         col = client.create_collection(name=shadow, configuration=_HNSW_CONFIG)
     except TypeError:
         col = client.create_collection(name=shadow)
+    # P1-3：维度校验（对照 active collection 现有向量，防错配）
+    active = _get_collection()
+    try:
+        existing = active.get(limit=1, include=["embeddings"])
+        exist_emb = existing.get("embeddings")
+        if (
+            exist_emb is not None
+            and len(exist_emb) > 0
+            and embeddings
+            and len(exist_emb[0]) != len(embeddings[0])
+        ):
+            raise ValueError(
+                f"影子索引维度不匹配: 写入 {len(embeddings[0])} 维 vs active 已有 {len(exist_emb[0])} 维"
+            )
+    except ValueError:
+        raise
+    except Exception:
+        pass
     col.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
     return col.count()
 
