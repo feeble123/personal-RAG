@@ -29,12 +29,14 @@
 - ⬜ 单元3：收尾 + 全量回归 + 分支提交
 
 ### P1 系列（P0 全部完成后）
-- P1-1 统一 DocumentElement IR（下一步核心重构）
-- P1-2 parser bake-off 离线实验
-- P1-3/4/5 PDF/Office 保真+安全清洗
-- P1-6/7 parent-child chunk + embedding profile
-- P1-8/9 pgvector 对照 + retrieval v2
-- P1-10/11 回答编排 + 引用校验
+- ✅ 计划已定：[p1-retrieval-quality.md](p1-retrieval-quality.md)（检索质量主线，用户确认裁剪决策）
+- 单元1：P1-11 评测门禁（先建护栏）
+- 单元2：P1-1 DocumentElement IR 重构（核心地基）
+- 单元3：P1-6 parent-child 切片（主线核心）
+- 单元4：P1-7 embedding profile（向量指纹）
+- 单元5：P1-9 检索校准流水线（主线核心）
+- 单元6：P1-3/4/5 最小集 + 收尾提交
+- ⏸ 裁剪延期：P1-2（外部引擎 bake-off）/ P1-8（pgvector）→ 答辩后
 
 ## 用户约束
 - 只保存到 feature/rag-optimization 分支，main 保持 aa372b6 不动
