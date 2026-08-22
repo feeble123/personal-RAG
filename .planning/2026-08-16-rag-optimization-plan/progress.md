@@ -30,12 +30,12 @@
 
 ### P1 系列（P0 全部完成后）
 - ✅ 计划已定：[p1-retrieval-quality.md](p1-retrieval-quality.md)（检索质量主线，用户确认裁剪决策）
-- 单元1：P1-11 评测门禁（先建护栏）
-- 单元2：P1-1 DocumentElement IR 重构（核心地基）
-- 单元3：P1-6 parent-child 切片（主线核心）
-- 单元4：P1-7 embedding profile（向量指纹）
-- 单元5：P1-9 检索校准流水线（主线核心）
-- 单元6：P1-3/4/5 最小集 + 收尾提交
+- ✅ 单元1：P1-11 评测门禁（gold 14 问 + scorers + run_eval CLI + retrieve 最小 trace；基线 R@5=71.4% R@10=78.6%，enumeration 意图偏弱 50% → P1-9 coverage plan 改进方向）
+- ⬜ 单元2：P1-1 DocumentElement IR 重构（核心地基）
+- ⬜ 单元3：P1-6 parent-child 切片（主线核心）
+- ⬜ 单元4：P1-7 embedding profile（向量指纹）
+- ⬜ 单元5：P1-9 检索校准流水线（主线核心）
+- ⬜ 单元6：P1-3/4/5 最小集 + 收尾提交
 - ⏸ 裁剪延期：P1-2（外部引擎 bake-off）/ P1-8（pgvector）→ 答辩后
 
 ## 用户约束

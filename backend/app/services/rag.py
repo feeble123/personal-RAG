@@ -417,6 +417,41 @@ class RetrievedChunk:
         )
 
 
+@dataclass
+class CandidateTrace:
+    """P1-1 评测门禁：单个候选的阶段性分数（用于离线评测/可回放 trace）。
+
+    记录从向量/BM25 到融合到 rerank 的完整路径，评测时按需求取对应分。
+    """
+
+    chunk_id: int
+    vector_score: float | None = None
+    bm25_score: float | None = None
+    fusion_score: float | None = None
+    rerank_score: float | None = None
+
+
+@dataclass
+class RetrievalTrace:
+    """P1-1 评测门禁：一次 retrieve 的完整可回放 trace。"""
+
+    query: str
+    candidates: list[CandidateTrace]
+    rerank_ok: bool = False
+    rerank_status: str = "disabled"  # ok / failed / disabled
+    expanded_type: str | None = None  # None / chapter / enumeration / coverage
+    vector_hits: int = 0
+    bm25_hits: int = 0
+
+
+@dataclass
+class RetrievedResult:
+    """P1-1 评测门禁：retrieve 返回值（return_trace=True 时）。cites 兼容旧调用。"""
+
+    cites: list[RetrievedChunk]
+    trace: RetrievalTrace | None = None
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     n = len(a)
     dot = sum(a[i] * b[i] for i in range(n))
@@ -463,7 +498,8 @@ async def retrieve(
     doc_ids: list[int] | None = None,
     top_k: int | None = None,
     include_snippet: bool = True,
-) -> list[RetrievedChunk]:
+    return_trace: bool = False,
+) -> list[RetrievedChunk] | RetrievedResult:
     """检索主入口。kb_id=None 跨全库（按库归一化 BM25 加权）；doc_ids 限定只搜点名文档。
 
     final = 0.7×向量相似度 + 0.3×BM25归一化分
@@ -472,8 +508,14 @@ async def retrieve(
       以及长问题下关键词被稀释的问题（如「请问…通信网络体系有什么要求呢？」）
     - 跨库时各库 BM25 按**该库自身 top1 归一化**，无关库（BM25 近 0）不会产生噪声
     - doc_ids 非空：只搜这些文档的切片（问题点名《书名》或「XXX中」时），BM25 按文档后过滤
+
+    P1-1 评测门禁：return_trace=True 时返回 RetrievedResult（cites + trace）。
+    默认 False 返回 list[RetrievedChunk]，零影响现有调用。
     """
     top_k = top_k or settings.top_k_final
+
+    # P1-1 评测门禁：收集各阶段分数供 trace
+    trace_cands: dict[int, CandidateTrace] = {}
 
     # 1) 向量检索（真实余弦相似度）；doc_ids 限定 → Chroma metadata doc_id 过滤
     qvec = await embed_query(query)
@@ -496,6 +538,9 @@ async def retrieve(
         where = {"kb_id": kb_id} if kb_id else None
     vec_hits = await asyncio.to_thread(vector_store.query, qvec, where, settings.top_k_vector)
     candidates: dict[int, float] = {h.chunk_id: h.score for h in vec_hits}
+    if return_trace:
+        for h in vec_hits:
+            trace_cands.setdefault(h.chunk_id, CandidateTrace(chunk_id=h.chunk_id)).vector_score = h.score
 
     # 2) BM25 加权（单库或跨库均生效；跨库按库归一化；doc_ids 限定 → 放大候选后按文档过滤）
     bm25_norm: dict[int, float] = {}
@@ -519,6 +564,8 @@ async def retrieve(
             continue
         for cid, s in hits:
             bm25_norm[cid] = s / max_s  # 该库内归一化到 0~1
+            if return_trace:
+                trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).bm25_score = s / max_s
 
     # 3) BM25 补召回：向量 top50 未出现的 chunk，实时算真实余弦
     extra_ids = [cid for cid in bm25_norm if cid not in candidates]
@@ -526,16 +573,21 @@ async def retrieve(
         embeddings = await asyncio.to_thread(vector_store.get_embeddings_by_ids, extra_ids)
         for cid, vec in embeddings.items():
             candidates[cid] = _cosine(qvec, vec)
+            if return_trace:
+                trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).vector_score = candidates[cid]
 
     # 4) 加权融合（clamp 到 0~1）
     for cid, sim_v in list(candidates.items()):
         candidates[cid] = max(0.0, 0.7 * sim_v + 0.3 * bm25_norm.get(cid, 0.0))
+        if return_trace:
+            trace_cands[cid].fusion_score = candidates[cid]
 
     # 5) 送入 reranker 重排（cross-encoder，纠正向量对部分查询的区分度不足）
     cand_sorted = sorted(candidates.items(), key=lambda x: x[1], reverse=True)[
         : settings.rerank_candidates
     ]
     rerank_ok = False
+    rerank_status = "disabled"
     section_by_id: dict[int, str | None] = {}
     if cand_sorted:
         # 预先取候选的章节信息：rerank 与两种扩展共用；rerank 关闭时扩展仍可用
@@ -557,20 +609,31 @@ async def retrieve(
                 r_scores = await rerank(focus_rerank_query(query), docs)
                 cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
                 rerank_ok = True
+                rerank_status = "ok"
+                if return_trace:
+                    for cid, rs in zip(ids, r_scores):
+                        if cid in trace_cands:
+                            trace_cands[cid].rerank_score = rs
             except Exception:
                 logger.warning("rerank 失败，回退到混合排序", exc_info=True)
+                rerank_status = "failed"
                 cand_sorted = cand_sorted[:top_k]
 
     # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再枚举扩展（枚举/清单类问题拉全量章节）
     ranked = cand_sorted[:top_k]
+    expanded_type: str | None = None
     expanded = await _expand_chapter_sections(
         db, query, cand_sorted, section_by_id, top_k, kb_id=kb_id
     )
-    if not expanded:
+    if expanded:
+        expanded_type = "chapter"
+    else:
         expanded = await _expand_enumeration_sections(
             db, query, cand_sorted, section_by_id, top_k, kb_id=kb_id,
             candidates_full=candidates,
         )
+        if expanded:
+            expanded_type = "enumeration"
     if expanded:
         ranked = expanded
     hydrated = await _hydrate(db, ranked, include_snippet)
@@ -583,6 +646,19 @@ async def retrieve(
                 kb_id, [c.chunk_id for c in leaked],
             )
             hydrated = [c for c in hydrated if c.kb_id == kb_id]
+
+    # P1-1 评测门禁：return_trace=True 时返回 RetrievedResult（cites + trace）
+    if return_trace:
+        trace = RetrievalTrace(
+            query=query,
+            candidates=sorted(trace_cands.values(), key=lambda c: c.chunk_id),
+            rerank_ok=rerank_ok,
+            rerank_status=rerank_status,
+            expanded_type=expanded_type,
+            vector_hits=len(vec_hits),
+            bm25_hits=len(bm25_norm),
+        )
+        return RetrievedResult(cites=hydrated, trace=trace)
     return hydrated
 
 

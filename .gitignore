@@ -12,6 +12,9 @@ backend/data/
 # 测试用 PDF（用户本地资料，不进 git：体积大 / 版权）
 PDF test/
 
+# 评测临时产物（baseline.json 保留进 git）
+backend/evaluation/report.json
+
 # Node
 node_modules/
 frontend/dist/

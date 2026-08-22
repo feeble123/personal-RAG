@@ -1,0 +1,20 @@
+{
+  "aggregate": {
+    "total": 14,
+    "recall_at_5": 0.7143,
+    "recall_at_10": 0.7857,
+    "citation_hit": 1.0,
+    "by_intent": {
+      "general": {
+        "n": 8,
+        "recall5": 0.875,
+        "recall10": 1.0
+      },
+      "enumeration": {
+        "n": 6,
+        "recall5": 0.5,
+        "recall10": 0.5
+      }
+    }
+  }
+}
