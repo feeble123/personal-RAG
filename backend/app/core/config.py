@@ -5,9 +5,11 @@
 """
 from __future__ import annotations
 
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 项目根目录（backend/）
@@ -23,6 +25,8 @@ class Settings(BaseSettings):
 
     # ---- 应用 ----
     app_name: str = "水利知识库问答系统"
+    # 运行环境：development / test / production（P0-1 fail-safe 校验）
+    app_env: str = "development"
     debug: bool = False
     host: str = "0.0.0.0"
     port: int = 8000
@@ -35,12 +39,20 @@ class Settings(BaseSettings):
     ]
 
     # ---- 安全 ----
-    # 生产环境务必通过 .env 覆盖
-    jwt_secret: str = "dev-secret-change-me-in-production"
+    # P0-1：默认空 = 未配置。development/test 下自动生成随机密钥 fallback；
+    #       production 下必须显式配置，否则启动失败（禁止默认密钥上线）。
+    jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 7  # 7 天
+    # P0-1：access 短期化（15 分钟），配合 refresh 轮换；旧值 7 天过长，泄露窗口太大
+    access_token_expire_minutes: int = 15
+    # refresh token 有效期（30 天）：access 过期后用 refresh 续期，无需反复登录
+    refresh_token_expire_days: int = 30
+    # refresh cookie 名
+    refresh_cookie_name: str = "refresh_token"
     admin_username: str = "admin"
-    admin_password: str = "123456"
+    # P0-1：默认空 = 未配置。development/test 下回退到 123456 便于本地开发；
+    #       production 下必须显式配置强密码，空或默认 123456 均禁止启动。
+    admin_password: str = ""
 
     # ---- 数据库 (SQLite 零安装；换 MySQL/Postgres 改连接串即可) ----
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'data' / 'app.db'}"
@@ -152,6 +164,7 @@ class Settings(BaseSettings):
 
     # ---- 限流 ----
     auth_rate_limit: str = "10/minute"    # 注册/登录（按 IP）
+    refresh_rate_limit: str = "30/minute"  # refresh 轮换（按 IP，防爆破）
     chat_rate_limit: str = "60/minute"    # 问答（按用户）
     feedback_rate_limit: str = "30/minute"  # 反馈点赞/踩（按用户）
 
@@ -172,6 +185,34 @@ class Settings(BaseSettings):
     # 如「犮犪狊…」=custom…，无替换符/私用区字符；正常中文正文常用字占比实测 0.4+，
     # 乱码页 ≈0。低于该阈值 → 该页转 OCR）
     chinese_common_threshold: float = 0.2
+
+    # ---- P0-1 生产环境 fail-safe 校验 ----
+    # production 缺安全必需配置 → 构造即抛 ValidationError，启动直接失败。
+    @model_validator(mode="after")
+    def _validate_env(self) -> "Settings":
+        env = (self.app_env or "").strip().lower()
+        if env not in ("development", "test", "production"):
+            raise ValueError(f"APP_ENV 仅支持 development/test/production，收到: {self.app_env!r}")
+        self.app_env = env
+
+        if env == "production":
+            if not self.jwt_secret:
+                raise ValueError("生产环境必须配置 JWT_SECRET（禁止默认/空密钥上线）")
+            if not self.admin_password or self.admin_password == "123456":
+                raise ValueError("生产环境必须配置强 ADMIN_PASSWORD（默认 123456 禁止上线）")
+            if not self.embedding_api_key:
+                raise ValueError("生产环境必须配置 EMBEDDING_API_KEY（无法入库）")
+            if not self.deepseek_api_key:
+                raise ValueError("生产环境必须配置 DEEPSEEK_API_KEY（无法问答）")
+            if self.debug:
+                raise ValueError("生产环境禁止 DEBUG=true（会暴露 /api/docs）")
+        else:
+            # development/test：未配置时给出安全随机密钥 / 开发默认密码，保证本地可跑
+            if not self.jwt_secret:
+                self.jwt_secret = secrets.token_hex(32)
+            if not self.admin_password:
+                self.admin_password = "123456"
+        return self
 
     @property
     def upload_dir_path(self) -> Path:

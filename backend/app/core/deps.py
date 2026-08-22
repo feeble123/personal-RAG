@@ -27,11 +27,16 @@ async def get_current_user(
     db: DbSession,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    """解析 JWT 并加载当前用户。"""
+    """解析 JWT 并加载当前用户。
+
+    P0-1：校验 token 携带的 sv（session_version）== 用户当前版本。
+    改密/禁用/重置密码会使 session_version +1 → 旧 token 的 sv 落后 → 401。
+    """
     token = _extract_token(authorization)
     try:
         payload = decode_token(token)
         user_id = int(payload.get("sub"))
+        token_sv = int(payload.get("sv") or 0)
     except Exception:
         raise BizError("登录已过期，请重新登录", 401, "UNAUTHORIZED")
 
@@ -40,6 +45,8 @@ async def get_current_user(
         raise BizError("用户不存在", 401, "UNAUTHORIZED")
     if not user.is_active:
         raise BizError("账号已被禁用", 403, "FORBIDDEN")
+    if (user.session_version or 0) != token_sv:
+        raise BizError("登录已过期，请重新登录", 401, "UNAUTHORIZED")
     return user
 
 

@@ -13,8 +13,12 @@ os.environ["EMBEDDING_PROVIDER"] = "fake"
 os.environ["LLM_PROVIDER"] = "fake"
 os.environ["RERANK_ENABLED"] = "false"  # 集成测试离线，不走 rerank API
 os.environ["DEBUG"] = "false"
-# 测试集随功能增长注册用户增多，放开 auth/chat 限流避免 429 干扰
+# P0-1：测试用固定密钥/密码（而非随机 fallback），保证 token/登录测试稳定可复现
+os.environ["JWT_SECRET"] = "test-secret-for-unit-tests-not-production"
+os.environ["ADMIN_PASSWORD"] = "123456"
+# 测试集随功能增长注册用户增多，放开 auth/chat/refresh 限流避免 429 干扰
 os.environ["AUTH_RATE_LIMIT"] = "1000/minute"
+os.environ["REFRESH_RATE_LIMIT"] = "1000/minute"
 os.environ["CHAT_RATE_LIMIT"] = "1000/minute"
 
 # 用临时目录隔离数据，避免污染真实数据
@@ -39,6 +43,12 @@ async def client():
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             yield c
+
+
+@pytest_asyncio.fixture(scope="session")
+async def app_ctx():
+    """暴露 app 对象，供测试内创建独立 ASGI client（如隔离 cookie jar）。"""
+    return app
 
 
 @pytest_asyncio.fixture

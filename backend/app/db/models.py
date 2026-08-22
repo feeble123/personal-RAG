@@ -38,6 +38,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)  # admin / user
     nickname: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # P0-1：会话版本号。改密/禁用/重置密码时 +1 → 旧 access token（携带旧 sv）全部失效。
+    session_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
@@ -46,6 +48,27 @@ class User(Base):
     conversations: Mapped[list["Conversation"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
     )
+
+
+class AuthSession(Base):
+    """登录会话（P0-1）：refresh token 哈希 + 轮换吊销。
+
+    - 只存 refresh 的 sha256 哈希，绝不明文落库
+    - 每次 /auth/refresh 轮换：旧 session 标 revoked（refresh 重放 → 旧哈希已被吊销，拒绝）
+    - revoked_at 非空 = 已吊销；expires_at 非空且过 = 过期
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    refresh_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)  # sha256 hex
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
 
 class Conversation(Base):

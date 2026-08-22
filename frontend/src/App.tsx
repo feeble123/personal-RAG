@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { RequireAdmin, RequireAuth } from '@/router'
 import Login from '@/pages/Login'
@@ -7,8 +8,33 @@ import KnowledgeBase from '@/pages/KnowledgeBase'
 import MemoryManager from '@/pages/MemoryManager'
 import UserManager from '@/pages/UserManager'
 import NotFound from '@/pages/NotFound'
+import { useAuthStore } from '@/stores/auth'
 
 export default function App() {
+  // P0-1：启动时用 HttpOnly refresh cookie 恢复登录态（access 已改内存存储）
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch('/api/auth/refresh', { method: 'POST' })
+        if (res.ok) {
+          const data = (await res.json()) as {
+            access_token: string
+            user: { id: number; username: string; role: 'admin' | 'user'; nickname: string | null; is_active: boolean }
+          }
+          if (!cancelled) useAuthStore.getState().setAuth(data.access_token, data.user)
+        } else {
+          if (!cancelled) useAuthStore.getState().setRestored()
+        }
+      } catch {
+        if (!cancelled) useAuthStore.getState().setRestored()
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

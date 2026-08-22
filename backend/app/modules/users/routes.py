@@ -19,6 +19,17 @@ router = APIRouter(prefix="/admin/users", tags=["users"])
 stats_router = APIRouter(prefix="/admin", tags=["stats"])
 
 
+async def _revoke_all_sessions(db, user_id: int) -> None:
+    """吊销该用户全部未吊销的 refresh 会话（改密/禁用/重置密码时调用）。"""
+    from app.db.models import AuthSession
+
+    await db.execute(
+        AuthSession.__table__.update()
+        .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
+        .values(revoked_at=datetime.now())
+    )
+
+
 class AdminUserOut(UserOut):
     """账号管理列表用：UserOut + 创建时间。"""
 
@@ -115,6 +126,10 @@ async def patch_user(
             raise BizError("非法角色", 400, "INVALID_ROLE")
         user.role = body.role
     if body.is_active is not None:
+        # P0-1：禁用账号 → session_version +1 + 吊销全部会话 → 已发 token 立即失效
+        if user.is_active and not body.is_active:
+            user.session_version = (user.session_version or 0) + 1
+            await _revoke_all_sessions(db, user.id)
         user.is_active = body.is_active
     await db.commit()
     await db.refresh(user)
@@ -138,11 +153,16 @@ async def delete_user(user_id: int, db: DbSession, admin: AdminUser) -> None:
 async def reset_user_password(
     user_id: int, body: PasswordResetIn, db: DbSession, _admin: AdminUser
 ) -> UserOut:
-    """管理员重置用户密码（不校验旧密码；用户下次用新密码登录）。"""
+    """管理员重置用户密码（不校验旧密码；用户下次用新密码登录）。
+
+    P0-1：重置后 session_version +1 + 吊销全部会话 → 该用户旧 token 全部失效。
+    """
     user = await db.get(User, user_id)
     if not user:
         raise BizError("用户不存在", 404, "USER_NOT_FOUND")
     user.password_hash = hash_password(body.new_password)
+    user.session_version = (user.session_version or 0) + 1
+    await _revoke_all_sessions(db, user.id)
     await db.commit()
     await db.refresh(user)
     return UserOut.model_validate(user)

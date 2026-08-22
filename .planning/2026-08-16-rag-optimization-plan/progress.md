@@ -1,43 +1,38 @@
-# Progress: RAG 系统分级优化实施方案
+# RAG 优化实施进度（2026-08-22 更新）
 
-## Session 2026-08-16
+## 已完成（提交到 feature/rag-optimization，未 push 未并 main）
 
-### Phase 1
-- **Status:** complete
-- 已读取 planning-with-files 技能并恢复上一轮审计的 plan/findings/progress。
-- 已创建独立优化方案计划目录并设为 active plan。
-- 下一步：复核报告、当前代码路径与关键依赖，再进行官方技术选型核验。
-- 已完整复核原审计报告和项目模块清单，确定实施依赖链与方案模板。
+| 工作包 | 状态 | 关键产出 |
+|---|---|---|
+| P0-2 scope 隔离 | ✅ | 跨库 0 泄露 |
+| P0-3 缓存安全 | ✅ | 语义缓存失效安全 |
+| P0-4 拒答策略 | ✅ | 实时/外部问题拒答 |
+| P0-5 引用快照 | ✅ | citations 不可变 |
+| P0-6 Alembic 基线 | ✅ | 迁移体系 |
+| P0-7 chunk 身份 | ✅ | embedding cache 复用 |
+| P0-8 版本化入库 | ✅ | 影子索引+原子发布 |
+| P0-9 持久 job | ✅ c5be4c6 | job 表+worker+心跳/reaper/取消（315 绿） |
+| P0-11 DSH 接口 | ✅ 936165a | 契约+出处元数据+README（291 绿） |
 
-### Phase 2
-- **Status:** complete
-- 正在核验数据库、索引、任务队列、解析与评测技术选型的官方支持边界。
-- 已核验 Alembic、pgvector、Celery、PP-StructureV3 与 MinerU 官方能力；形成数据库、任务队列、向量层和复杂文档解析的初步主选。
-- 已补核 Docling、Ragas、OpenTelemetry 与 OWASP 文件上传建议，并对照当前 schema、requirements、前端 package 和 Docker 配置形成落差清单。
-- 已逐项映射现有 ORM、ParsedBlock/chunker、RAG/QA/verify/cache 和前端 SSE 状态，形成目标数据模型与 API 改造草案。
+## 未完成（按计划顺序）
 
-### Phase 3
-- **Status:** in_progress
-- 已确认工作包模板、目标 schema、API scope、解析/切片目标和测试落点，开始编写正式实施方案。
-- 已创建 `RAG-OPTIMIZATION-IMPLEMENTATION-PLAN.md`，完成使用说明、依赖图、目标技术栈、4 个准备工作包和 10 个 P0 具体工作包。
-- 已完成 11 个 P1 核心工作包：IR、解析器 bake-off、PDF/Office、可逆清洗、parent-child 切片、embedding profile、pgvector 迁移、hybrid retrieval、answer orchestration 与持续评测。
-- 已完成 10 个 P2 生产工程工作包和 8 个 P3 增强方向，覆盖 PostgreSQL、Celery、可观测、部署、备份、前端竞态/性能、安全与高阶功能。
-- 复核时发现增量写入导致章节顺序错位；已用原内容无损重排，当前顺序为 1–8、准备层、P0、P1、P2、P3。
-- 已补全目标 schema/迁移序列、现有文件改造地图、测试指标与 release gate、14 周路线、灰度回滚、PR 拆分、DoD 和首五个启动任务。
-- Phase 3/4 完成，进入最终内容与格式复核。
-- 已加入 0–17 批次的唯一执行顺序总表，明确同级工作包的真实依赖与退出条件。
+### P0-1 生产安全止血（进行中）
+- ✅ 单元1：APP_ENV production 校验（config.py model_validator，缺 secret/默认密码/空 key/DEBUG → 启动失败）+ 13 测试
+- ✅ 单元2：认证加固（access 短期 15min + refresh 轮换 + auth_sessions 表 + session_version 改密/禁用立即失效 + 前端 token 改内存 + 401 自动 refresh）+ 10 测试
+- ⬜ 单元3：全量回归 + 分支提交
 
-### Phase 5
-- **Status:** complete
-- 正式方案已完成最终结构与 UTF-8 检查：1720 个物理行、18 个二级章节、72 个三级章节、38 个成对代码围栏、无待补充占位或重复分隔线。
-- 方案文件：`RAG-OPTIMIZATION-IMPLEMENTATION-PLAN.md`（约 90.8KB）。
-- 未修改任何业务源码；本轮只新增方案和更新规划记录。
+### P0-10 上传隔离（P0-1 之后）
+- 上传只有文件大小限制，无 MIME/signature 校验、无 quarantine、无路径 resolve 检查
 
-## Files Created/Modified
-- `.planning/.active_plan`
-- `.planning/2026-08-16-rag-optimization-plan/task_plan.md`
-- `.planning/2026-08-16-rag-optimization-plan/findings.md`
-- `.planning/2026-08-16-rag-optimization-plan/progress.md`
+### P1 系列（P0 全部完成后）
+- P1-1 统一 DocumentElement IR（下一步核心重构）
+- P1-2 parser bake-off 离线实验
+- P1-3/4/5 PDF/Office 保真+安全清洗
+- P1-6/7 parent-child chunk + embedding profile
+- P1-8/9 pgvector 对照 + retrieval v2
+- P1-10/11 回答编排 + 引用校验
 
-## Errors
-- 无。
+## 用户约束
+- 只保存到 feature/rag-optimization 分支，main 保持 aa372b6 不动
+- 不 push 到远程
+- 每个单元完成等用户确认再进下一个

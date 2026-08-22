@@ -1,17 +1,15 @@
 import { useState } from 'react'
 import { App, Avatar, Dropdown, Form, Input, Modal, Space, Typography } from 'antd'
 import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
-import { useNavigate, Link } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { authApi } from '@/api/modules'
-import { useAuthStore } from '@/stores/auth'
+import { logoutAndRevoke, useAuthStore } from '@/stores/auth'
 import { errMsg } from '@/api/client'
 
 // 用户菜单：修改密码 / 知识库管理(admin) / 退出登录
 export default function UserMenu() {
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
-  const logout = useAuthStore((s) => s.logout)
-  const navigate = useNavigate()
   const { message } = App.useApp()
   const [pwdOpen, setPwdOpen] = useState(false)
   const [form] = Form.useForm()
@@ -58,8 +56,8 @@ export default function UserMenu() {
       danger: true,
       label: '退出登录',
       onClick: () => {
-        logout()
-        navigate('/login', { replace: true })
+        // P0-1：主动登出 → 吊销服务端 session（清 refresh cookie）+ 清本地内存态
+        void logoutAndRevoke()
       },
     },
   ].filter(Boolean)
