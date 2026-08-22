@@ -2,6 +2,8 @@
 
 - 命中缓存返回 (answer, citations) 或 None
 - 存储时控制容量（超限淘汰最旧），命中计数供答辩数据
+- 作用域键：user_id + kb_id + doc_scope + style（P0-3：按用户隔离，跨用户不重放他人答案）
+- TTL：超出 semantic_cache_ttl_seconds 的条目不命中，顺带清理过期（P0-3）
 - 重要：缓存必须在启动时和文档入库/删除后清空——否则旧检索产生的错误答案
   会因「相同问题向量命中」而重放，绕过新检索逻辑（曾导致修复后问答仍错误）。
 """
@@ -9,9 +11,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -55,6 +57,14 @@ def _subjects_match(a: str | None, b: str | None) -> bool:
     return a == b or a in b or b in a
 
 
+def _is_expired(row: SemanticCache) -> bool:
+    """TTL 过期判定：超过 semantic_cache_ttl_seconds 的条目不命中（0=永不过期）。"""
+    ttl = settings.semantic_cache_ttl_seconds
+    if ttl <= 0 or row.updated_at is None:
+        return False
+    return (_now() - row.updated_at) > timedelta(seconds=ttl)
+
+
 async def find(
     db: AsyncSession,
     query_vector: list[float],
@@ -62,11 +72,13 @@ async def find(
     kb_id: int | None = None,
     doc_scope: str | None = None,
     style: str | None = None,
+    user_id: int | None = None,
 ) -> tuple[str, list[dict]] | None:
     """在最近缓存池中找相似、主题一致且**检索作用域一致**的提问。命中返回 (answer, citations)。
 
-    作用域（kb_id + doc_scope + style）须与缓存条目完全一致：切库/切换点名文档/改回答风格后，
-    同一问题的向量余弦仍可能 > 阈值，但答案应不同，不得重放旧作用域的缓存。
+    作用域（user_id + kb_id + doc_scope + style）须与缓存条目完全一致：切库/切换点名文档/
+    改回答风格/换用户后，同一问题的向量余弦仍可能 > 阈值，但答案应不同，不得重放旧作用域的缓存。
+    超出 TTL 的旧条目不命中（防重灌后重放旧答案，P0-3）。
     """
     if not settings.semantic_cache_enabled:
         return None
@@ -75,7 +87,11 @@ async def find(
         .order_by(SemanticCache.updated_at.desc())
         .limit(settings.semantic_cache_pool)
     )
-    # 候选池按检索作用域过滤（SQL 层，避免别的库/文档/风格的缓存占满候选池）
+    # 候选池按检索作用域过滤（SQL 层，避免别的库/文档/风格/用户的缓存占满候选池）
+    if user_id is None:
+        stmt = stmt.where(SemanticCache.user_id.is_(None))
+    else:
+        stmt = stmt.where(SemanticCache.user_id == user_id)
     if kb_id is None:
         stmt = stmt.where(SemanticCache.kb_id.is_(None))
     else:
@@ -89,6 +105,7 @@ async def find(
     else:
         stmt = stmt.where(SemanticCache.style == style)
     rows = (await db.execute(stmt)).scalars().all()
+    rows = [r for r in rows if not _is_expired(r)]
     best: SemanticCache | None = None
     best_sim = 0.0
     for row in rows:
@@ -118,14 +135,28 @@ async def store(
     kb_id: int | None = None,
     doc_scope: str | None = None,
     style: str | None = None,
+    user_id: int | None = None,
 ) -> None:
-    """存储缓存条目（含主题词 + 检索作用域 + 回答风格）；容量超限按 kb 作用域淘汰最旧。"""
+    """存储缓存条目（含主题词 + 检索作用域 + 回答风格 + 用户）；容量超限按 (user,kb) 作用域淘汰最旧。
+
+    P0-3：缓存按用户隔离；写入前顺带清理同作用域过期条目。
+    """
     if not settings.semantic_cache_enabled or not answer:
         return
-    # 容量按 kb 作用域统计，避免单一库写满把其它库的缓存挤掉
+    # 容量按 (user, kb) 作用域统计，避免单一用户/库写满把其它缓存挤掉
     scope_filter = (
         SemanticCache.kb_id.is_(None) if kb_id is None else SemanticCache.kb_id == kb_id
     )
+    if user_id is None:
+        scope_filter = and_(scope_filter, SemanticCache.user_id.is_(None))
+    else:
+        scope_filter = and_(scope_filter, SemanticCache.user_id == user_id)
+    # 过期清理：同作用域超 TTL 的旧条目不占容量、不参与命中
+    if settings.semantic_cache_ttl_seconds > 0:
+        expire_before = _now() - timedelta(seconds=settings.semantic_cache_ttl_seconds)
+        await db.execute(
+            delete(SemanticCache).where(scope_filter, SemanticCache.updated_at < expire_before)
+        )
     total = (
         await db.scalar(select(func.count()).select_from(SemanticCache).where(scope_filter))
     ) or 0
@@ -148,6 +179,7 @@ async def store(
             kb_id=kb_id,
             doc_scope=doc_scope,
             style=style,
+            user_id=user_id,
             answer=answer,
             citations_json=json.dumps(citations, ensure_ascii=False),
         )

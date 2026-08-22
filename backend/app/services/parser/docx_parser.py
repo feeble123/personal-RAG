@@ -24,7 +24,7 @@ def _paragraph_heading_level(text: str, style_name: str | None) -> int | None:
 class DocxParser(DocumentParser):
     extensions = ("docx",)
 
-    def parse(self, path: Path, filename: str) -> ParsedDocument:
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
         doc = Document(str(path))
         blocks: list[ParsedBlock] = []
         section_stack: list[str] = []

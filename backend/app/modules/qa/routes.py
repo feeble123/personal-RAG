@@ -22,7 +22,7 @@ from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
-from app.db.models import Citation, Conversation, Message
+from app.db.models import Chunk, Citation, Conversation, Message
 from app.db.session import async_session_factory
 from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
@@ -48,6 +48,20 @@ def _now() -> datetime:
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _existing_chunk_ids(db, chunk_ids: list) -> set[int]:
+    """批量校验 chunk 是否仍存在（P0-5）。
+
+    重灌/删文档后，记忆（QaMemory）与语义缓存里存的旧 chunk_id 可能已指向已删行——
+    重放引用时若直接写非空 chunk_id 会外键违约。校验后只保留真实存在的，
+    缺失的置 NULL（快照字段 source/page/section/snippet/doc_id 仍可显示）。
+    """
+    ids = {int(x) for x in chunk_ids if x is not None}
+    if not ids:
+        return set()
+    found = (await db.scalars(select(Chunk.id).where(Chunk.id.in_(ids)))).all()
+    return set(found)
 
 
 def _chunk_answer(text: str, size: int = 50) -> list[str]:
@@ -137,7 +151,8 @@ async def chat(
                     prev_user_q = prev_rows[0][0]  # 全为追问时退化到最近一条
                 search_query = query_rewrite.rewrite_followup_query(body.content, prev_user_q)
                 # 2) 检索：问题点名《书名》/「XXX中」→ 限定只搜该文档（BUG-A）
-                doc_ids = await rag.resolve_documents_by_title(sdb, search_query)
+                # P0-2 scope 隔离：书名解析限定当前库（KB-A 点名 KB-B 同名文档 → 解析为空，不跨库）
+                doc_ids = await rag.resolve_documents_by_title(sdb, search_query, kb_id=body.kb_id)
                 # 缓存检索作用域（BUG-B）：选库 kb_id + 点名文档 doc_scope，命中须完全一致
                 doc_scope = ",".join(map(str, sorted(doc_ids))) if doc_ids else None
                 # 回答风格（单元 F）：会话指定 > 知识库默认；同题不同风格答案不同
@@ -178,11 +193,15 @@ async def chat(
                             )
                             ss.add(asst)
                             await ss.flush()
+                            # P0-5：重灌后记忆里的旧 chunk_id 可能已删，校验后缺失置 NULL（快照仍可显示）
+                            valid_ids = await _existing_chunk_ids(
+                                ss, [c.get("chunk_id") for c in mem.citations]
+                            )
                             for c in mem.citations:
                                 ss.add(
                                     Citation(
                                         message_id=asst.id,
-                                        chunk_id=c.get("chunk_id"),
+                                        chunk_id=c.get("chunk_id") if c.get("chunk_id") in valid_ids else None,
                                         kb_id=c.get("kb_id"),
                                         doc_id=c.get("doc_id"),
                                         source=c.get("source") or "",
@@ -225,7 +244,7 @@ async def chat(
                 # 核心原则：知识库有内容（partial/sufficient）就必须放行。
                 if evidence_level in ("none", "weak") and intent.is_real_time_query(body.content):
                     refusal = (
-                        "抱歉，这类问题需要实时或外部信息（如天气、时间、最新动态），"
+                        "抱歉，这类问题需要实时或外部信息（如天气、时间、最新动态、实时水位与水情等），"
                         "我目前不具备联网与实时数据获取能力。"
                         "我是水利工程知识库问答助手，可解答水利工程相关的规范条文、设计施工、防汛调度等专业问题。"
                     )
@@ -269,6 +288,7 @@ async def chat(
                         kb_id=body.kb_id,
                         doc_scope=doc_scope,
                         style=style,
+                        user_id=user.id,  # P0-3 缓存按用户隔离
                     )
                 if cached:
                     cached_answer, cached_cites = cached
@@ -289,11 +309,15 @@ async def chat(
                         )
                         ss.add(asst)
                         await ss.flush()
+                        # P0-5：重灌后缓存里的旧 chunk_id 可能已删，校验后缺失置 NULL（快照仍可显示）
+                        valid_ids = await _existing_chunk_ids(
+                            ss, [c.get("chunk_id") for c in cached_cites]
+                        )
                         for c in cached_cites:
                             ss.add(
                                 Citation(
                                     message_id=asst.id,
-                                    chunk_id=c.get("chunk_id"),
+                                    chunk_id=c.get("chunk_id") if c.get("chunk_id") in valid_ids else None,
                                     kb_id=c.get("kb_id"),
                                     doc_id=c.get("doc_id"),
                                     source=c.get("source") or "",
@@ -433,6 +457,7 @@ async def chat(
                             kb_id=body.kb_id,
                             doc_scope=doc_scope,
                             style=style,
+                            user_id=user.id,  # P0-3 缓存按用户隔离
                         )
                 except Exception:
                     logger.debug("语义缓存写入失败，忽略")

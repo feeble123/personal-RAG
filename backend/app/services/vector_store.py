@@ -88,6 +88,78 @@ def add_vectors(
     col.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
 
 
+# ---- P0-8 影子索引：先建 shadow → 核对 → 原子改名切换（失败旧 collection 原样可查）----
+_SHADOW_SUFFIX = "_shadow"
+
+
+def _shadow_name() -> str:
+    return f"{settings.chroma_collection}{_SHADOW_SUFFIX}"
+
+
+def _client_instance() -> chromadb.ClientAPI:
+    """确保 _client 初始化并返回。与 _get_collection 复用同一把 _lock 的初始化路径。
+
+    注意：不能在本函数里用 `with _lock` 包住 `_get_collection()`——后者自身也
+    `with _lock`，threading.Lock 非重入 → 同一线程二次 acquire 死锁（实测首次
+    build_shadow 卡死）。改为直接调 _get_collection() 完成初始化。
+    """
+    _get_collection()  # 初始化 _client + _collection
+    return _client
+
+
+def build_shadow(
+    ids: list[str],
+    embeddings: list[list[float]],
+    documents: list[str],
+    metadatas: list[dict[str, Any]],
+) -> int:
+    """建影子 collection 并写入全量向量，返回实际 count。
+
+    不碰 active collection——任何写入失败，active 原样保留可查。
+    """
+    client = _client_instance()
+    shadow = _shadow_name()
+    try:
+        client.delete_collection(shadow)
+    except Exception:  # 不存在时忽略
+        pass
+    try:
+        col = client.create_collection(name=shadow, configuration=_HNSW_CONFIG)
+    except TypeError:
+        col = client.create_collection(name=shadow)
+    col.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+    return col.count()
+
+
+def swap_shadow_to_active() -> None:
+    """原子切换：删 active → shadow 改名 active。
+
+    rename 失败窗口（删 live → 改名前）内查询可能空；失败则回退 reset_collection，
+    由调用方在 try/except 里做兜底重建（见 manager._rebuild_chroma）。
+    """
+    global _client, _collection
+    client = _client_instance()
+    shadow = _shadow_name()
+    name = settings.chroma_collection
+    try:
+        client.delete_collection(name)
+    except Exception:  # 不存在时忽略
+        pass
+    client.get_collection(shadow).modify(name=name)
+    _collection = client.get_collection(name)
+
+
+def drop_shadow() -> None:
+    """清理影子 collection（发布失败/中止时）。"""
+    global _client
+    client = _client_instance()
+    shadow = _shadow_name()
+    try:
+        client.delete_collection(shadow)
+    except Exception:  # 不存在时忽略
+        pass
+
+
 def upsert_vectors(
     ids: list[str],
     embeddings: list[list[float]],

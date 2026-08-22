@@ -109,6 +109,40 @@ async def test_upload_rejects_bad_extension(client, admin_headers, sample_kb):
     assert r.status_code == 400
 
 
+async def test_upload_chunk_strategy_recorded(client, admin_headers, sample_kb):
+    """上传时选择切片策略 → 落库 Document.chunk_strategy，列表可读；入库正常完成。"""
+    import asyncio
+
+    kb_id, _ = sample_kb
+    md = "# 测试切片策略\n\n## 章节\n\n内容内容内容内容内容内容\n\n"
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("s.md", md.encode("utf-8"), "text/markdown")},
+        data={"chunk_strategy": "new"},
+    )
+    assert r.status_code == 201
+    doc_id = r.json()["id"]
+    for _ in range(40):
+        r = await client.get(f"/api/admin/kbs/{kb_id}/documents", headers=admin_headers)
+        item = next(d for d in r.json()["items"] if d["id"] == doc_id)
+        if item["status"] in ("ready", "failed"):
+            break
+        await asyncio.sleep(0.2)
+    assert item["status"] == "ready"
+    assert item["chunk_strategy"] == "new"
+    # 默认（不传）→ old
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("o.md", md.encode("utf-8"), "text/markdown")},
+    )
+    doc_id2 = r.json()["id"]
+    r = await client.get(f"/api/admin/kbs/{kb_id}/documents", headers=admin_headers)
+    item2 = next(d for d in r.json()["items"] if d["id"] == doc_id2)
+    assert item2["chunk_strategy"] == "old"
+
+
 # ================= 会话 + 问答 =================
 async def test_conversation_isolation(client, user_headers, sample_kb):
     kb_id, _ = sample_kb
@@ -156,6 +190,66 @@ async def test_chat_sse_and_history(client, user_headers, sample_kb):
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     asst = msgs[-1]
     assert asst["citations"] and asst["is_complete"]
+
+
+async def _mk_md_kb(client, admin_headers, name, tag):
+    """建库 + 上传同名《防汛预案.md》(正文含 tag 专属内容) + 等入库完成。返回 (kb_id, doc_id)。"""
+    import asyncio
+    r = await client.post("/api/admin/kbs", headers=admin_headers, json={"name": name})
+    assert r.status_code == 201, r.text
+    kb_id = r.json()["id"]
+    sub = "".join(
+        f"### 5.{i} 保障{tag}{i}\n{tag}库第{i}项应急保障内容：明确组织与通信安排，确保有效实施。\n\n"
+        for i in range(1, 6)
+    )
+    md = f"# 防汛应急预案\n\n## 5 应急保障\n\n{tag}库应急保障总述：预案的核心章节，覆盖组织与资源。\n\n{sub}"
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("防汛预案.md", md.encode("utf-8"), "text/markdown")},
+    )
+    assert r.status_code in (200, 201), r.text
+    doc_id = r.json()["id"]
+    for _ in range(40):
+        r = await client.get(f"/api/admin/kbs/{kb_id}/documents", headers=admin_headers)
+        status = r.json()["items"][0]["status"]
+        if status in ("ready", "failed"):
+            break
+        await asyncio.sleep(0.2)
+    assert status == "ready", f"入库未完成: {status}"
+    return kb_id, doc_id
+
+
+async def test_retrieval_scope_isolated_between_kbs(client, admin_headers, user_headers):
+    """P0-2 scope 隔离：两库各有同名《防汛预案.md》，KB-A 内点名提问 → 引用只含 A 库。"""
+    kb_a, doc_a = await _mk_md_kb(client, admin_headers, "scope隔离库A", "A")
+    try:
+        kb_b, doc_b = await _mk_md_kb(client, admin_headers, "scope隔离库B", "B")
+        try:
+            r = await client.post("/api/conversations", headers=user_headers, json={})
+            conv_id = r.json()["id"]
+            events = []
+            async with client.stream(
+                "POST", f"/api/conversations/{conv_id}/chat",
+                headers=user_headers,
+                json={"content": "《防汛预案》中应急保障有哪些要求", "kb_id": kb_a},
+            ) as resp:
+                assert resp.status_code == 200
+                async for line in resp.aiter_lines():
+                    if line.startswith("data:"):
+                        events.append(json.loads(line[5:]))
+            cites = events[0]["data"] if events else []
+            assert cites, "应有引用"
+            # 引用全部来自 KB-A 的 doc_a，不含 KB-B 内容
+            assert all(c["kb_id"] == kb_a for c in cites)
+            assert all(c["doc_id"] == doc_a for c in cites)
+            joined = "".join(c.get("snippet", "") for c in cites)
+            assert "B库" not in joined, "跨库内容混入引用"
+            assert "A库" in joined
+        finally:
+            await client.delete(f"/api/admin/kbs/{kb_b}", headers=admin_headers)
+    finally:
+        await client.delete(f"/api/admin/kbs/{kb_a}", headers=admin_headers)
 
 
 async def test_semantic_cache(client, user_headers, sample_kb):
@@ -825,6 +919,29 @@ async def test_chat_evidence_none_real_time_refuses(client, user_headers, sample
     assert asst["evidence_level"] == "none"
 
 
+async def test_chat_water_level_query_refuses_without_evidence(client, user_headers, sample_kb, monkeypatch):
+    """P0-4：无证据的「今天这个水库的水位是多少」→ 拒答（不再拿设计值冒充实时水位）。"""
+    from app.services import rag as rag_mod
+
+    monkeypatch.setattr(rag_mod, "judge_evidence_level", lambda scores: "none")
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+    events = []
+    async with client.stream(
+        "POST", f"/api/conversations/{conv_id}/chat",
+        headers=user_headers, json={"content": "今天这个水库的水位是多少", "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if line.startswith("data:"):
+                events.append(json.loads(line[5:]))
+    assert events[0]["event"] == "citations" and events[0]["data"] == []  # 无引用
+    refusal = "".join(e.get("data", "") for e in events if e["event"] == "delta")
+    assert "实时" in refusal
+    assert events[-1]["data"]["evidence_level"] == "none"
+
+
 async def test_chat_evidence_none_greeting_allowed(client, user_headers, sample_kb, monkeypatch):
     """证据不足 + 问候/闲聊类 → 动态放行（不拒答），由 LLM 正常回答并落库 none 判级。"""
     from app.services import rag as rag_mod
@@ -1011,6 +1128,13 @@ def test_is_real_time_query():
     assert is_real_time_query("今天有什么新闻") is True
     assert is_real_time_query("最新消息") is True
     assert is_real_time_query("人民币兑美元汇率") is True
+    # 水情监控类（P0-4）：今日/当前水位、水情、雨量、闸门状态 → 实时
+    assert is_real_time_query("今天这个水库的水位是多少") is True
+    assert is_real_time_query("当前水库水位多少") is True
+    assert is_real_time_query("今日水情怎么样") is True
+    assert is_real_time_query("现在水库蓄水量是多少") is True
+    assert is_real_time_query("实时雨量情况") is True
+    assert is_real_time_query("当前闸门开度多少") is True
 
     # 领域/问候/概述/能力咨询 → False（放行）
     assert is_real_time_query("你好") is False
@@ -1018,6 +1142,11 @@ def test_is_real_time_query():
     assert is_real_time_query("介绍一下你的功能") is False
     assert is_real_time_query("明渠均匀流的形成条件是什么") is False
     assert is_real_time_query("水库汛期调度运用计划包含哪些内容") is False
-    assert is_real_time_query("今天这个水库的水位是多少") is False
     assert is_real_time_query("《水闸设计规范》大概在讲什么") is False
     assert is_real_time_query("请问你能为我做什么") is False
+    # 设计/特征水位（知识库可答）→ 不判实时（P0-4 防误伤）
+    assert is_real_time_query("水库正常蓄水位是多少") is False
+    assert is_real_time_query("设计洪水位怎么确定") is False
+    assert is_real_time_query("汛期限制水位是多少") is False
+    assert is_real_time_query("当前水库的正常蓄水位是多少") is False
+    assert is_real_time_query("死水位和兴利库容有什么区别") is False

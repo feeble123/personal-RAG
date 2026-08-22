@@ -1,7 +1,8 @@
 """全部 ORM 模型（SQLAlchemy 2.0，Mapped 声明式）。
 
-8 张表：users / conversations / messages / knowledge_bases / documents
-        / chunks / citations / embedding_cache
+12 张表：users / conversations / messages / knowledge_bases / documents
+        / document_versions / index_versions / chunks / citations
+        / embedding_cache / semantic_cache / qa_memory
 
 关系统一 lazy="selectin"，避免 async 会话序列化时 MissingGreenlet。
 """
@@ -131,8 +132,15 @@ class KnowledgeBase(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    # P0-8：当前可查询的索引版本指针（原子发布切点）；NULL 表示无索引。
+    # 普通 Integer 指针（无 FK）：版本随库 CASCADE 删除，单版本无独立 GC，指针永不悬空。
+    active_index_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     documents: Mapped[list["Document"]] = relationship(
+        back_populates="kb", cascade="all, delete-orphan", lazy="selectin"
+    )
+    # 索引版本随库级联删除；delete-orphan 配在"一"侧（IndexVersion.kb）
+    index_versions: Mapped[list["IndexVersion"]] = relationship(
         back_populates="kb", cascade="all, delete-orphan", lazy="selectin"
     )
 
@@ -155,12 +163,19 @@ class Document(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 解析质量指标（扫描判定/OCR/乱码率等），答辩数据
     quality: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # 切片策略（上传时选择，供策略 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
+    chunk_strategy: Mapped[str] = mapped_column(String(10), default="old", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # P0-8：当前可查询的文档版本指针（原子发布切点）；NULL 表示尚无可用版本。
+    # 普通 Integer 指针（无 FK）：版本随文档 CASCADE 删除，单版本无独立 GC，指针永不悬空。
+    active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     kb: Mapped[KnowledgeBase] = relationship(back_populates="documents")
-    chunks: Mapped[list["Chunk"]] = relationship(
-        back_populates="doc", cascade="all, delete-orphan", lazy="selectin"
+    # 删除文档时经 versions 级联删各版本的 chunks（delete-orphan 只在版本侧，避免多父冲突）
+    chunks: Mapped[list["Chunk"]] = relationship(back_populates="doc")
+    versions: Mapped[list["DocumentVersion"]] = relationship(
+        back_populates="document", cascade="all, delete-orphan", lazy="selectin"
     )
 
     __table_args__ = (Index("ix_documents_kb", "kb_id"),)
@@ -174,21 +189,86 @@ class Chunk(Base):
     doc_id: Mapped[int] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
     )
+    # P0-8：所属文档版本（active/retired 均在版本下并存）。同版本内切片序号唯一。
+    document_version_id: Mapped[int] = mapped_column(
+        ForeignKey("document_versions.id", ondelete="CASCADE"), index=True, nullable=False
+    )
     chunk_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     section: Mapped[str | None] = mapped_column(String(300), nullable=True)  # 章节路径
     page: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    content_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    # P0-7：content_hash 不再唯一——同内容跨文档保留独立 chunk（来源正确、互不牵连）；
+    # embedding 缓存仍按 content_hash 复用向量（见 EmbeddingCache）
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     doc: Mapped[Document] = relationship(back_populates="chunks")
+    version: Mapped["DocumentVersion"] = relationship(back_populates="chunks")
     # 该 chunk 被引用的记录
     citations: Mapped[list["Citation"]] = relationship(back_populates="chunk", lazy="selectin")
 
     __table_args__ = (
         Index("ix_chunks_doc", "doc_id"),
-        UniqueConstraint("content_hash", name="uq_chunks_hash"),
+        UniqueConstraint("document_version_id", "chunk_index", name="uq_chunks_ver_index"),
     )
     __mapper_args__ = {"confirm_deleted_rows": False}
+
+
+class DocumentVersion(Base):
+    """文档版本（P0-8 不可变版本）：每次解析/重灌产生一个 target 版本。
+
+    status: building（解析/embedding 中）→ validated（chunks 已写入）→ active（已发布可查）
+            → failed（失败，旧版不受影响）→ retired（被新版替换，保留可回滚）
+    """
+
+    __tablename__ = "document_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), default="building", nullable=False)
+    # 源文件 sha256（同一文件重灌可检测未变更，避免无意义发布）
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 解析/切片画像（答辩数据）：parser 名 + chunk_strategy + chunk 参数
+    parser_profile: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    chunk_profile: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    quality_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    document: Mapped[Document] = relationship(back_populates="versions")
+    chunks: Mapped[list["Chunk"]] = relationship(
+        back_populates="version", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class IndexVersion(Base):
+    """索引版本（P0-8 影子索引）：每次全量重建产生一个 target 索引。
+
+    当前单 collection 方案：physical_name 记录 Chroma collection 名（恒为 kb_chunks，
+    影子切换时改名）。status 语义同 DocumentVersion。expected_count 与 actual_count
+    核对一致后才允许发布（防止影子写入时静默丢向量）。
+    """
+
+    __tablename__ = "index_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_bases.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), default="building", nullable=False)
+    physical_name: Mapped[str] = mapped_column(String(100), default="kb_chunks", nullable=False)
+    expected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    actual_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    kb: Mapped[KnowledgeBase] = relationship(back_populates="index_versions")
 
 
 class Citation(Base):
@@ -198,7 +278,11 @@ class Citation(Base):
     message_id: Mapped[int] = mapped_column(
         ForeignKey("messages.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    chunk_id: Mapped[int] = mapped_column(ForeignKey("chunks.id", ondelete="CASCADE"), nullable=False)
+    # P0-5：引用不可变快照——chunk_id 可空 + SET NULL：重灌/删文档删除 chunk 时保留历史引用行，
+    # 快照字段（source/page/section/snippet + doc_id）仍可完整显示
+    chunk_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chunks.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     doc_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(255), default="", nullable=False)  # 冗余文件名
@@ -240,6 +324,8 @@ class SemanticCache(Base):
     #（如 "4" / "3,4" / NULL）。不同库/不同文档的同一问题答案不同，
     # 命中缓存必须作用域完全一致，否则切库后同问会重放旧库答案。
     kb_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # P0-3 用户作用域：缓存按用户隔离（避免跨用户重放他人答案）
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     doc_scope: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # 回答风格（单元 F）：同题不同风格答案不同，缓存命中须风格一致
     style: Mapped[str | None] = mapped_column(String(30), nullable=True)

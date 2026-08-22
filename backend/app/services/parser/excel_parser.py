@@ -14,7 +14,7 @@ def _row_to_line(cells: list[str]) -> str:
 class ExcelParser(DocumentParser):
     extensions = ("xlsx", "xls")
 
-    def parse(self, path: Path, filename: str) -> ParsedDocument:
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
         import pandas as pd  # 懒加载
 
         quality: dict = {"parser": "excel", "sheets": 0, "rows": 0}
@@ -42,7 +42,7 @@ class ExcelParser(DocumentParser):
 class CsvParser(DocumentParser):
     extensions = ("csv",)
 
-    def parse(self, path: Path, filename: str) -> ParsedDocument:
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
         quality: dict = {"parser": "csv", "rows": 0}
         blocks: list[ParsedBlock] = []
         section = filename

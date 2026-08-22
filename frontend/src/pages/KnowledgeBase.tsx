@@ -11,6 +11,7 @@ import {
   Modal,
   Popconfirm,
   Progress,
+  Radio,
   Select,
   Space,
   Table,
@@ -172,6 +173,8 @@ export default function KnowledgeBase() {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [activeKb, setActiveKb] = useState<number | null>(null)
+  // 切片策略（上传时选择，供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
+  const [chunkStrategy, setChunkStrategy] = useState<'old' | 'new'>('old')
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
   const [kbForm, setKbForm] = useState({ name: '', description: '', answer_style: 'standard' })
   const [detailDoc, setDetailDoc] = useState<DocumentItem | null>(null)
@@ -201,8 +204,8 @@ export default function KnowledgeBase() {
 
   // ---- 上传 ----
   const uploadMutation = useMutation({
-    mutationFn: ({ file, kbId }: { file: File; kbId: number }) =>
-      kbApi.upload(kbId, file, () => {}),
+    mutationFn: ({ file, kbId, strategy }: { file: File; kbId: number; strategy: string }) =>
+      kbApi.upload(kbId, file, strategy, () => {}),
     onSuccess: () => {
       message.success('上传成功，正在后台入库')
       queryClient.invalidateQueries({ queryKey: ['kb-docs'] })
@@ -294,6 +297,20 @@ export default function KnowledgeBase() {
       ),
     },
     { title: '类型', dataIndex: 'file_type', key: 'file_type', width: 80 },
+    {
+      title: '切片策略',
+      dataIndex: 'chunk_strategy',
+      key: 'chunk_strategy',
+      width: 100,
+      render: (v: string) =>
+        v === 'new' ? (
+          <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
+            目录+LLM
+          </Tag>
+        ) : (
+          <Tag style={{ marginInlineEnd: 0 }}>经典</Tag>
+        ),
+    },
     {
       title: '大小',
       dataIndex: 'file_size',
@@ -490,23 +507,49 @@ export default function KnowledgeBase() {
             title={activeKb ? kbs.find((k) => k.id === activeKb)?.name : '请选择知识库'}
             extra={
               activeKb ? (
-                <Upload
-                  accept={ACCEPT}
-                  showUploadList={false}
-                  multiple
-                  beforeUpload={(file) => {
-                    if (file.size > 200 * 1024 * 1024) {
-                      message.error('文件超过 200MB 限制')
-                      return Upload.LIST_IGNORE
+                <Space>
+                  <Tooltip
+                    overlayStyle={{ maxWidth: 380 }}
+                    title={
+                      <>
+                        <div>
+                          <b>经典切片</b>：按版面启发式（字号/编号）识别一、二级标题作切分边界，速度与成本低；适用于文本层清晰、排版规范的资料。
+                        </div>
+                        <div style={{ marginTop: 6 }}>
+                          <b>目录+LLM补全</b>：先解析文档目录建立权威章节骨架，正文识别缺失的一、二级标题用目录补全，并经 LLM 校验三至五级编号断号补全软边界；章节结构更完整，但每份文档多一次 LLM 判断；适用于扫描件、OCR 质量差或目录编号混乱的资料。
+                        </div>
+                      </>
                     }
-                    uploadMutation.mutate({ file, kbId: activeKb })
-                    return false
-                  }}
-                >
-                  <Button type="primary" icon={<UploadOutlined />} loading={uploadMutation.isPending}>
-                    上传文档
-                  </Button>
-                </Upload>
+                  >
+                    <Radio.Group
+                      size="small"
+                      value={chunkStrategy}
+                      onChange={(e) => setChunkStrategy(e.target.value)}
+                      optionType="button"
+                      buttonStyle="solid"
+                    >
+                      <Radio.Button value="old">经典切片</Radio.Button>
+                      <Radio.Button value="new">目录+LLM补全</Radio.Button>
+                    </Radio.Group>
+                  </Tooltip>
+                  <Upload
+                    accept={ACCEPT}
+                    showUploadList={false}
+                    multiple
+                    beforeUpload={(file) => {
+                      if (file.size > 200 * 1024 * 1024) {
+                        message.error('文件超过 200MB 限制')
+                        return Upload.LIST_IGNORE
+                      }
+                      uploadMutation.mutate({ file, kbId: activeKb, strategy: chunkStrategy })
+                      return false
+                    }}
+                  >
+                    <Button type="primary" icon={<UploadOutlined />} loading={uploadMutation.isPending}>
+                      上传文档
+                    </Button>
+                  </Upload>
+                </Space>
               ) : undefined
             }
           >

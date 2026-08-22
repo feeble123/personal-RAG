@@ -180,12 +180,14 @@ def _page_needs_ocr(page) -> bool:
 class PDFParser(DocumentParser):
     extensions = ("pdf",)
 
-    def parse(self, path: Path, filename: str) -> ParsedDocument:
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
         """分层解析：并行 OCR（扫描版多页提速）。
 
+        chunk_strategy：old=经典（目录页当正文，不做大纲）；new=识别目录页提取权威大纲。
         流程：分类页 → 渲染 OCR 页为 PNG（主线程，快）→ 线程池并行识别
               → 按页序组装 blocks（保持章节推进顺序）。
         """
+        detect_toc = chunk_strategy == "new"
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         doc = fitz.open(str(path))
@@ -228,17 +230,57 @@ class PDFParser(DocumentParser):
                         ocr_results[pn] = None
                     set_progress(path.name, done=len(ocr_results))
 
-        # 3) 按页序组装
+        # 3) 按页序组装；前 N 页检测目录页（目录内容单独成「目录」切片，供大纲补全与检索）
+        from app.services.parser.toc import (
+            TocInfo,
+            _parse_page_entries,
+            align_pages,
+            collect_toc_entries,
+            compute_offset,
+            continues_toc,
+            is_toc_page,
+        )
+
+        toc_pages: list[int] = []
+        toc_page_texts: dict[int, str] = {}
+        toc_source = "text"
+        toc_active = False  # 目录流：首目录页必须带「目录」关键词；续页（无关键词）紧跟其后且编号连续
+        last_toc_number: str | None = None  # 目录流上一页末条编号（续页连续性判定）
         for page_no in page_order:
             page = doc[page_no - 1]
-            if page_no in ocr_payloads:
+            in_ocr = page_no in ocr_payloads
+            if in_ocr:
                 quality["ocr_pages"] += 1
                 result = ocr_results.get(page_no)
                 conf = result.mean_confidence if result else 0.0
                 quality["ocr_confidence"] = quality.get("ocr_confidence", []) + [round(conf, 3)]
-                page_blocks = self._blocks_from_ocr(result, page_no, current_section)
+                page_text = result.text if result else ""
             else:
                 quality["text_pages"] += 1
+                page_text = page.get_text("text")
+
+            looks_toc = False
+            if detect_toc and page_no <= settings.toc_search_pages:
+                if not toc_active:
+                    looks_toc = is_toc_page(page_text)
+                else:
+                    # 续页：无关键词但需「编号连续性」接上上一目录页末条，防条文说明/前言清单页误判
+                    looks_toc = continues_toc(page_text, last_toc_number)
+            if looks_toc:
+                toc_pages.append(page_no)
+                toc_active = True
+                if in_ocr:
+                    toc_source = "ocr"
+                toc_page_texts[page_no] = page_text
+                entries_here = _parse_page_entries(page_text)
+                if entries_here:
+                    last_toc_number = entries_here[-1].number or last_toc_number
+                continue  # 目录页不进正文块流（内容单独成「目录」切片，只增不减）
+            toc_active = False  # 目录流结束
+
+            if in_ocr:
+                page_blocks = self._blocks_from_ocr(result, page_no, current_section)
+            else:
                 page_blocks, _ = self._parse_page_text(page, page_no, current_section)
 
             for b in page_blocks:
@@ -250,12 +292,35 @@ class PDFParser(DocumentParser):
                 blocks.append(b)
 
         quality["blocks"] = len(blocks)
+
+        # 4) 目录权威大纲（物理↔正文页码偏移按正文标题多数投票）
+        outline = None
+        if toc_pages and toc_page_texts:
+            entries = collect_toc_entries(toc_page_texts)
+            if entries:
+                offset = compute_offset(entries, blocks)
+                outline = TocInfo(entries=entries, toc_pages=sorted(toc_pages), offset=offset, source=toc_source)
+                align_pages(outline, offset)
+                quality.update(
+                    {
+                        "toc_pages": len(toc_pages),
+                        "toc_entries": len(entries),
+                        "toc_offset": offset,
+                        "outline_source": toc_source,
+                    }
+                )
         confs = quality.get("ocr_confidence") or []
         if confs:
             quality["mean_ocr_confidence"] = round(sum(confs) / len(confs), 3)
         doc.close()
         clear_progress(path.name)  # OCR 进度随解析完成清除（向量化阶段由状态列展示）
-        return ParsedDocument(blocks=blocks, page_count=page_count, quality=quality)
+        return ParsedDocument(
+            blocks=blocks,
+            page_count=page_count,
+            quality=quality,
+            outline=outline,
+            toc_texts=toc_page_texts,
+        )
 
     def _blocks_from_ocr(
         self, result: OCRResult | None, page_no: int, section: str | None
@@ -341,6 +406,16 @@ class PDFParser(DocumentParser):
                     continue  # 补不回 → 规范本身无此条（跳号），跳过
                 new_blocks = self._blocks_from_ocr(res, pno, section_hint)
                 if not new_blocks:
+                    continue
+                # 内容量守卫（只增不减）：重建版明显少于原版（OCR 漏行/表格化）时
+                # 不整页替换——宁保留原页也不丢已有内容；缺的条款留待下次尝试。
+                orig_chars = sum(_count_text_chars(b.text) for b in orig)
+                new_chars = sum(_count_text_chars(b.text) for b in new_blocks)
+                if orig_chars and new_chars < orig_chars * 0.8:
+                    logger.warning(
+                        "OCR 断号修复 page=%s 重建内容量下降 %.0f→%.0f 字，跳过整页替换（保留原页）",
+                        pno, orig_chars, new_chars,
+                    )
                     continue
                 rebuilt[pno] = new_blocks
                 changed = True

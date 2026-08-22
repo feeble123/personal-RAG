@@ -11,9 +11,12 @@ class ORMModel(BaseModel):
 
 
 class CitationOut(ORMModel):
-    """引用/证据回传结构：问答时前端据此渲染引用卡片。"""
+    """引用/证据回传结构：问答时前端据此渲染引用卡片。
 
-    chunk_id: int
+    P0-5：chunk_id 可空——重灌/删文档后历史引用的 chunk 已删，快照字段仍可显示。
+    """
+
+    chunk_id: int | None = None
     kb_id: int | None = None
     doc_id: int | None = None
     source: str

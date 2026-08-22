@@ -122,7 +122,7 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
         {!isUser && showCitations && msg.citations.length > 0 && (
           <Space wrap size={[6, 6]} style={{ marginTop: 6 }}>
             {msg.citations.map((c, i) => (
-              <CitationCard key={c.chunk_id} citation={c} index={i + 1} />
+              <CitationCard key={c.chunk_id ?? `cite-${i}`} citation={c} index={i + 1} />
             ))}
           </Space>
         )}

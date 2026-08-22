@@ -8,6 +8,8 @@ aiofiles>=23.2
 sqlalchemy[asyncio]>=2.0.30
 aiosqlite>=0.20
 greenlet>=3.0
+# P0-6：schema 迁移框架（替代启动时手写 ALTER）
+alembic>=1.13
 
 # ===== 配置 & 安全 =====
 pydantic>=2.7

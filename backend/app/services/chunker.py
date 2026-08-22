@@ -43,6 +43,40 @@ def _section_prefix(section: str | None) -> str:
     return f"## {section}\n"
 
 
+def _group_by_breaks(buffer: list[str], breaks: set[int], max_size: int) -> list[list[str]]:
+    """按软边界把 buffer 切成组，再贪心合并相邻组（合并后 ≤ max_size）。
+
+    软边界元素（软标题行）是**所在组的首元素**（软标题 + 其后内容同组），
+    避免标题孤儿化（标题在前一组末尾、内容却进了下一组）；相邻组可合并保持 chunk
+    粒度，超 max_size 的组交由 _emit 的 RecursiveCharacterTextSplitter 二次切（段落内不切断）。
+    """
+    groups: list[list[str]] = []
+    cur: list[str] = []
+    for idx, item in enumerate(buffer):
+        if idx in breaks and cur:
+            groups.append(cur)
+            cur = []
+        cur.append(item)
+    if cur:
+        groups.append(cur)
+    merged: list[list[str]] = []
+    acc: list[str] = []
+    acc_len = 0
+    for g in groups:
+        glen = sum(len(x) for x in g)
+        if acc and acc_len + glen <= max_size:
+            acc.extend(g)
+            acc_len += glen
+        else:
+            if acc:
+                merged.append(acc)
+            acc = list(g)
+            acc_len = glen
+    if acc:
+        merged.append(acc)
+    return merged
+
+
 class StructureAwareChunker:
     def __init__(
         self,
@@ -70,6 +104,10 @@ class StructureAwareChunker:
         chunks: list[Chunk] = []
         buffer: list[str] = []
         buffer_len = 0
+        buffer_page: int | None = None  # 当前 buffer 起始页（chunk 页号归属；页边界 flush 保证同页）
+        # 软边界（LLM 断号补全的 3/4/5 级标题）：buffer 中元素下标，超长 flush 时优先在此断。
+        # 不触发硬 flush、不更新章节栈 —— 保证「2.1.1—2.1.4 同块」按长度自适应切分。
+        breaks: set[int] = set()
         # 结构来源判定（预扫描）：
         # 有标题块 → markdown/docx 的标题块带「父路径 section」（# ## 层级 / Word Heading 样式）
         #           → 走解析器路径模式；PDF 的标题块永远无 section → 走编号栈模式。
@@ -88,14 +126,25 @@ class StructureAwareChunker:
         current_page: int | None = None
 
         def flush():
-            nonlocal buffer, buffer_len
+            nonlocal buffer, buffer_len, breaks, buffer_page
             if not buffer:
+                buffer_page = None
                 return
-            text = "\n".join(buffer).strip()
-            if text:
-                chunks.extend(self._emit(text, current_section, current_page))
+            if breaks:
+                # 有软边界：按断点分组 → 贪心合并相邻组（合并后 ≤ 单块阈值）→ 每组 emit。
+                # 软边界优先在此断，段落本身绝不切断；组内超长仍走 RecursiveCharacterTextSplitter。
+                for group in _group_by_breaks(buffer, breaks, self.chunk_size * 1.5):
+                    text = "\n".join(group).strip()
+                    if text:
+                        chunks.extend(self._emit(text, current_section, buffer_page))
+            else:
+                text = "\n".join(buffer).strip()
+                if text:
+                    chunks.extend(self._emit(text, current_section, buffer_page))
             buffer = []
             buffer_len = 0
+            breaks = set()
+            buffer_page = None
 
         for block in blocks:
             if block.block_type == "heading":
@@ -114,6 +163,25 @@ class StructureAwareChunker:
                 current_page = block.page
                 continue
 
+            if block.block_type == "soft_heading":
+                # 软边界（降级的非目录标题 / LLM 断号补全的 3/4/5 级标题）：
+                # **不强制断 chunk**——只有 1/2 级硬边界才单独切片（用户原则：
+                # 其余大纲+正文放进切片内容）。软标题记为 buffer 内断点，缓冲超长
+                # flush 时优先在此断（粒度靠长度切分，_group_by_breaks 相邻组可合并）。
+                # 不更新章节栈（前缀仍由 1/2 级硬边界决定，软标题不污染栈）。
+                page = block.page if block.page else current_page
+                current_page = page
+                if buffer and page != buffer_page:
+                    flush()  # 页边界仍强制断（chunk 页号准确）
+                breaks.add(len(buffer))  # 软标题作为该组首元素（防标题孤儿化）
+                if not buffer:
+                    buffer_page = page
+                buffer.append(block.text)
+                buffer_len += len(block.text)
+                if buffer_len >= self.chunk_size:
+                    flush()
+                continue
+
             # 非标题块：解析器路径模式采用 block.section（全路径）
             if parser_mode and block.section and block.section != current_section:
                 flush()
@@ -129,7 +197,11 @@ class StructureAwareChunker:
                 continue
 
             # 普通段落
+            if buffer and page != buffer_page:
+                flush()  # 页边界：内容不跨页合并，chunk 页号准确（第 27 页不再被吞进 28）
             current_page = page
+            if not buffer:
+                buffer_page = page
             buffer.append(block.text)
             buffer_len += len(block.text)
             if buffer_len >= self.chunk_size:
@@ -154,5 +226,53 @@ class StructureAwareChunker:
         return out
 
 
+def merge_tiny_chunks(chunks: list[Chunk], min_len: int = 40) -> list[Chunk]:
+    """把极小碎片 chunk（<min_len，公式符号行/表格行/条款清单等）并入**同 section** 的下一个 chunk。
+
+    减少碎片孤岛（用户：公式部分太碎）。仅同 section 才合并，避免跨节错标；
+    去前缀拼接，保持单一「## section」前缀。
+    """
+    if len(chunks) < 2:
+        return chunks
+
+    def _body(c: Chunk) -> str:
+        p = _section_prefix(c.section)
+        return c.content[len(p):] if p and c.content.startswith(p) else c.content
+
+    out: list[Chunk] = []
+    for c in chunks:
+        if out and len(out[-1].content) < min_len and out[-1].section == c.section:
+            prev = out.pop()
+            body = _body(prev) + "\n" + _body(c)
+            content = _section_prefix(c.section) + body if c.section else body
+            out.append(
+                Chunk(
+                    content=content,
+                    section=c.section,
+                    page=c.page or prev.page,
+                    content_hash=_hash(content),
+                )
+            )
+        else:
+            out.append(c)
+    return out
+
+
 def chunk_blocks(blocks: list[ParsedBlock]) -> list[Chunk]:
-    return StructureAwareChunker().chunk(blocks)
+    return merge_tiny_chunks(StructureAwareChunker().chunk(blocks))
+
+
+def chunk_toc_pages(toc_texts: dict[int, str]) -> list[Chunk]:
+    """目录页原文 → 「目录」独立切片（内容完整保留，结构独立于正文）。
+
+    只增不减：目录页文本不进正文块流（避免污染章节栈），但必须作为可检索的
+    「目录」切片进入知识库——「规范有哪些章节、各在第几页」类问题直接命中。
+    """
+    chunks: list[Chunk] = []
+    for pno in sorted(toc_texts):
+        text = (toc_texts[pno] or "").strip()
+        if not text:
+            continue
+        content = f"## 目录\n{text}"
+        chunks.append(Chunk(content=content, section="目录", page=pno, content_hash=_hash(content)))
+    return chunks

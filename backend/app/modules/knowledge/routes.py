@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Query, UploadFile
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from sqlalchemy import func, select
 
 from app.core.config import settings
@@ -95,10 +95,15 @@ async def upload_document(
     db: DbSession,
     _admin: AdminUser,
     file: UploadFile = File(...),
+    chunk_strategy: str = Form(settings.chunk_strategy_default),
 ) -> UploadResult:
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb:
         raise BizError("知识库不存在", 404, "KB_NOT_FOUND")
+
+    # 切片策略（供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全；非法值回退默认
+    if chunk_strategy not in ("old", "new"):
+        chunk_strategy = settings.chunk_strategy_default
 
     original = file.filename or "untitled"
     ext = Path(original).suffix.lower().lstrip(".")
@@ -135,6 +140,7 @@ async def upload_document(
         file_type=ext,
         file_size=size,
         status="pending",
+        chunk_strategy=chunk_strategy,
     )
     db.add(doc)
     await db.commit()
@@ -179,7 +185,10 @@ async def list_documents(
 
 @router.get("/documents/{doc_id}", response_model=DocumentOut)
 async def document_detail(doc_id: int, db: DbSession, _admin: AdminUser) -> Document:
-    doc = await db.get(Document, doc_id)
+    from sqlalchemy.orm import selectinload
+
+    # P0-8：selectinload 预加载 versions（详情页展示重灌历史）
+    doc = await db.get(Document, doc_id, options=[selectinload(Document.versions)])
     if not doc:
         raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
     return doc
@@ -195,9 +204,22 @@ async def delete_document(doc_id: int, db: DbSession, _admin: AdminUser) -> None
 
 @router.post("/documents/{doc_id}/reparse", response_model=DocumentOut)
 async def reparse_document(doc_id: int, db: DbSession, _admin: AdminUser) -> Document:
-    doc = await db.get(Document, doc_id)
+    from sqlalchemy.orm import selectinload
+
+    from app.db.models import DocumentVersion
+
+    doc = await db.get(Document, doc_id, options=[selectinload(Document.versions)])
     if not doc:
         raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
+    # P0-8 并发保护：同一文档只允许一个 building 版本（另一个重灌在进行中）
+    building = await db.scalar(
+        select(DocumentVersion).where(
+            DocumentVersion.document_id == doc_id,
+            DocumentVersion.status == "building",
+        )
+    )
+    if building:
+        raise BizError("该文档正在重新入库中，请稍后再试", 409, "REPARSE_IN_PROGRESS")
     doc.status = "pending"
     doc.error_message = None
     await db.commit()
@@ -216,7 +238,8 @@ async def search_preview(
     top_k: int = Query(5, ge=1, le=20),
 ) -> SearchResult:
     # 预览与问答一致：问题点名《书名》/「XXX中」时限定到该文档
-    doc_ids = await rag.resolve_documents_by_title(db, q)
+    # P0-2 scope 隔离：书名解析限定当前库
+    doc_ids = await rag.resolve_documents_by_title(db, q, kb_id=kb_id)
     hits = await rag.retrieve(db, q, kb_id=kb_id, doc_ids=doc_ids or None, top_k=top_k)
     return SearchResult(hits=[h.to_citation() for h in hits])
 
@@ -230,9 +253,19 @@ async def list_kb_chunks(
     page_size: int = Query(20, ge=1, le=100),
     doc_id: int | None = Query(None, description="按文档筛选切片"),
 ):
+    # P0-8 active 过滤：切片列表只显示当前可查版本（retired 不进列表，避免与已发布内容混淆）
     where = [Chunk.kb_id == kb_id]
     if doc_id is not None:
         where.append(Chunk.doc_id == doc_id)
+    active_ids = (
+        await db.scalars(
+            select(Document.active_version_id).where(
+                Document.kb_id == kb_id, Document.active_version_id.is_not(None)
+            )
+        )
+    ).all()
+    if active_ids:
+        where.append(Chunk.document_version_id.in_(active_ids))
     total = (await db.scalar(select(func.count()).select_from(Chunk).where(*where))) or 0
     rows = await db.execute(
         select(Chunk)

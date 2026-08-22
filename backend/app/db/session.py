@@ -77,91 +77,52 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    """建表（幂等）。"""
+    """建表（幂等）。仅用于开发/测试快速建表；生产 schema 变更走 Alembic（`alembic upgrade head`）。
+
+    create_all 只创建缺失的表、不补已有表的列——旧库升级请先 `alembic stamp head`（P0-6）。
+    原启动时手写 17 条 ALTER 已移除，职责移交 Alembic（见 alembic/versions/*）。
+    """
     from app.db import models  # noqa: F401  确保模型注册
     from app.db.base import Base
 
-    # SQLite 使用 NullPool 不适合；此处 engine 已有池。建表即可。
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # 轻量迁移：语义缓存新增 subject 列（create_all 不补已有表的列）
-        from sqlalchemy import text
-
-        cols = await conn.run_sync(
-            lambda sync_conn: [
-                row[1]
-                for row in sync_conn.execute(text("PRAGMA table_info(semantic_cache)")).fetchall()
-            ]
-        )
-        if cols and "subject" not in cols:
-            await conn.execute(text("ALTER TABLE semantic_cache ADD COLUMN subject VARCHAR(200)"))
-            logger.info("migration: semantic_cache.subject added")
-        # BUG-B：缓存按检索作用域（kb/doc）隔离，需补 kb_id / doc_scope 列
-        if cols and "kb_id" not in cols:
-            await conn.execute(text("ALTER TABLE semantic_cache ADD COLUMN kb_id INTEGER"))
-            logger.info("migration: semantic_cache.kb_id added")
-        if cols and "doc_scope" not in cols:
-            await conn.execute(text("ALTER TABLE semantic_cache ADD COLUMN doc_scope VARCHAR(100)"))
-            logger.info("migration: semantic_cache.doc_scope added")
-        # 单元 F：回答风格列（知识库 + 缓存）
-        if cols and "style" not in cols:
-            await conn.execute(text("ALTER TABLE semantic_cache ADD COLUMN style VARCHAR(30)"))
-            logger.info("migration: semantic_cache.style added")
-
-        kb_cols = await conn.run_sync(
-            lambda sync_conn: [
-                row[1]
-                for row in sync_conn.execute(text("PRAGMA table_info(knowledge_bases)")).fetchall()
-            ]
-        )
-        if kb_cols and "answer_style" not in kb_cols:
-            await conn.execute(text("ALTER TABLE knowledge_bases ADD COLUMN answer_style VARCHAR(30)"))
-            logger.info("migration: knowledge_bases.answer_style added")
-        # 回填：ALTER 加列不带默认值，历史行 answer_style=NULL → KBOut.answer_style:str
-        # 序列化 NULL 抛 ValidationError → 知识库列表接口全 500（用户实测「服务器内部错误」）。
-        # 幂等：无 NULL/空值行时为 no-op。
-        if kb_cols:
-            await conn.execute(
-                text(
-                    "UPDATE knowledge_bases "
-                    "SET answer_style='standard' "
-                    "WHERE answer_style IS NULL OR answer_style=''"
-                )
-            )
-            logger.info("migration: knowledge_bases.answer_style backfilled to 'standard'")
-
-        # 问答记忆库：messages 补反馈 + 来源标记 + 检索作用域列（create_all 不补已有表列）
-        msg_cols = await conn.run_sync(
-            lambda sync_conn: [
-                row[1]
-                for row in sync_conn.execute(text("PRAGMA table_info(messages)")).fetchall()
-            ]
-        )
-        if msg_cols:
-            if "feedback" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN feedback VARCHAR(10)"))
-            if "from_memory" not in msg_cols:
-                await conn.execute(
-                    text("ALTER TABLE messages ADD COLUMN from_memory BOOLEAN NOT NULL DEFAULT 0")
-                )
-            if "kb_id" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN kb_id INTEGER"))
-            if "doc_scope" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN doc_scope VARCHAR(100)"))
-            if "style" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN style VARCHAR(30)"))
-            # U3：证据等级判级列（sufficient/partial/weak/none + 依据分数）
-            if "evidence_level" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN evidence_level VARCHAR(20)"))
-            if "evidence_top_score" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN evidence_top_score FLOAT"))
-            # 层2：答案完备性校验结果列
-            if "answer_complete" not in msg_cols:
-                await conn.execute(text("ALTER TABLE messages ADD COLUMN answer_complete BOOLEAN"))
-            # LLM优化（opt-in）：标记用户点「🤖 LLM优化」产生的结果
-            if "is_optimized" not in msg_cols:
-                await conn.execute(
-                    text("ALTER TABLE messages ADD COLUMN is_optimized BOOLEAN NOT NULL DEFAULT 0")
-                )
-            logger.info("migration: messages feedback/from_memory/kb_id/doc_scope/style/evidence added")
     logger.info("Database tables ensured.")
+
+
+def ensure_db_at_head() -> None:
+    """启动时检查数据库迁移版本是否为 head（只检查不自动迁移，P0-6）。
+
+    未纳入 alembic 管理（无 alembic_version 表，如新库/尚未 stamp 的旧库）→ INFO 提示；
+    版本落后 → WARNING 提示运行 `alembic upgrade head`。失败静默（不阻塞启动）。
+    """
+    try:
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+        from alembic.script import ScriptDirectory
+
+        # session.py 位于 app/db/ → parents[2] 即 backend/，alembic/ 在 backend/ 下
+        alembic_dir = Path(__file__).resolve().parents[2] / "alembic"
+        cfg = Config()
+        cfg.set_main_option("script_location", str(alembic_dir))
+        script = ScriptDirectory.from_config(cfg)
+        head = script.get_current_head()
+
+        with engine.sync_engine.connect() as conn:
+            has_ver = conn.dialect.has_table(conn, "alembic_version")
+            if not has_ver:
+                logger.info(
+                    "数据库未纳入 Alembic 迁移管理（新库或尚未 stamp）；"
+                    "后续 schema 变更请先执行 alembic upgrade head"
+                )
+                return
+            ctx = MigrationContext.configure(conn)
+            current = ctx.get_current_revision()
+        if current != head:
+            logger.warning(
+                "数据库迁移版本 %s != head %s，请执行 alembic upgrade head", current, head
+            )
+        else:
+            logger.info("数据库迁移版本 = head（%s）", head)
+    except Exception:
+        logger.warning("数据库迁移版本检查失败（忽略，不阻塞启动）", exc_info=True)

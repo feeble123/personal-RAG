@@ -20,7 +20,7 @@ def _read_text(path: Path) -> str:
 class MarkdownParser(DocumentParser):
     extensions = ("md", "markdown")
 
-    def parse(self, path: Path, filename: str) -> ParsedDocument:
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
         content = _read_text(path)
         quality: dict = {"parser": "markdown", "headings": 0, "paragraphs": 0}
         blocks: list[ParsedBlock] = []
@@ -59,7 +59,7 @@ class MarkdownParser(DocumentParser):
 class TextParser(DocumentParser):
     extensions = ("txt",)
 
-    def parse(self, path: Path, filename: str) -> ParsedDocument:
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
         content = _read_text(path)
         quality: dict = {"parser": "text", "paragraphs": 0}
         blocks: list[ParsedBlock] = []

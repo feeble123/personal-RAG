@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     # ---- 分块 ----
     chunk_size: int = 512
     chunk_overlap: int = 50
+    # ---- 目录（TOC）权威大纲 + LLM 断号补全（切片保险）----
+    toc_search_pages: int = 20      # 只扫描 PDF 前 N 页找目录页
+    toc_min_entries: int = 3        # 目录页判定至少含的条目数
+    toc_min_offset_matches: int = 2 # 目录页码↔物理页偏移至少需匹配条数
+    gap_check_enabled: bool = True  # LLM 断号补全（每文档一次调用，失败自动降级）
+    # 上传默认切片策略：old=经典启发式（快/省token，适合高质量资料）
+    #                    new=目录+LLM断号补全（准，耗一次 LLM 调用，适合质量差的资料）
+    # 上传时可对单个文档选择覆盖；两种策略切片都存同一 chunks 表，可同库对比。
+    chunk_strategy_default: str = "old"
 
     # ---- Embedding（OpenAI 兼容，默认硅基流动免费 BGE-M3）----
     embedding_provider: str = "openai_compatible"
@@ -107,6 +116,8 @@ class Settings(BaseSettings):
     # 语义缓存检索池（最近 N 条做余弦比对）与容量上限（超限淘汰最旧）
     semantic_cache_pool: int = 200
     semantic_cache_max_entries: int = 500
+    # P0-3 语义缓存 TTL（秒）：超出即不命中并清理；0 = 永不过期
+    semantic_cache_ttl_seconds: int = 86400
     # 会话历史注入条数（多轮记忆）
     history_turns: int = 6
 

@@ -46,6 +46,8 @@ export interface DocumentItem {
   page_count: number | null
   chunk_count: number
   quality: Record<string, unknown> | null
+  // 切片策略（上传时选择，供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
+  chunk_strategy: string
   created_at: string
   parsed_at: string | null
   // 入库进度（解析中实时填充，如 OCR 页数）：{stage, done, total, percent}
@@ -92,7 +94,7 @@ export interface Message {
 }
 
 export interface Citation {
-  chunk_id: number
+  chunk_id: number | null  // P0-5：重灌/删文档后历史引用的 chunk 已删 → null（快照字段仍可显示）
   kb_id: number | null
   doc_id: number | null
   source: string

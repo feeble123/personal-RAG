@@ -25,6 +25,25 @@ from app.services.embedding import embed_query
 
 logger = logging.getLogger(__name__)
 
+
+async def _active_version_ids(
+    db: AsyncSession, kb_id: int | None = None, doc_ids: list[int] | None = None
+) -> set[int]:
+    """当前 active 的文档版本 id 集合（检索 DB 直接查询时过滤 retired 用）。
+
+    P0-8：DB 同时存 active + retired 版本的 chunks；向量/BM25 索引只含 active，
+    但**直接查 DB** 的路径（doc_chunk_ids 解析、章节/枚举扩展、整文档补全）必须
+    显式过滤 retired，否则会把不可查的旧版切片混进证据。
+    """
+    stmt = select(Document.active_version_id).where(Document.active_version_id.is_not(None))
+    if kb_id is not None:
+        stmt = stmt.where(Document.kb_id == kb_id)
+    if doc_ids:
+        stmt = stmt.where(Document.id.in_(doc_ids))
+    rows = (await db.execute(stmt)).all()
+    return {r[0] for r in rows}
+
+
 # 中文问句的提问词（用于提取 rerank 核心主题词）
 _QUESTION_PATTERN = re.compile(
     r"(.{2,30}?)(?:是什么|有哪些|有什么要求|有什么规定|有何要求|包括哪些|包含哪些|"
@@ -121,15 +140,22 @@ def _match_document(docs, cand: str):
     return best
 
 
-async def resolve_documents_by_title(db: AsyncSession, query: str) -> list[int]:
+async def resolve_documents_by_title(
+    db: AsyncSession, query: str, kb_id: int | None = None
+) -> list[int]:
     """从问题中提取书名/文档名（《…》或「XXX中」），匹配知识库文档，返回 doc_id 列表。
 
+    kb_id 非空时只匹配该库文档（P0-2 scope 隔离：KB-A 里点名 KB-B 的同名文档 → 返回空，
+    检索回退当前库，杜绝跨库污染）。kb_id=None（跨全部库模式）匹配全库。
     匹配不到（宽泛问法如「在数字孪生工程中…」、泛词如「标准中规定…」）返回空列表，
     检索回退跨库。支持多书名（对比两份规范 → 返回多个 doc_id）。
     """
     from app.db.models import Document
 
-    docs = (await db.scalars(select(Document))).all()
+    stmt = select(Document)
+    if kb_id is not None:
+        stmt = stmt.where(Document.kb_id == kb_id)
+    docs = (await db.scalars(stmt)).all()
     if not docs:
         return []
     result: list[int] = []
@@ -196,6 +222,7 @@ async def _expand_enumeration_sections(
     cand_sorted: list[tuple[int, float]],
     section_by_id: dict[int, str | None],
     top_k: int,
+    kb_id: int | None = None,
     candidates_full: dict[int, float] | None = None,
 ) -> list[tuple[int, float]] | None:
     """枚举/概述类问题的证据完备检索：纳入查询最可能指向的章节单元的**全部切片**。
@@ -211,6 +238,10 @@ async def _expand_enumeration_sections(
         return None
     if not _ENUMERATION_RE.search(query):
         return None
+    # P0-2 scope 隔离：扩展只在本库内拉取（kb_id=None 跨全部库时不过滤）
+    kb_cond = Chunk.kb_id == kb_id if kb_id is not None else None
+    # P0-8 active 过滤：DB 同时存 active+retired 版本，扩展只拉 active 版本切片
+    active_ids = await _active_version_ids(db, kb_id=kb_id)
     # 取候选集：优先完整 fused 候选集（覆盖更全），否则 top-K
     pool = candidates_full or dict(cand_sorted)
     ranked_pool = sorted(pool.items(), key=lambda x: x[1], reverse=True)[:200]
@@ -220,16 +251,20 @@ async def _expand_enumeration_sections(
     sec_map: dict[int, str | None] = dict(section_by_id)
     missing = [cid for cid, _ in ranked_pool if cid not in sec_map]
     if missing:
-        rows = (
-            await db.execute(select(Chunk.id, Chunk.section).where(Chunk.id.in_(missing)))
-        ).all()
+        stmt = select(Chunk.id, Chunk.section).where(Chunk.id.in_(missing))
+        if kb_cond is not None:
+            stmt = stmt.where(kb_cond)
+        if active_ids:
+            stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
+        rows = (await db.execute(stmt)).all()
         sec_map.update({cid: sec for cid, sec in rows})
-    # 全量章节-切片结构表（统计章节大小 + 拉取全量用）
-    all_chunks = (
-        await db.execute(
-            select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
-        )
-    ).all()
+    # 全量章节-切片结构表（统计章节大小 + 拉取全量用）；只含 active 版本
+    all_stmt = select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
+    if kb_cond is not None:
+        all_stmt = all_stmt.where(kb_cond)
+    if active_ids:
+        all_stmt = all_stmt.where(Chunk.document_version_id.in_(active_ids))
+    all_chunks = (await db.execute(all_stmt)).all()
     # 章节大小：库内直接切片数（排除嵌套附件）
     size_by_sec: dict[str, int] = {}
     for sec in {s for s in sec_map.values() if s}:
@@ -285,6 +320,7 @@ async def _expand_chapter_sections(
     cand_sorted: list[tuple[int, float]],
     section_by_id: dict[int, str | None],
     top_k: int,
+    kb_id: int | None = None,
 ) -> list[tuple[int, float]] | None:
     """综合型问题：主题词命中章节的多个子节时，把整章子节纳入最终引用。
 
@@ -294,7 +330,8 @@ async def _expand_chapter_sections(
     - 命中窄组件（「3.2 引用标准」）→ 只扩该组件，不扩大章节；
     - 命中子节数不足 top_k → 维持原 top_k。
     直接从 DB 取该组件下全部切片再 rerank 排序（不受 rerank 候选池限制，
-    跨库检索时也不会因候选被挤占而丢子节）。返回最多 15 条。
+    跨库检索时也不会因候选被挤占而丢子节）。P0-2 scope 隔离：只在本库内扩展。
+    返回最多 15 条。
     """
     if not cand_sorted:
         return None
@@ -304,11 +341,14 @@ async def _expand_chapter_sections(
     comp = _match_section_component(focus_rerank_query(query), section_by_id.get(top1))
     if not comp:
         return None
-    rows = (
-        await db.execute(
-            select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
-        )
-    ).all()
+    stmt = select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
+    if kb_id is not None:
+        stmt = stmt.where(Chunk.kb_id == kb_id)
+    # P0-8 active 过滤：扩展只拉 active 版本切片
+    active_ids = await _active_version_ids(db, kb_id=kb_id)
+    if active_ids:
+        stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
+    rows = (await db.execute(stmt)).all()
     members = [(c, d) for c, d in rows if _under_component(c.section, comp)]
     if len(members) < 4:
         return None  # 章节块太少（≤3）不扩展；≥4 则全部纳入，防 top_k 截断漏块（如名单章节 5 块只取 5 块=top_k 也会被旧守卫拦掉）
@@ -435,9 +475,15 @@ async def retrieve(
     doc_chunk_ids: set[int] = set()
     doc_kb_ids: set[int] = set()
     if doc_ids:
-        rows = (
-            await db.execute(select(Chunk.id, Chunk.kb_id).where(Chunk.doc_id.in_(doc_ids)))
-        ).all()
+        # P0-2 scope 隔离：点名文档也必须在当前库内（kb 非空时），杜绝 KB-B 文档混入
+        # P0-8 active 过滤：DB 同时存 active+retired 版本，只取 active 版本切片
+        active_ids = await _active_version_ids(db, kb_id=kb_id, doc_ids=doc_ids)
+        stmt = select(Chunk.id, Chunk.kb_id).where(Chunk.doc_id.in_(doc_ids))
+        if active_ids:
+            stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
+        if kb_id is not None:
+            stmt = stmt.where(Chunk.kb_id == kb_id)
+        rows = (await db.execute(stmt)).all()
         doc_chunk_ids = {cid for cid, _ in rows}
         doc_kb_ids = {kid for _, kid in rows}
         where = {"doc_id": doc_ids[0]} if len(doc_ids) == 1 else {"doc_id": {"$in": doc_ids}}
@@ -512,14 +558,27 @@ async def retrieve(
 
     # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再枚举扩展（枚举/清单类问题拉全量章节）
     ranked = cand_sorted[:top_k]
-    expanded = await _expand_chapter_sections(db, query, cand_sorted, section_by_id, top_k)
+    expanded = await _expand_chapter_sections(
+        db, query, cand_sorted, section_by_id, top_k, kb_id=kb_id
+    )
     if not expanded:
         expanded = await _expand_enumeration_sections(
-            db, query, cand_sorted, section_by_id, top_k, candidates_full=candidates
+            db, query, cand_sorted, section_by_id, top_k, kb_id=kb_id,
+            candidates_full=candidates,
         )
     if expanded:
         ranked = expanded
-    return await _hydrate(db, ranked, include_snippet)
+    hydrated = await _hydrate(db, ranked, include_snippet)
+    # P0-2 scope 不变量：kb 非空时所有引用必须属于该库（纵深防御，防未来扩展路径再漏）
+    if kb_id is not None:
+        leaked = [c for c in hydrated if c.kb_id != kb_id]
+        if leaked:
+            logger.error(
+                "scope 越界：检索返回其他库切片 kb=%s leaked_chunks=%s",
+                kb_id, [c.chunk_id for c in leaked],
+            )
+            hydrated = [c for c in hydrated if c.kb_id == kb_id]
+    return hydrated
 
 
 async def _hydrate(
@@ -586,13 +645,19 @@ async def retrieve_document_wide(
     if not cites:
         return []
     doc_id = cites[0].doc_id
-    rows = (
-        await db.execute(
-            select(Chunk, Document)
-            .join(Document, Chunk.doc_id == Document.id)
-            .where(Chunk.doc_id == doc_id)
-        )
-    ).all()
+    # P0-2 scope 隔离：整文档补全只取该文档**且属于当前库**的切片；
+    # kb_id 未指定时用命中文档自身所在库兜底（补全不跨库）。
+    doc_kb_id = cites[0].kb_id if kb_id is None else kb_id
+    # P0-8 active 过滤：只取 active 版本切片（retired 不可补全）
+    active_ids = await _active_version_ids(db, kb_id=doc_kb_id, doc_ids=[doc_id])
+    stmt = (
+        select(Chunk, Document)
+        .join(Document, Chunk.doc_id == Document.id)
+        .where(Chunk.doc_id == doc_id, Chunk.kb_id == doc_kb_id)
+    )
+    if active_ids:
+        stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
+    rows = (await db.execute(stmt)).all()
     items: list[RetrievedChunk] = []
     for chunk, doc in rows:
         if len(chunk.content.strip()) < settings.min_content_len:

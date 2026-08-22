@@ -28,6 +28,10 @@ class ParsedDocument:
     blocks: list[ParsedBlock] = field(default_factory=list)
     page_count: int = 0
     quality: dict[str, Any] = field(default_factory=dict)
+    # 目录（TOC）权威大纲：PDF 解析器填充（toc.TocInfo），其余解析器留 None
+    outline: Any = None
+    # 目录页原文（物理页 → 页文本）：PDF 新策略下单独成「目录」切片，内容永不丢弃
+    toc_texts: dict[int, str] = field(default_factory=dict)
 
 
 class DocumentParser(ABC):
@@ -37,6 +41,10 @@ class DocumentParser(ABC):
     extensions: tuple[str, ...] = ()
 
     @abstractmethod
-    def parse(self, path: Path, filename: str) -> ParsedDocument:  # noqa: ARG002
-        """解析文件为块序列。filename 用于判断真实类型（如 doc 旧格式）。"""
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:  # noqa: ARG002
+        """解析文件为块序列。filename 用于判断真实类型（如 doc 旧格式）。
+
+        chunk_strategy：切片策略（old=经典启发式 / new=目录+LLM断号补全）。
+        PDF 解析器据此决定是否启用目录页识别与大纲提取；其余解析器忽略。
+        """
         raise NotImplementedError

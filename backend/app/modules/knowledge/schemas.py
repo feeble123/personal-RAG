@@ -39,6 +39,19 @@ class KBOut(ORMModel):
         return v or "standard"
 
 
+class DocumentVersionOut(ORMModel):
+    """文档版本（P0-8）：展示重灌历史与当前 active，供答辩与审计。"""
+
+    id: int
+    status: str  # building / validated / active / failed / retired
+    chunk_count: int
+    source_hash: str | None
+    error_message: str | None
+    created_at: datetime
+    activated_at: datetime | None
+    retired_at: datetime | None
+
+
 class DocumentOut(ORMModel):
     id: int
     kb_id: int
@@ -50,8 +63,12 @@ class DocumentOut(ORMModel):
     page_count: int | None
     chunk_count: int
     quality: dict[str, Any] | None
+    # 切片策略（上传时选择）：old=经典启发式 / new=目录+LLM断号补全
+    chunk_strategy: str = "old"
     created_at: datetime
     parsed_at: datetime | None
+    # P0-8 版本历史（重灌审计）：最近若干版本
+    versions: list[DocumentVersionOut] = []
     # 入库进度（解析中实时填充，如 OCR 页数进度）：{stage, done, total, percent}
     progress: dict[str, Any] | None = None
 
