@@ -57,6 +57,14 @@ def _starts_with_chinese(s: str) -> bool:
     return bool(s) and "一" <= s[0] <= "龥"
 
 
+def _pdf_heading_level(block: ParsedBlock) -> int | None:
+    """PDF 标题块的层级（IR 用）：heading 块按编号模式估层级，非标题返回 None。"""
+    if block.block_type != "heading":
+        return None
+    lvl = heading_level(block.text)
+    return lvl if lvl >= 1 else None
+
+
 def _clean_text(raw: str) -> str:
     """清洗文本：压缩空白、去除孤立空行。"""
     lines = [ln.strip() for ln in raw.splitlines()]
@@ -314,12 +322,18 @@ class PDFParser(DocumentParser):
             quality["mean_ocr_confidence"] = round(sum(confs) / len(confs), 3)
         doc.close()
         clear_progress(path.name)  # OCR 进度随解析完成清除（向量化阶段由状态列展示）
+        # P1-1：blocks → IR elements（PDF 标题是推断的，标记 inferred_heading）
+        elements = [
+            b.to_element(i, "pdf", heading_level=_pdf_heading_level(b))
+            for i, b in enumerate(blocks)
+        ]
         return ParsedDocument(
             blocks=blocks,
             page_count=page_count,
             quality=quality,
             outline=outline,
             toc_texts=toc_page_texts,
+            elements=elements,
         )
 
     def _blocks_from_ocr(

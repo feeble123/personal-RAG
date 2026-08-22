@@ -30,8 +30,9 @@
 
 ### P1 系列（P0 全部完成后）
 - ✅ 计划已定：[p1-retrieval-quality.md](p1-retrieval-quality.md)（检索质量主线，用户确认裁剪决策）
-- ✅ 单元1：P1-11 评测门禁（gold 14 问 + scorers + run_eval CLI + retrieve 最小 trace；基线 R@5=71.4% R@10=78.6%，enumeration 意图偏弱 50% → P1-9 coverage plan 改进方向）
-- ⬜ 单元2：P1-1 DocumentElement IR 重构（核心地基）
+- ✅ 单元1：P1-11 评测门禁（gold 集 + scorers + run_eval CLI + retrieve 最小 trace；基线 + 水力学主料后 R@5=65% R@10=75%，enumeration 偏弱 37.5% → P1-9 coverage plan 改进方向）
+- ✅ 单元2：P1-1 DocumentElement IR 重构（ir.py + ir_validation.py + ParsedBlock.to_element adapter + 5 parser 产出 elements + snapshot 固定；381 绿）
+  - 📥 主测试料：《水力学 上 第5版》(OCR) 547页入库（库12，1445 chunks），以后评测/验证用它
 - ⬜ 单元3：P1-6 parent-child 切片（主线核心）
 - ⬜ 单元4：P1-7 embedding profile（向量指纹）
 - ⬜ 单元5：P1-9 检索校准流水线（主线核心）

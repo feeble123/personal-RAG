@@ -119,4 +119,47 @@ GOLD: list[dict] = [
         "intent": "general",
         "note": "规范正文",
     },
+    # ---- 水力学第5版（库12，OCR pdf，主测试料）----
+    {
+        "q": "静水压力是指什么？",
+        "kb": "水力学第5版",
+        "expect_keywords": ["静水压力"],
+        "intent": "general",
+        "note": "2 水静力学",
+    },
+    {
+        "q": "什么是局部水头损失？",
+        "kb": "水力学第5版",
+        "expect_keywords": ["局部水头损失"],
+        "intent": "general",
+        "note": "4 流动阻力与水头损失",
+    },
+    {
+        "q": "明渠流动的断面面积公式是什么？",
+        "kb": "水力学第5版",
+        "expect_keywords": ["断面", "m", "h"],
+        "intent": "general",
+        "note": "6 明渠流动",
+    },
+    {
+        "q": "有压管道按长管计算的依据是什么？",
+        "kb": "水力学第5版",
+        "expect_keywords": ["长管", "沿程水头损失"],
+        "intent": "general",
+        "note": "5 有压管道流动",
+    },
+    {
+        "q": "堰流的水头包括哪些？",
+        "kb": "水力学第5版",
+        "expect_keywords": ["堰顶", "水头"],
+        "intent": "enumeration",
+        "note": "7 堰流及闸孔出流",
+    },
+    {
+        "q": "水力学中水头损失分为哪几类？",
+        "kb": "水力学第5版",
+        "expect_keywords": ["沿程损失", "局部损失"],
+        "intent": "enumeration",
+        "note": "4 流动阻力与水头损失",
+    },
 ]

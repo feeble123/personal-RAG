@@ -36,7 +36,9 @@ class ExcelParser(DocumentParser):
                     quality["rows"] += 1
 
         quality["blocks"] = len(blocks)
-        return ParsedDocument(blocks=blocks, quality=quality)
+        # P1-1：blocks → IR elements（Excel 每行是 TABLE，无标题层级）
+        elements = [b.to_element(i, "excel") for i, b in enumerate(blocks)]
+        return ParsedDocument(blocks=blocks, quality=quality, elements=elements)
 
 
 class CsvParser(DocumentParser):
@@ -56,4 +58,6 @@ class CsvParser(DocumentParser):
                     quality["rows"] += 1
 
         quality["blocks"] = len(blocks)
-        return ParsedDocument(blocks=blocks, quality=quality)
+        # P1-1：CSV 同 Excel，每行是 TABLE
+        elements = [b.to_element(i, "csv") for i, b in enumerate(blocks)]
+        return ParsedDocument(blocks=blocks, quality=quality, elements=elements)

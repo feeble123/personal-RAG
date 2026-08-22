@@ -96,6 +96,18 @@ async def run_one(db, gold: dict, top_k: int = 10) -> dict:
 async def main(save_baseline: bool, compare: bool) -> int:
     logging.basicConfig(level=logging.WARNING)
     async with async_session_factory() as db:
+        # 评测前重建全部库 BM25 语料（BM25 是进程内内存索引，须显式预热才能可复现）
+        from app.services import bm25
+        from app.db.models import Chunk
+
+        rows = (await db.execute(select(Chunk.kb_id, Chunk.id, Chunk.content))).all()
+        grouped: dict[int, list[tuple[int, str]]] = {}
+        for kid, cid, content in rows:
+            grouped.setdefault(kid, []).append((cid, content))
+        for kid, items in grouped.items():
+            await asyncio.to_thread(bm25.rebuild, kid, items)
+        logger.info("评测前 BM25 已重建: %d 个库", len(grouped))
+
         results = []
         for gold in GOLD:
             r = await run_one(db, gold)

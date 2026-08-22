@@ -53,7 +53,22 @@ class MarkdownParser(DocumentParser):
                 )
 
         quality["blocks"] = len(blocks)
-        return ParsedDocument(blocks=blocks, quality=quality)
+        # P1-1：md 标题按编号估层级（blocks 未存 # 数量），正文无层级
+        elements = [
+            b.to_element(i, "markdown", heading_level=_text_heading_level(b))
+            for i, b in enumerate(blocks)
+        ]
+        return ParsedDocument(blocks=blocks, quality=quality, elements=elements)
+
+
+def _text_heading_level(block: ParsedBlock) -> int | None:
+    """md 标题块层级（IR 用）：用编号模式估（与 PDF/docx 一致）。"""
+    if block.block_type != "heading":
+        return None
+    from app.services.parser.headings import heading_level
+
+    lvl = heading_level(block.text)
+    return lvl if lvl >= 1 else None
 
 
 class TextParser(DocumentParser):
@@ -71,4 +86,5 @@ class TextParser(DocumentParser):
                 quality["paragraphs"] += 1
 
         quality["blocks"] = len(blocks)
-        return ParsedDocument(blocks=blocks, quality=quality)
+        elements = [b.to_element(i, "text") for i, b in enumerate(blocks)]
+        return ParsedDocument(blocks=blocks, quality=quality, elements=elements)

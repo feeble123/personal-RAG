@@ -1,0 +1,138 @@
+{
+  "parser": "markdown",
+  "element_count": 6,
+  "elements": [
+    {
+      "element_id": "markdown-0",
+      "type": "heading",
+      "text": "第一章 总则",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 0,
+      "heading_level": 1,
+      "section_path": [],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "markdown",
+        "parser_version": "1",
+        "block_index": 0
+      },
+      "flags": []
+    },
+    {
+      "element_id": "markdown-1",
+      "type": "paragraph",
+      "text": "本规范规定了水利工程的设计要求。",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 1,
+      "heading_level": null,
+      "section_path": [
+        "第一章 总则"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "markdown",
+        "parser_version": "1",
+        "block_index": 1
+      },
+      "flags": []
+    },
+    {
+      "element_id": "markdown-2",
+      "type": "heading",
+      "text": "1.1 基本规定",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 2,
+      "heading_level": 2,
+      "section_path": [
+        "第一章 总则"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "markdown",
+        "parser_version": "1",
+        "block_index": 2
+      },
+      "flags": []
+    },
+    {
+      "element_id": "markdown-3",
+      "type": "paragraph",
+      "text": "设计应符合国家现行标准。",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 3,
+      "heading_level": null,
+      "section_path": [
+        "第一章 总则",
+        "1.1 基本规定"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "markdown",
+        "parser_version": "1",
+        "block_index": 3
+      },
+      "flags": []
+    },
+    {
+      "element_id": "markdown-4",
+      "type": "heading",
+      "text": "1.2 术语",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 4,
+      "heading_level": 2,
+      "section_path": [
+        "第一章 总则"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "markdown",
+        "parser_version": "1",
+        "block_index": 4
+      },
+      "flags": []
+    },
+    {
+      "element_id": "markdown-5",
+      "type": "paragraph",
+      "text": "本规范采用下列术语。",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 5,
+      "heading_level": null,
+      "section_path": [
+        "第一章 总则",
+        "1.2 术语"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "markdown",
+        "parser_version": "1",
+        "block_index": 5
+      },
+      "flags": []
+    }
+  ]
+}

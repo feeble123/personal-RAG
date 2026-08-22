@@ -1,0 +1,72 @@
+{
+  "parser": "csv",
+  "element_count": 3,
+  "elements": [
+    {
+      "element_id": "csv-0",
+      "type": "table",
+      "text": "名称 | 数量",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 0,
+      "heading_level": null,
+      "section_path": [
+        "sample.csv"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "csv",
+        "parser_version": "1",
+        "block_index": 0
+      },
+      "flags": []
+    },
+    {
+      "element_id": "csv-1",
+      "type": "table",
+      "text": "甲 | 1",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 1,
+      "heading_level": null,
+      "section_path": [
+        "sample.csv"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "csv",
+        "parser_version": "1",
+        "block_index": 1
+      },
+      "flags": []
+    },
+    {
+      "element_id": "csv-2",
+      "type": "table",
+      "text": "乙 | 2",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 2,
+      "heading_level": null,
+      "section_path": [
+        "sample.csv"
+      ],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "csv",
+        "parser_version": "1",
+        "block_index": 2
+      },
+      "flags": []
+    }
+  ]
+}

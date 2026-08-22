@@ -33,3 +33,22 @@ def get_parser(filename: str) -> DocumentParser:
 
 def is_supported(filename: str) -> bool:
     return Path(filename).suffix.lower().lstrip(".") in _REGISTRY
+
+
+def parse_to_elements(
+    path: Path, filename: str, chunk_strategy: str = "old"
+) -> "list[object]":
+    """P1-1：解析文件并返回统一 IR（DocumentElement 列表）。
+
+    调 parser.parse 后取 `.elements`（各 parser 在 parse 末尾填充）。
+    若 parser 尚未产出 elements（旧版），回退为 blocks→elements 批量转换。
+    """
+    parser = get_parser(filename)
+    parsed = parser.parse(path, filename, chunk_strategy)
+    if parsed.elements:
+        return parsed.elements
+    # 旧路径回退：blocks → elements（标记 inferred_heading）
+    return [
+        b.to_element(i, parser.__class__.__name__.lower())
+        for i, b in enumerate(parsed.blocks)
+    ]

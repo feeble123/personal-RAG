@@ -1,0 +1,46 @@
+{
+  "parser": "text",
+  "element_count": 2,
+  "elements": [
+    {
+      "element_id": "text-0",
+      "type": "paragraph",
+      "text": "第一段文本内容。",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 0,
+      "heading_level": null,
+      "section_path": [],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "text",
+        "parser_version": "1",
+        "block_index": 0
+      },
+      "flags": []
+    },
+    {
+      "element_id": "text-1",
+      "type": "paragraph",
+      "text": "第二段文本内容。",
+      "page_start": null,
+      "page_end": null,
+      "bbox": null,
+      "reading_order": 1,
+      "heading_level": null,
+      "section_path": [],
+      "parent_id": null,
+      "table": null,
+      "confidence": null,
+      "source_ref": {
+        "parser": "text",
+        "parser_version": "1",
+        "block_index": 1
+      },
+      "flags": []
+    }
+  ]
+}

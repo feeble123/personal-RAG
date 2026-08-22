@@ -21,6 +21,16 @@ def _paragraph_heading_level(text: str, style_name: str | None) -> int | None:
     return None
 
 
+def _docx_heading_level(block: ParsedBlock) -> int | None:
+    """docx 标题块层级（IR 用）：blocks 未携带原始 style 层级，用编号模式估。"""
+    if block.block_type != "heading":
+        return None
+    from app.services.parser.headings import heading_level
+
+    lvl = heading_level(block.text)
+    return lvl if lvl >= 1 else None
+
+
 class DocxParser(DocumentParser):
     extensions = ("docx",)
 
@@ -85,4 +95,9 @@ class DocxParser(DocumentParser):
                     )
 
         quality["blocks"] = len(blocks)
-        return ParsedDocument(blocks=blocks, quality=quality)
+        # P1-1：blocks → IR elements（docx 无页面概念，page/bbox 为 None）
+        elements = [
+            b.to_element(i, "docx", heading_level=_docx_heading_level(b))
+            for i, b in enumerate(blocks)
+        ]
+        return ParsedDocument(blocks=blocks, quality=quality, elements=elements)
