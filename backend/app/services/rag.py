@@ -686,10 +686,20 @@ async def _hydrate(
         if not pair:
             continue
         chunk, doc = pair
-        # 过滤低信息量短块（封面/目录碎片，向量相似度虚高）
-        if len(chunk.content.strip()) < settings.min_content_len:
+        # 过滤低信息量短块（封面/目录碎片，向量相似度虚高）。
+        # P1-4：有父上下文的子块，用父块长度判断（父块够长即保留，内容短子块不误杀）。
+        effective_len = len(chunk.parent_context or chunk.content)
+        if effective_len < settings.min_content_len:
             continue
+        # P1-4：命中子块（有父上下文）且内容偏短 → 注入父块全文（LLM 看到完整小节）。
+        # 引用锚点仍是子块 chunk_id；父块本身是 block_type='parent' 不直接作为引用。
         snippet = chunk.content if include_snippet else chunk.content[:200]
+        if (
+            chunk.parent_context
+            and chunk.parent_chunk_id is not None
+            and len(chunk.content.strip()) < settings.min_content_len * 2
+        ):
+            snippet = chunk.parent_context if include_snippet else chunk.parent_context[:200]
         items.append(
             RetrievedChunk(
                 chunk_id=chunk.id,

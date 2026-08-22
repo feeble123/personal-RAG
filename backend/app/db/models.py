@@ -231,14 +231,25 @@ class Chunk(Base):
     block_type: Mapped[str | None] = mapped_column(String(10), nullable=True, default="text")
     clause_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
     formula_no: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # P1-4 parent-child：所属父块（检索命中子块时按意图注入父上下文）。
+    # parent_context 冗余存父块全文（免 join）；父块本身也是 Chunk 行（block_type='parent'）。
+    parent_chunk_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chunks.id", ondelete="SET NULL"), nullable=True
+    )
+    parent_context: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     doc: Mapped[Document] = relationship(back_populates="chunks")
     version: Mapped["DocumentVersion"] = relationship(back_populates="chunks")
     # 该 chunk 被引用的记录
     citations: Mapped[list["Citation"]] = relationship(back_populates="chunk", lazy="selectin")
+    parent_chunk: Mapped["Chunk | None"] = relationship(remote_side="Chunk.id", back_populates="child_chunks")
+    child_chunks: Mapped[list["Chunk"]] = relationship(
+        back_populates="parent_chunk", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_chunks_doc", "doc_id"),
+        Index("ix_chunks_parent", "parent_chunk_id"),
         UniqueConstraint("document_version_id", "chunk_index", name="uq_chunks_ver_index"),
     )
     __mapper_args__ = {"confirm_deleted_rows": False}

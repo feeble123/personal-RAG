@@ -640,12 +640,22 @@ async def _write_chunks(
 
     P0-8：**不再删旧 chunks**——新 chunks 全挂到 target 版本；发布成功前旧 active
     版本原样保留（故障时旧版可查）。embedding 缓存按 content_hash 复用（P0-7）。
+    P1-4：支持 ParentChildChunk——父块与子块同表，父块先插拿 id，子块回填 parent_chunk_id
+    + parent_context（父全文冗余）。旧 chunks（无 parent）走单遍插入，兼容。
     """
     async with _write_lock:
-        # 向量化（DB 缓存命中跳过 API 调用）。
+        # 检测是否 parent-child 模式
+        is_parent_child = any(getattr(c, "parent_content", None) for c in chunks)
+
+        # 向量化（DB 缓存命中跳过 API 调用）。父子都向量化。
+        # ParentChildChunk 用 child_hash/parent_hash；旧 Chunk 用 content_hash。
         hash_to_content: dict[str, str] = {}
         for c in chunks:
-            hash_to_content.setdefault(c.content_hash, c.content)
+            if is_parent_child:
+                hash_to_content.setdefault(c.child_hash, c.content)
+                hash_to_content.setdefault(c.parent_hash, c.parent_content)
+            else:
+                hash_to_content.setdefault(c.content_hash, c.content)
         cache = await load_cache_vectors(db, list(hash_to_content))
         missing_hashes = [h for h in hash_to_content if h not in cache]
         vec_map: dict[str, list[float]] = dict(cache)
@@ -655,9 +665,56 @@ async def _write_chunks(
                 vec_map[h] = v
             await store_cache_vectors(db, vec_map)
 
-        # DB 入库（拿自增 chunk id）——挂 target 版本，chunk_index = 原始切片序号
-        # P0-11 出处元数据：block_type（table/text）、clause_no（章节末尾条款号）、
-        # formula_no（内容里的公式编号，如 (7.4.3-1)）；拿不到就 None。
+        if is_parent_child:
+            # ---- 两遍插入：先父块（去重），再子块 ----
+            parent_rows: list[Chunk] = []
+            parent_by_hash: dict[str, Chunk] = {}
+            next_idx = 0
+            for c in chunks:
+                if c.parent_hash in parent_by_hash:
+                    continue  # 同父块去重
+                parent = Chunk(
+                    kb_id=doc.kb_id,
+                    doc_id=doc.id,
+                    document_version_id=target.id,
+                    chunk_index=next_idx,
+                    content=c.parent_content,
+                    section=c.section,
+                    page=c.page,
+                    content_hash=c.parent_hash,
+                    block_type="parent",
+                    clause_no=_extract_clause_no(c.section),
+                    formula_no=None,
+                )
+                db.add(parent)
+                parent_rows.append(parent)
+                parent_by_hash[c.parent_hash] = parent
+                next_idx += 1
+            await db.flush()  # 拿父块自增 id
+            for c in chunks:
+                parent = parent_by_hash[c.parent_hash]
+                child = Chunk(
+                    kb_id=doc.kb_id,
+                    doc_id=doc.id,
+                    document_version_id=target.id,
+                    chunk_index=next_idx,
+                    content=c.content,
+                    section=c.section,
+                    page=c.page,
+                    content_hash=c.child_hash,
+                    block_type=getattr(c, "block_type", "text") or "text",
+                    clause_no=_extract_clause_no(c.section),
+                    formula_no=_extract_formula_no(c.content),
+                    parent_chunk_id=parent.id,
+                    parent_context=c.parent_content,
+                )
+                db.add(child)
+                next_idx += 1
+            target.chunk_count = len(chunks)
+            await db.flush()
+            return
+
+        # ---- 单遍插入（无 parent 的旧 chunks）----
         for i, c in enumerate(chunks):
             db.add(
                 Chunk(
