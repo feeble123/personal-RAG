@@ -211,7 +211,7 @@ def _under_component(sec: str | None, comp: str) -> bool:
 
 # 枚举/概述类问题检测（跨库通用问句，不依赖知识库内容：台账/名单/章节等任何结构都适用）
 _ENUMERATION_RE = re.compile(
-    r"有哪些|包含哪些|包括哪些|都有哪些|哪几个|多少|所有|全部|完整|完整的|列出来|列出|"
+    r"有哪些|包含哪些|包括哪些|都有哪些|哪几个|哪几类|哪几级|哪几种|多少|所有|全部|完整|完整的|列出来|列出|"
     r"概述|介绍|一览|全貌|总结|汇总|清单|一览表|都要|都有|还有|其他|其余|别的"
 )
 
@@ -265,38 +265,50 @@ async def _expand_enumeration_sections(
     if active_ids:
         all_stmt = all_stmt.where(Chunk.document_version_id.in_(active_ids))
     all_chunks = (await db.execute(all_stmt)).all()
-    # 章节大小：库内直接切片数（排除嵌套附件）
+    # 章节单元：按「章前缀」（section 首段）聚合——OCR 噪声子节分散不影响判定。
+    # 例：`4 流动阻力与水头损失 / 将J=气代入上式` → `4 流动阻力与水头损失`。
+    def _chapter_of(sec: str) -> str:
+        parts = [p.strip() for p in sec.split("/") if p.strip()]
+        return parts[0] if parts else sec
+
     size_by_sec: dict[str, int] = {}
+    chapter_sizes: dict[str, int] = {}
+    for c, _ in all_chunks:
+        if not c.section:
+            continue
+        ch = _chapter_of(c.section)
+        chapter_sizes[ch] = chapter_sizes.get(ch, 0) + 1
+    # 候选归属的章节，取其章前缀的大小（容忍子节分散）
     for sec in {s for s in sec_map.values() if s}:
-        comp = sec.split("/")[-1].strip()
-        size_by_sec[sec] = sum(
-            1
-            for c, _ in all_chunks
-            if c.section
-            and (c.section == sec or c.section.startswith(sec + " /"))
-            and _under_component(c.section, comp)
-        )
-    # 章节相关性 = 该章节候选分数之和：枚举题的答案在「分数广泛分布」的数据章节
-    # （37 块方案数据表每块都有一定相关分 → 和最高；表头章节只有几块 → 和低）。
-    # 不只看 top-K 少数块（表头可能恰好排前），避免选错章节。
-    score_by_sec: dict[str, float] = {}
-    for cid, sc in ranked_pool:
+        size_by_sec[sec] = chapter_sizes.get(_chapter_of(sec), 0)
+    # P1-9 章节相关性：RRF 融合后分数尺度接近（1/(60+rank)），分数之和选章节会失真。
+    # 改为「候选归属章节出现次数 + 该章节块数（容忍噪声聚合）」投票。
+    # - 投票用「前 2 段」聚合（容 OCR 噪声子节分散）
+    # - 但候选多出现在精确子节时，聚合到章级会丢「附录1 专家名单」这类 2 段独立单元
+    #   权衡：投票键取「前 2 段」，若该单元块太少（噪声碎片），回退到首段章
+    vote_by_sec: dict[str, int] = {}
+    for cid, _sc in ranked_pool:
         sec = sec_map.get(cid)
-        if sec:
-            score_by_sec[sec] = score_by_sec.get(sec, 0.0) + max(0.0, sc)
-    if not score_by_sec:
+        if not sec:
+            continue
+        unit = _chapter_of(sec)  # 前 2 段
+        # 该单元块太少（噪声碎片）→ 回退首段（章）
+        if chapter_sizes.get(unit, 0) < 4 and "/" in unit:
+            unit = unit.split("/")[0].strip()
+        vote_by_sec[unit] = vote_by_sec.get(unit, 0) + 1
+    if not vote_by_sec:
         return None
-    # 选「分数和最高」的章节；平局取块数多者
-    best_sec = max(score_by_sec, key=lambda s: (score_by_sec[s], size_by_sec.get(s, 0)))
-    if size_by_sec.get(best_sec, 0) < 4:
-        return None  # 章节块太少（≤3）不扩展，top_k 已覆盖
-    comp = best_sec.split("/")[-1].strip()
+    # 选「出现次数最高」的单元；平局取块数多者
+    best_unit = max(vote_by_sec, key=lambda s: (vote_by_sec[s], chapter_sizes.get(s, 0)))
+    if chapter_sizes.get(best_unit, 0) < 4:
+        logger.debug("枚举扩展：单元 %s 块数 %s < 4，不扩展", best_unit, chapter_sizes.get(best_unit, 0))
+        return None  # 单元块太少（≤3）不扩展，top_k 已覆盖
+    # 拉取该单元下全部切片（含子节）。枚举扩展要全量列表（含「附件N」子节），
+    # 不用 `_under_component` 排除附件（那是章节扩展的防混入逻辑，枚举需完整）。
     members = [
         (c, d)
         for c, d in all_chunks
-        if c.section
-        and (c.section == best_sec or c.section.startswith(best_sec + " /"))
-        and _under_component(c.section, comp)
+        if c.section and _chapter_of(c.section) == best_unit
     ]
     members = members[: settings.complete_expansion_cap * 2]
     ids = [c.id for c, _ in members]
@@ -576,11 +588,18 @@ async def retrieve(
             if return_trace:
                 trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).vector_score = candidates[cid]
 
-    # 4) 加权融合（clamp 到 0~1）
-    for cid, sim_v in list(candidates.items()):
-        candidates[cid] = max(0.0, 0.7 * sim_v + 0.3 * bm25_norm.get(cid, 0.0))
-        if return_trace:
-            trace_cands[cid].fusion_score = candidates[cid]
+    # 4) P1-9 RRF 融合（替代 0.7v+0.3bm25 线性加权——两分数不同标度，线性会失真）。
+    #    向量命中按 score 降序；BM25 按库内归一化分降序。
+    from app.services.retrieval.fusion import rrf_fuse
+
+    vec_sorted = sorted(candidates.items(), key=lambda x: x[1], reverse=True)
+    bm25_sorted = sorted(bm25_norm.items(), key=lambda x: x[1], reverse=True)
+    fused = rrf_fuse(vec_sorted, bm25_sorted)
+    # 候选池 = 融合结果（含 BM25 独有补召回）；保留向量分用于后续余弦对照
+    candidates = fused
+    if return_trace:
+        for cid, fs in fused.items():
+            trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).fusion_score = fs
 
     # 5) 送入 reranker 重排（cross-encoder，纠正向量对部分查询的区分度不足）
     cand_sorted = sorted(candidates.items(), key=lambda x: x[1], reverse=True)[
@@ -601,6 +620,21 @@ async def retrieve(
         ).all()
         content_by_id = {c.id: c.content for c, _ in rows}
         section_by_id = {c.id: c.section for c, _ in rows}
+        # P1-9：min_content_len 提前到候选池阶段过滤（短块不参与 rerank/扩展），
+        # 被过滤的从候选池回补 top_k（防 final hydrate 缩水）。
+        cand_sorted = [
+            (cid, sc) for cid, sc in cand_sorted
+            if len((content_by_id.get(cid) or "").strip()) >= settings.min_content_len
+        ]
+        if len(cand_sorted) < settings.top_k_final:
+            # 回补：从原候选池按融合分补足 top_k_final
+            for cid, sc in sorted(candidates.items(), key=lambda x: x[1], reverse=True):
+                if len(cand_sorted) >= settings.top_k_final:
+                    break
+                if cid not in {c for c, _ in cand_sorted} and cid not in content_by_id:
+                    # 未加载内容的候选也保留（防全滤空）
+                    cand_sorted.append((cid, sc))
+        ids = [cid for cid, _ in cand_sorted]
         docs = [content_by_id.get(cid, "") for cid in ids]
         if settings.rerank_enabled:
             try:

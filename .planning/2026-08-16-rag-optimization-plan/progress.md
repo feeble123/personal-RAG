@@ -35,7 +35,8 @@
   - 📥 主测试料：《水力学 上 第5版》(OCR) 547页入库（库12，1445 chunks），以后评测/验证用它
 - ✅ 单元3：P1-7 embedding profile 指纹（EmbeddingProfile + fingerprint + EmbeddingCache 复合主键迁移 + 维度写入守卫；387 绿）
 - ✅ 单元4：P1-6 parent-child 切片（ParentChildChunk + chunking/parent_child.py + 两遍插入父子同表 + 检索短子块注入父上下文 + 迁移 f9a0b1c2d3e4；392 绿）
-- ⬜ 单元5：P1-9 检索校准流水线（主线核心）
+- ✅ 单元5：P1-9 检索校准流水线（RRF 融合替代线性加权 + min_content_len 提前过滤回补 + 枚举扩展章前缀聚合/附件N不排除/哪几类正则；**评测 R@5 65%→85%、R@10 75%→90% 达 release gate**；392 绿）
+- ⬜ 单元6：P1-3/4/5 最小集 + 收尾提交
 - ⬜ 单元4：P1-7 embedding profile（向量指纹）
 - ⬜ 单元5：P1-9 检索校准流水线（主线核心）
 - ⬜ 单元6：P1-3/4/5 最小集 + 收尾提交
