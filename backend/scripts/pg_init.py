@@ -25,7 +25,35 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s | %(messa
 logger = logging.getLogger("pg_init")
 
 
-async def _init_pg() -> None:
+async def _create_all(url: str) -> None:
+    """create_all：方言原生 DDL，一次建出与 ORM 完全一致的完整 schema。"""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app.db import models  # noqa: F401  确保所有模型注册到 Base.metadata
+    from app.db.base import Base
+
+    engine = create_async_engine(url, pool_pre_ping=True)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("create_all 完成：PostgreSQL schema 已建")
+    finally:
+        await engine.dispose()
+
+
+def _stamp_head(url: str) -> None:
+    """alembic stamp head：标记已到最新版本（在 event loop 外调用，避免嵌套 asyncio.run）。"""
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config(str(BASE_DIR / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BASE_DIR / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", url)
+    command.stamp(cfg, "head")
+    logger.info("alembic stamp head 完成：迁移版本标记到最新")
+
+
+def main() -> None:
     from app.core.config import settings
 
     url = settings.database_url
@@ -38,38 +66,14 @@ async def _init_pg() -> None:
         )
         sys.exit(1)
 
-    from sqlalchemy.ext.asyncio import create_async_engine
-
-    from app.db import models  # noqa: F401  确保所有模型注册到 Base.metadata
-    from app.db.base import Base
-
-    engine = create_async_engine(url, pool_pre_ping=True)
-    try:
-        # 1) create_all：方言原生 DDL，一次建出与 ORM 完全一致的完整 schema
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("create_all 完成：PostgreSQL schema 已建")
-
-        # 2) alembic stamp head：标记已到最新版本，未来新迁移照常 upgrade head
-        from alembic import command
-        from alembic.config import Config
-
-        cfg = Config(str(BASE_DIR / "alembic.ini"))
-        cfg.set_main_option("script_location", str(BASE_DIR / "alembic"))
-        cfg.set_main_option("sqlalchemy.url", url)
-        command.stamp(cfg, "head")
-        logger.info("alembic stamp head 完成：迁移版本标记到最新")
-    finally:
-        await engine.dispose()
+    asyncio.run(_create_all(url))
+    # 退出 event loop 后再 stamp（alembic async env 会用 asyncio.run，嵌套会冲突）
+    _stamp_head(url)
 
     logger.info("PG 初始化完成。下一步：")
     logger.info("  1) python -m alembic current   # 应显示 head（f9a0b1c2d3e4 或更新）")
     logger.info("  2) 启动应用后 curl /api/health 看 checks.db=ok")
     logger.info("  3) 迁移真实数据：scripts/migrate_sqlite_to_pg.py（P2 单元4）")
-
-
-def main() -> None:
-    asyncio.run(_init_pg())
 
 
 if __name__ == "__main__":

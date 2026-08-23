@@ -14,6 +14,8 @@ alembic>=1.13
 asyncpg>=0.29
 # P2 单元3：Prometheus 指标端点（/metrics，Grafana 拉取）
 prometheus-client>=0.20
+# P2 单元4：SQLite→PG 数据迁移脚本用（scripts/migrate_sqlite_to_pg.py 同步引擎）
+psycopg2-binary>=2.9
 
 # ===== 配置 & 安全 =====
 pydantic>=2.7

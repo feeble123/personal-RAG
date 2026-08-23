@@ -32,15 +32,15 @@ class TestPgGuard:
 
 
 class TestPgInitScript:
-    async def test_pg_init_rejects_non_pg_url(self, caplog):
+    def test_pg_init_rejects_non_pg_url(self, caplog):
         """连接串不是 postgresql → 拒绝执行（防误跑对 SQLite 库 create_all）。
 
-        conftest 已把 DATABASE_URL 设为 sqlite 临时库，_init_pg 应在建引擎前退出。
+        conftest 已把 DATABASE_URL 设为 sqlite 临时库，main() 应在建引擎前退出。
         """
         import scripts.pg_init as pg_init
 
         with pytest.raises(SystemExit) as exc:
-            await pg_init._init_pg()
+            pg_init.main()
         assert exc.value.code == 1
         assert any("不是 PostgreSQL 连接串" in r.getMessage() for r in caplog.records)
 
