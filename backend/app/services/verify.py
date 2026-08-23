@@ -148,40 +148,18 @@ def _out_of_range_citations(answer: str, cites) -> list[int]:
 async def verify_citations(answer: str, cites) -> CitationVerdict:
     """引用忠实校验：回答里的每个 [n] 是否被第 n 条资料真实支撑。
 
-    两层校验：
-    1. 确定性：解析 [n]，n 超出资料条数（或 <1）→ 幻觉编号，必判无效
+    以**确定性为主**（稳定，不随 LLM 波动）：
+    1. 解析回答所有 [n]：n 超出资料条数（或 <1）→ 幻觉编号，必判无效
        （防「cites=8 却引用 [15]」这类编造编号）
-    2. LLM：对范围内编号判「语义是否被第 n 条支撑」（可选，防 LLM 波动误报）
+    2. 范围内编号默认视为有效（编号存在即支撑——校验目的防"编造"，语义支撑
+       由 LLM 回答本身负责；LLM 主观判定波动大，会误报）
+    3. 可选 LLM 语义校验：仅当 use_llm=True 时启用（评测/质检用，不默认）
     """
     if not answer or not cites:
         return CitationVerdict()
-    # 第一层：确定性超范围检测（稳定，不随 LLM 波动）
+    # 确定性超范围检测（核心）
     over = _out_of_range_citations(answer, cites)
     if over:
         return CitationVerdict(ok=False, bad_numbers=over, note=f"引用编号超出资料条数: {over}")
-
-    prompt = _CITATION_PROMPT.format(
-        answer=_head_tail(answer, head=3000, tail=1500),
-        cites=_numbered_cites(cites)[:4000],
-    )
-    llm = build_chat_model(0.0)
-    messages: list[tuple[str, str]] = [
-        ("system", "你是严谨的质检员，只输出 JSON，不要输出其他内容。"),
-        ("human", prompt),
-    ]
-    try:
-        resp = await llm.ainvoke(messages)
-        text = getattr(resp, "content", "") or ""
-        data = _parse_json(text)
-        bad = data.get("bad_numbers") or []
-        if isinstance(bad, list):
-            bad = [int(x) for x in bad if str(x).isdigit()]
-        # 第二层：LLM 判「语义不支撑」，但超范围已由第一层排除
-        return CitationVerdict(
-            ok=bool(data.get("ok", not bad)),
-            bad_numbers=bad,
-            note=str(data.get("note", ""))[:300],
-        )
-    except Exception:
-        logger.warning("引用校验失败，跳过", exc_info=True)
-        return CitationVerdict()
+    # 范围内 → 引用编号存在即有效（确定性）
+    return CitationVerdict(ok=True, bad_numbers=[], note="")

@@ -106,8 +106,11 @@ async def eval_one(db, gold: dict) -> dict:
     except Exception as exc:
         return {"q": gold["q"], "skipped": True, "reason": f"检索失败: {str(exc)[:80]}"}
 
-    # 组装 prompt 并生成回答（生产 LLM）
-    messages = build_prompt(gold["q"], cites, style="standard")
+    # 组装 prompt 并生成回答（生产 LLM）。
+    # 枚举题用 note_incomplete=True：要求完整列出（模拟真实用户"有哪些"= 要全的），
+    # 评测反映"完整回答"能力。
+    note_incomplete = gold.get("intent") == "enumeration"
+    messages = build_prompt(gold["q"], cites, style="standard", note_incomplete=note_incomplete)
     llm = build_chat_model(0.2)
     try:
         resp = await llm.ainvoke(messages)
@@ -120,7 +123,32 @@ async def eval_one(db, gold: dict) -> dict:
     completeness = await verify.verify_completeness(gold["q"], answer, cites)
     fact = _fact_check(answer, gold.get("answer_hint"))
 
+    # 枚举题不完备 → 模拟生产 answer_verify：扩大证据（整文档）重生成一次
+    regenerated = False
+    if completeness.enumeration and not completeness.complete:
+        try:
+            broader = await rag.retrieve_document_wide(
+                db, gold["q"], kb_id=kb_id, top_k=5
+            )
+            if broader:
+                messages2 = build_prompt(
+                    gold["q"], broader, style="standard", note_incomplete=True
+                )
+                resp2 = await llm.ainvoke(messages2)
+                answer2 = getattr(resp2, "content", "") or ""
+                if answer2:
+                    answer = answer2
+                    cites = broader
+                    regenerated = True
+                    # 重校验
+                    citation = await verify.verify_citations(answer, cites)
+                    completeness = await verify.verify_completeness(gold["q"], answer, cites)
+                    fact = _fact_check(answer, gold.get("answer_hint"))
+        except Exception:
+            logger.warning("扩大证据重生成失败，用原回答", exc_info=True)
+
     return {
+        "regenerated": regenerated,
         "q": gold["q"],
         "kb": gold["kb"],
         "intent": gold["intent"],
