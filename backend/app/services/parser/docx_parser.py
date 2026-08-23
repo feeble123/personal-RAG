@@ -12,12 +12,28 @@ logger = logging.getLogger(__name__)
 
 
 def _paragraph_heading_level(text: str, style_name: str | None) -> int | None:
-    """返回标题级别（1-9）或 None（正文）。"""
-    if style_name and style_name.lower().startswith("heading"):
-        try:
-            return int(style_name.split()[-1])
-        except (ValueError, IndexError):
-            return 1
+    """返回标题级别（1-9）或 None（正文）。
+
+    P1-4 最小集：支持中文本地化样式名（「标题 1」「标题一」），不只英文 Heading N。
+    """
+    if not style_name:
+        return None
+    s = style_name.strip()
+    low = s.lower()
+    # 英文 Heading N / HeadingN
+    if low.startswith("heading"):
+        digits = low.replace("heading", "").strip()
+        if digits.isdigit():
+            return int(digits)
+        return 1
+    # 中文「标题 1」/「标题一」/「标题1」
+    if s.startswith("标题"):
+        rest = s.replace("标题", "").strip()
+        if rest.isdigit():
+            return int(rest)
+        cn = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6}
+        if rest in cn:
+            return cn[rest]
     return None
 
 

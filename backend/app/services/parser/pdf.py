@@ -320,6 +320,28 @@ class PDFParser(DocumentParser):
         confs = quality.get("ocr_confidence") or []
         if confs:
             quality["mean_ocr_confidence"] = round(sum(confs) / len(confs), 3)
+
+        # P1-3 质量门禁：低质解析标记 needs_review（不自动 active，人工复核）。
+        # 触发条件：OCR 页占比高且置信度低 / 乱码率高 / 文本过少。
+        ocr_pages = quality.get("ocr_pages", 0)
+        total_pages = page_count or 1
+        mean_conf = quality.get("mean_ocr_confidence")
+        garble = quality.get("garble_ratio", 0.0)
+        needs_review = False
+        reasons = []
+        if ocr_pages / total_pages > 0.5 and mean_conf is not None and mean_conf < 0.5:
+            needs_review = True
+            reasons.append(f"OCR 占比高且置信度低 (mean={mean_conf:.2f})")
+        if garble > settings.garble_threshold * 2:
+            needs_review = True
+            reasons.append(f"乱码率过高 (garble={garble:.3f})")
+        if quality.get("total_chars", 0) < 500:
+            needs_review = True
+            reasons.append(f"文本量过少 ({quality.get('total_chars', 0)} 字)")
+        if needs_review:
+            quality["needs_review"] = True
+            quality["review_reasons"] = "; ".join(reasons)
+
         doc.close()
         clear_progress(path.name)  # OCR 进度随解析完成清除（向量化阶段由状态列展示）
         # P1-1：blocks → IR elements（PDF 标题是推断的，标记 inferred_heading）
