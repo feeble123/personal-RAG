@@ -281,24 +281,20 @@ async def _expand_enumeration_sections(
     # 候选归属的章节，取其章前缀的大小（容忍子节分散）
     for sec in {s for s in sec_map.values() if s}:
         size_by_sec[sec] = chapter_sizes.get(_chapter_of(sec), 0)
-    # P1-9 章节相关性：RRF 融合后分数尺度接近（1/(60+rank)），分数之和选章节会失真。
-    # 改为「候选归属章节出现次数 + 该章节块数（容忍噪声聚合）」投票。
-    # - 投票用「前 2 段」聚合（容 OCR 噪声子节分散）
-    # - 但候选多出现在精确子节时，聚合到章级会丢「附录1 专家名单」这类 2 段独立单元
-    #   权衡：投票键取「前 2 段」，若该单元块太少（噪声碎片），回退到首段章
-    vote_by_sec: dict[str, int] = {}
-    for cid, _sc in ranked_pool:
+    # P1-9 章节相关性：RRF 融合后分数尺度接近，纯计数投票会让「块多但无关」的章节
+    # （如预案附则下大量子节）喧宾夺主。改为**排名加权投票**——候选排名越靠前，
+    # 对该章节的投票权重越高（top1 权重 1.0，top10 权重 ~0.1）：
+    #   score(章节) = Σ 1/(1+rank)  仅候选排名，不依赖分数尺度。
+    vote_by_sec: dict[str, float] = {}
+    for rank, (cid, _sc) in enumerate(ranked_pool):
         sec = sec_map.get(cid)
         if not sec:
             continue
-        unit = _chapter_of(sec)  # 前 2 段
-        # 该单元块太少（噪声碎片）→ 回退首段（章）
-        if chapter_sizes.get(unit, 0) < 4 and "/" in unit:
-            unit = unit.split("/")[0].strip()
-        vote_by_sec[unit] = vote_by_sec.get(unit, 0) + 1
+        unit = _chapter_of(sec)  # 章前缀（容 OCR 噪声子节分散）
+        vote_by_sec[unit] = vote_by_sec.get(unit, 0.0) + 1.0 / (1.0 + rank)
     if not vote_by_sec:
         return None
-    # 选「出现次数最高」的单元；平局取块数多者
+    # 选「加权投票最高」的单元；平局取块数多者
     best_unit = max(vote_by_sec, key=lambda s: (vote_by_sec[s], chapter_sizes.get(s, 0)))
     if chapter_sizes.get(best_unit, 0) < 4:
         logger.debug("枚举扩展：单元 %s 块数 %s < 4，不扩展", best_unit, chapter_sizes.get(best_unit, 0))

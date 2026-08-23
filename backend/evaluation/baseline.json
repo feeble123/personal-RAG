@@ -1,19 +1,19 @@
 {
   "aggregate": {
     "total": 20,
-    "recall_at_5": 0.65,
-    "recall_at_10": 0.75,
+    "recall_at_5": 0.95,
+    "recall_at_10": 1.0,
     "citation_hit": 1.0,
     "by_intent": {
       "general": {
         "n": 12,
-        "recall5": 0.8333,
+        "recall5": 0.9167,
         "recall10": 1.0
       },
       "enumeration": {
         "n": 8,
-        "recall5": 0.375,
-        "recall10": 0.375
+        "recall5": 1.0,
+        "recall10": 1.0
       }
     }
   }
