@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Literal
 
 from fastapi import APIRouter, Request
@@ -21,6 +22,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.deps import CurrentUser, DbSession
 from app.core.exceptions import BizError
+from app.core.metrics import metrics
 from app.core.ratelimit import limiter
 from app.db.models import Chunk, Citation, Conversation, Message
 from app.db.session import async_session_factory
@@ -124,7 +126,12 @@ async def chat(
         conv.title = body.content.strip()[:30]
     await db.commit()
 
+    # P2 单元3：问答结果分类指标（memory_hit / cache_hit / normal / refusal / error）
+    _chat_start = perf_counter()
+    _chat_result = "normal"
+
     async def gen():
+        nonlocal _chat_result
         try:
             async with async_session_factory() as sdb:
                 # 追问改写（BUG-追问引用错位）：短/指代性追问（「可以以表格形式呈现吗」等）
@@ -176,6 +183,7 @@ async def chat(
                         user_id=user.id, kb_id=body.kb_id, doc_scope=doc_scope, style=style,
                     )
                     if mem is not None and mem.status == "good":
+                        _chat_result = "memory_hit"
                         # 命中复用：先落库拿真实 message_id，再发 done（带 from_memory 标记）
                         yield _sse({"event": "citations", "data": mem.citations})
                         for piece in _chunk_answer(mem.answer):
@@ -243,6 +251,7 @@ async def chat(
                 # 由 LLM 依据证据等级诚实作答（规则8 + 较弱约束，不强行引用弱相关资料）。
                 # 核心原则：知识库有内容（partial/sufficient）就必须放行。
                 if evidence_level in ("none", "weak") and intent.is_real_time_query(body.content):
+                    _chat_result = "refusal"
                     refusal = (
                         "抱歉，这类问题需要实时或外部信息（如天气、时间、最新动态、实时水位与水情等），"
                         "我目前不具备联网与实时数据获取能力。"
@@ -291,6 +300,7 @@ async def chat(
                         user_id=user.id,  # P0-3 缓存按用户隔离
                     )
                 if cached:
+                    _chat_result = "cache_hit"
                     cached_answer, cached_cites = cached
                     yield _sse({"event": "citations", "data": cached_cites})
                     for piece in _chunk_answer(cached_answer):
@@ -469,6 +479,7 @@ async def chat(
             )
 
         except Exception as exc:
+            _chat_result = "error"
             logger.exception("问答流异常 conv=%s", conv.id)
             yield _sse({"event": "error", "data": _user_friendly_error(exc)})
             # 落库失败消息（供历史展示）
@@ -486,6 +497,10 @@ async def chat(
                     await sdb.commit()
             except Exception:
                 pass
+        finally:
+            # P2 单元3：问答指标（generator 无论 return/异常/正常结束都会执行）
+            metrics["chat_requests_total"].labels(_chat_result).inc()
+            metrics["chat_duration_seconds"].observe(perf_counter() - _chat_start)
 
     return StreamingResponse(
         gen(),

@@ -18,6 +18,8 @@ from functools import lru_cache
 from typing import Protocol
 
 from sqlalchemy import select
+
+from app.core.metrics import metrics
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -204,6 +206,7 @@ async def embed_documents(texts: list[str]) -> list[list[float]]:
     for i in range(0, len(texts), settings.embedding_batch_size):
         batch = texts[i : i + settings.embedding_batch_size]
         vectors.extend(await asyncio.to_thread(_embed_docs_sync, batch))
+        metrics["embedding_requests_total"].inc()
     return vectors
 
 

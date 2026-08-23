@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
     health_check_chroma: bool = False
+    # P2 单元3：Prometheus /metrics 端点开关（false 时返回 404）
+    metrics_enabled: bool = True
     # CORS 允许的来源（前端开发服务器）
     cors_origins: list[str] = [
         "http://localhost:5173",

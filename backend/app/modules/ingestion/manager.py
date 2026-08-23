@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 
 from app.core.config import settings
+from app.core.metrics import metrics
 from app.db.models import Chunk, Document, DocumentVersion, IngestionJob, KnowledgeBase
 from app.db.session import async_session_factory
 from app.services import bm25, semantic_cache, vector_store
@@ -29,6 +30,14 @@ from app.services.parser.factory import get_parser
 from app.services.parser.ocr_progress import clear_progress
 
 logger = logging.getLogger(__name__)
+
+
+def _inc_job_stage(stage: str) -> None:
+    """P2 单元3：入库任务终态/阶段计数（stage: succeeded/failed/cancelled/parsing/...）。"""
+    try:
+        metrics["ingestion_jobs_total"].labels(stage).inc()
+    except Exception:  # noqa: BLE001  指标埋点绝不阻断入库
+        pass
 
 _semaphore = asyncio.Semaphore(2)
 # P0-9：worker 常驻工作池。DB job 表是任务真相源——API 只写 queued job，worker 轮询
@@ -224,6 +233,7 @@ async def _execute_job(job_id: int) -> None:
         doc = await db.get(Document, job.document_id)
         if doc is None:
             job.stage = "failed"
+            _inc_job_stage("failed")
             job.error_code = "DOC_MISSING"
             job.error_detail = "文档不存在"
             await db.commit()
@@ -256,6 +266,7 @@ async def _execute_job(job_id: int) -> None:
                 # 不标 succeeded（已发布的版本保留——回滚 = pointer 指回即可）
                 if job.cancel_requested:
                     job.stage = "cancelled"
+                    _inc_job_stage("cancelled")
                     job.error_code = "CANCELLED"
                     job.error_detail = "用户取消（处理已完成后取消）"
                     doc = await db.get(Document, job.document_id)
@@ -264,6 +275,7 @@ async def _execute_job(job_id: int) -> None:
                         doc.error_message = "用户取消入库"
                 else:
                     job.stage = "succeeded"
+                    _inc_job_stage("succeeded")
                     job.lease_owner = None
                     job.lease_until = None
                 await db.commit()
@@ -279,6 +291,7 @@ async def _execute_job(job_id: int) -> None:
                 doc = await db.get(Document, job.document_id)
                 if cancelled:
                     job.stage = "cancelled"
+                    _inc_job_stage("cancelled")
                     job.error_code = "CANCELLED"
                     job.error_detail = "用户取消"
                     if doc is not None:
@@ -286,6 +299,7 @@ async def _execute_job(job_id: int) -> None:
                         doc.error_message = "用户取消入库"
                 else:
                     job.stage = "failed"
+                    _inc_job_stage("failed")
                     job.error_code = str(exc)[:50]
                     job.error_detail = str(exc)[:1000]
                     if doc is not None:
@@ -348,6 +362,7 @@ async def _reaper_pass() -> None:
                 job.id, job.document_id, job.stage, job.lease_until,
             )
             job.stage = "failed"
+            _inc_job_stage("failed")
             job.error_code = "LEASE_EXPIRED"
             job.error_detail = "worker 租约超时（进程中断或 worker 死亡），任务被回收"
             job.lease_owner = None
@@ -393,6 +408,7 @@ async def _update_job_stage(db, doc_id: int, stage: str, **extra: Any) -> None:
     )
     if job is not None:
         job.stage = stage
+        _inc_job_stage(stage)
         for k, v in extra.items():
             setattr(job, k, v)
 
@@ -414,6 +430,7 @@ async def cancel_ingestion(doc_id: int) -> bool:
             return False
         if job.stage == "queued":
             job.stage = "cancelled"
+            _inc_job_stage("cancelled")
             job.error_code = "CANCELLED"
             job.error_detail = "用户取消"
             doc = await db.get(Document, doc_id)

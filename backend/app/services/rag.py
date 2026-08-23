@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.metrics import metrics
 from app.db.models import Chunk, Document
 from app.schemas import CitationOut
 from app.services import bm25, vector_store
@@ -520,6 +521,8 @@ async def retrieve(
     P1-1 评测门禁：return_trace=True 时返回 RetrievedResult（cites + trace）。
     默认 False 返回 list[RetrievedChunk]，零影响现有调用。
     """
+    # P2 单元3：检索范围指标（scoped=点名文档限定，global=跨全库）
+    metrics["retrieval_requests_total"].labels("scoped" if doc_ids else "global").inc()
     top_k = top_k or settings.top_k_final
 
     # P1-1 评测门禁：收集各阶段分数供 trace
@@ -603,6 +606,8 @@ async def retrieve(
     ]
     rerank_ok = False
     rerank_status = "disabled"
+    if not settings.rerank_enabled:
+        metrics["rerank_requests_total"].labels("disabled").inc()
     section_by_id: dict[int, str | None] = {}
     if cand_sorted:
         # 预先取候选的章节信息：rerank 与两种扩展共用；rerank 关闭时扩展仍可用
@@ -640,6 +645,7 @@ async def retrieve(
                 cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
                 rerank_ok = True
                 rerank_status = "ok"
+                metrics["rerank_requests_total"].labels("ok").inc()
                 if return_trace:
                     for cid, rs in zip(ids, r_scores):
                         if cid in trace_cands:
@@ -647,6 +653,7 @@ async def retrieve(
             except Exception:
                 logger.warning("rerank 失败，回退到混合排序", exc_info=True)
                 rerank_status = "failed"
+                metrics["rerank_requests_total"].labels("failed").inc()
                 cand_sorted = cand_sorted[:top_k]
 
     # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再枚举扩展（枚举/清单类问题拉全量章节）

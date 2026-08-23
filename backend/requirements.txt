@@ -12,6 +12,8 @@ greenlet>=3.0
 alembic>=1.13
 # P2 单元1：PostgreSQL 可选升级路径（async 驱动；本机仍用 SQLite，不装 PG 也可跑）
 asyncpg>=0.29
+# P2 单元3：Prometheus 指标端点（/metrics，Grafana 拉取）
+prometheus-client>=0.20
 
 # ===== 配置 & 安全 =====
 pydantic>=2.7

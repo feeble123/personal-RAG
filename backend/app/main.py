@@ -193,6 +193,32 @@ def create_app() -> FastAPI:
             },
         )
 
+    # Prometheus 指标（P2 单元3）：必须在 SPA fallback 之前注册，否则被 catch-all 吞掉
+    if settings.metrics_enabled:
+        import sqlalchemy as sa
+
+        from fastapi.responses import Response as FastAPIResponse
+
+        from app.core.metrics import generate_metrics_text, refresh_active_jobs
+        from app.db.models import IngestionJob
+
+        @app.get("/metrics")
+        async def metrics_endpoint() -> FastAPIResponse:
+            # 刷新活跃入库任务数（DB 挂则沿用旧值，不阻塞）
+            try:
+                async with async_session_factory() as db:
+                    cnt = (
+                        await db.execute(
+                            sa.select(sa.func.count())
+                            .select_from(IngestionJob)
+                            .where(IngestionJob.stage.in_(("queued", "parsing", "embedding", "indexing")))
+                        )
+                    ).scalar_one()
+                    refresh_active_jobs(int(cnt))
+            except Exception:  # noqa: BLE001
+                pass
+            return FastAPIResponse(generate_metrics_text(), media_type="text/plain")
+
     # 静态资源（前端构建产物；开发时前端跑 Vite dev server 走 CORS/proxy）
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if frontend_dist.exists():

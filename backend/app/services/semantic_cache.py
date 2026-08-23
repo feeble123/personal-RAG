@@ -17,6 +17,7 @@ from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.metrics import metrics
 from app.db.models import SemanticCache
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,9 @@ async def find(
         best.updated_at = _now()
         await db.commit()
         logger.debug("语义缓存命中 sim=%.3f subject=%s scope=%s/%s", best_sim, best.subject, best.kb_id, best.doc_scope)
+        metrics["semantic_cache_requests_total"].labels("hit").inc()
         return best.answer, json.loads(best.citations_json)
+    metrics["semantic_cache_requests_total"].labels("miss").inc()
     return None
 
 
