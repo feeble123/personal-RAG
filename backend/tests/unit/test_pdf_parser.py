@@ -35,3 +35,15 @@ class TestPDFParser:
         parsed = PDFParser().parse(SCAN, "scan_sample.pdf")
         assert parsed.quality["ocr_pages"] >= 1
         assert parsed.quality["text_pages"] == 0
+
+    def test_garble_ratio_recorded(self):
+        """P1-3：扫描样本解析后 garble_ratio 被真实统计（此前恒 0 的 bug 修复）。"""
+        if not SCAN.exists():
+            return
+        parsed = PDFParser().parse(SCAN, "scan_sample.pdf")
+        # garble_ratio 现在应 >= 0（真实统计），而不是恒 0.0（旧 bug）
+        assert "garble_ratio" in parsed.quality
+        assert parsed.quality["garble_ratio"] >= 0.0
+        # 文本量、页码等质量字段完整
+        assert "total_chars" in parsed.quality
+        assert parsed.quality["pages"] >= 1

@@ -201,14 +201,37 @@ class PDFParser(DocumentParser):
         detect_toc = chunk_strategy == "new"
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        # P1-2 单元D：轻量预检扫描页数 → 路由决策（纯函数，可单测）
+        # P1-2 单元D+修正：轻量预检多维度复杂度（扫描/公式/表格/图片）→ 路由决策
         from app.services.parser.router import route_pdf
 
         _pre_doc = fitz.open(str(path))
-        _pre_scan = sum(1 for p in _pre_doc if _page_needs_ocr(p))
         _pre_total = _pre_doc.page_count
+        _pre_scan = 0
+        _pre_formula = 0
+        _pre_table = 0
+        _pre_image = 0
+        for _p in _pre_doc:
+            if _page_needs_ocr(_p):
+                _pre_scan += 1
+            else:
+                _ptxt = _p.get_text("text")
+                # 公式信号：含数学符号（≈≥≤∑∫∂√×÷±∞ 等）
+                if sum(1 for c in _ptxt if c in "≈≥≤∑∫∂√×÷±∞") >= 3:
+                    _pre_formula += 1
+                # 图片信号
+                if _p.get_images():
+                    _pre_image += 1
+            # 表格信号（find_tables 较慢，仅对文字层页检测）
+            if _p.find_tables().tables:
+                _pre_table += 1
         _pre_doc.close()
-        route = route_pdf(total_pages=_pre_total, scanned_pages=_pre_scan)
+        route = route_pdf(
+            total_pages=_pre_total,
+            scanned_pages=_pre_scan,
+            formula_pages=_pre_formula,
+            table_pages=_pre_table,
+            image_pages=_pre_image,
+        )
         if route.use_mineru:
             logger.info("PDF 路由→MinerU: %s（%s）", path.name, "; ".join(route.reasons))
             from app.services.parser.mineru import MinerUPDFParser
@@ -283,6 +306,12 @@ class PDFParser(DocumentParser):
             else:
                 quality["text_pages"] += 1
                 page_text = page.get_text("text")
+
+            # P1-3 修 bug：garble_ratio 真实统计（文字层 + OCR 页都算，取最大值）
+            # 之前初始化 0 后从不累加 → needs_review 乱码分支永久失效（审计发现）
+            page_garble = _garble_ratio(page_text)
+            if page_garble > quality.get("garble_ratio", 0.0):
+                quality["garble_ratio"] = page_garble
 
             looks_toc = False
             if detect_toc and page_no <= settings.toc_search_pages:
