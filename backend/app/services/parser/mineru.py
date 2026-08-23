@@ -115,10 +115,12 @@ def _ensure_tools_config() -> Path:
 
 
 def _get_mineru_env() -> dict[str, str]:
-    """构造 MinerU 子进程环境：本地模型 + CPU + 资源限制。"""
+    """构造 MinerU 子进程环境：本地模型 + CPU/GPU + 资源限制。"""
     env = os.environ.copy()
+    # GPU 策略（P1-2）：mineru_device=gpu 时启用 CUDA，否则禁用（保持 CPU 模式）
+    use_gpu = settings.mineru_device == "gpu"
     env.update({
-        "CUDA_VISIBLE_DEVICES": "",
+        "CUDA_VISIBLE_DEVICES": "0" if use_gpu else "",
         "MINERU_MODEL_SOURCE": settings.mineru_model_source or "local",
         "MINERU_TOOLS_CONFIG_JSON": str(_ensure_tools_config()),
         "MINERU_PDF_RENDER_THREADS": "1",

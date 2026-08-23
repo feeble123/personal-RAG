@@ -204,7 +204,7 @@ class Settings(BaseSettings):
     mineru_model_dir: str = ""            # 模型目录；空则用 MinerU 默认 cache，可指向 data/mineru_models
     mineru_timeout_sec: int = 1800        # 整文档解析超时（秒）
     mineru_page_timeout_sec: int = 300    # 单页解析超时（秒）
-    mineru_device: str = "cpu"            # 设备：cpu（本项目纯 CPU 方案）
+    mineru_device: str = "gpu"            # 设备：gpu（用户有 RTX 4070，加速 MinerU）；cpu 备选
 
     # ---- 解析路由（P1-2 单元D）：扫描 PDF 走哪个引擎 ----
     # rapid=RapidOCR（快）；mineru=MinerU（bake-off 证明扫描件快且准）；auto=按扫描占比自动
