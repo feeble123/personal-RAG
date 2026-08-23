@@ -28,24 +28,14 @@ def _ensure_data_dir(url: str) -> None:
 def _make_engine():
     url = settings.database_url
     _ensure_data_dir(url)
-    is_sqlite = url.startswith("sqlite")
+    is_sqlite = settings.is_sqlite
 
-    engine_kwargs: dict = {}
-    if is_sqlite:
-        # SQLite 连接极轻，池的意义主要是规避并发写锁；WAL 下多读并发安全。
-        engine_kwargs.update(
-            pool_size=settings.db_pool_size,
-            max_overflow=settings.db_max_overflow,
-            pool_pre_ping=True,
-        )
-    else:
-        # MySQL/PostgreSQL 迁移路径：给足连接池
-        engine_kwargs.update(
-            pool_size=settings.db_pool_size,
-            max_overflow=settings.db_max_overflow,
-            pool_pre_ping=True,
-        )
-
+    # MySQL/PostgreSQL 迁移路径：给足连接池（SQLite 也同参，WAL 下多读并发安全）
+    engine_kwargs: dict = {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_pre_ping": True,
+    }
     engine = create_async_engine(url, echo=settings.debug, **engine_kwargs)
 
     if is_sqlite:
@@ -90,11 +80,14 @@ async def init_db() -> None:
     logger.info("Database tables ensured.")
 
 
-def ensure_db_at_head() -> None:
+async def ensure_db_at_head() -> None:
     """启动时检查数据库迁移版本是否为 head（只检查不自动迁移，P0-6）。
 
     未纳入 alembic 管理（无 alembic_version 表，如新库/尚未 stamp 的旧库）→ INFO 提示；
     版本落后 → WARNING 提示运行 `alembic upgrade head`。失败静默（不阻塞启动）。
+
+    P2 单元1：改为异步——原 `engine.sync_engine.connect()` 在 asyncpg 驱动下会抛错；
+    `conn.run_sync` 使 SQLite 与 PostgreSQL 双通。
     """
     try:
         from alembic.config import Config
@@ -108,16 +101,22 @@ def ensure_db_at_head() -> None:
         script = ScriptDirectory.from_config(cfg)
         head = script.get_current_head()
 
-        with engine.sync_engine.connect() as conn:
-            has_ver = conn.dialect.has_table(conn, "alembic_version")
-            if not has_ver:
-                logger.info(
-                    "数据库未纳入 Alembic 迁移管理（新库或尚未 stamp）；"
-                    "后续 schema 变更请先执行 alembic upgrade head"
-                )
-                return
-            ctx = MigrationContext.configure(conn)
-            current = ctx.get_current_revision()
+        async with engine.begin() as conn:
+            # sync 的 Alembic 调用统一包进 run_sync（asyncpg 驱动下 sync connect 会抛错）
+            def _check(conn_sync) -> tuple[bool, str | None]:
+                has_ver = conn_sync.dialect.has_table(conn_sync, "alembic_version")
+                if not has_ver:
+                    return False, None
+                ctx = MigrationContext.configure(conn_sync)
+                return True, ctx.get_current_revision()
+
+            has_ver, current = await conn.run_sync(_check)
+        if not has_ver:
+            logger.info(
+                "数据库未纳入 Alembic 迁移管理（新库或尚未 stamp）；"
+                "后续 schema 变更请先执行 alembic upgrade head"
+            )
+            return
         if current != head:
             logger.warning(
                 "数据库迁移版本 %s != head %s，请执行 alembic upgrade head", current, head

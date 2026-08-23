@@ -10,6 +10,8 @@ aiosqlite>=0.20
 greenlet>=3.0
 # P0-6：schema 迁移框架（替代启动时手写 ALTER）
 alembic>=1.13
+# P2 单元1：PostgreSQL 可选升级路径（async 驱动；本机仍用 SQLite，不装 PG 也可跑）
+asyncpg>=0.29
 
 # ===== 配置 & 安全 =====
 pydantic>=2.7

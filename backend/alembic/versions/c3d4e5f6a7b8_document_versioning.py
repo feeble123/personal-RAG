@@ -17,6 +17,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from app.db.pg_guard import assert_sqlite_or_raise
+
 
 # revision identifiers, used by Alembic.
 revision: str = 'c3d4e5f6a7b8'
@@ -30,6 +32,7 @@ _CHUNK_COLS = (
 
 
 def upgrade() -> None:
+    assert_sqlite_or_raise(op.get_bind().dialect.name)
     # 1) 版本表
     op.create_table(
         'document_versions',
@@ -155,6 +158,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    assert_sqlite_or_raise(op.get_bind().dialect.name)
     # 回滚到 P0-5 形态：chunks 无 document_version_id，唯一约束回 (doc_id, chunk_index)。
     # 注意：若某文档已有多个版本（重灌过），其 chunks 挂到不同版本会导致
     # (doc_id, chunk_index) 唯一冲突，此回滚会失败——重灌过的库不可回滚（同 P0-7/P0-5 惯例）。

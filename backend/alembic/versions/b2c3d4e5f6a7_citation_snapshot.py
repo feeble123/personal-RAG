@@ -14,6 +14,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
+from app.db.pg_guard import assert_sqlite_or_raise
+
 
 # revision identifiers, used by Alembic.
 revision: str = 'b2c3d4e5f6a7'
@@ -25,6 +27,7 @@ _COLS = "id, message_id, chunk_id, kb_id, doc_id, source, page, section, snippet
 
 
 def upgrade() -> None:
+    assert_sqlite_or_raise(op.get_bind().dialect.name)
     op.execute(
         """
         CREATE TABLE citations_new (
@@ -55,6 +58,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    assert_sqlite_or_raise(op.get_bind().dialect.name)
     # 回滚到 baseline 形态：chunk_id NOT NULL + ON DELETE CASCADE。
     # 注意：若库内已有 chunk_id=NULL 的历史引用，回滚会失败（NOT NULL 约束）。
     op.execute(

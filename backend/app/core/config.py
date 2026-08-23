@@ -55,9 +55,15 @@ class Settings(BaseSettings):
     admin_password: str = ""
 
     # ---- 数据库 (SQLite 零安装；换 MySQL/Postgres 改连接串即可) ----
+    # PG 示例：DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/rag（P2 单元1 就绪，未真迁移）
     database_url: str = f"sqlite+aiosqlite:///{BASE_DIR / 'data' / 'app.db'}"
     db_pool_size: int = 10
     db_max_overflow: int = 20
+
+    @property
+    def is_sqlite(self) -> bool:
+        """当前是否 SQLite 方言（PG/MySQL 迁移路径判断用）。"""
+        return self.database_url.startswith("sqlite")
 
     # ---- 上传 ----
     max_upload_size: int = 200 * 1024 * 1024  # 200MB

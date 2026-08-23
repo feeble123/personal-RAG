@@ -13,6 +13,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
+from app.db.pg_guard import assert_sqlite_or_raise
+
 
 # revision identifiers, used by Alembic.
 revision: str = 'a1b2c3d4e5f6'
@@ -24,6 +26,7 @@ _COLS = "id, kb_id, doc_id, chunk_index, content, section, page, content_hash"
 
 
 def upgrade() -> None:
+    assert_sqlite_or_raise(op.get_bind().dialect.name)
     op.execute(
         """
         CREATE TABLE chunks_new (
@@ -50,6 +53,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    assert_sqlite_or_raise(op.get_bind().dialect.name)
     # 回滚到 baseline 形态：content_hash 列级唯一，无 (doc_id, chunk_index) 唯一。
     # 注意：若库内已出现跨文档重复 content_hash，此回滚会因唯一冲突失败（P0-7 后重灌过的库不可回滚）。
     op.execute(

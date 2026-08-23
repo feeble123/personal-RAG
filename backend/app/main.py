@@ -84,8 +84,8 @@ async def lifespan(app: FastAPI):
     settings.chroma_dir_path.mkdir(parents=True, exist_ok=True)
     # 建表 + 种子 + 预热 + 清空语义缓存（防旧检索答案残留劫持新检索）
     await init_db()
-    # P0-6：检查迁移版本是否 head（只检查不自动迁移）
-    ensure_db_at_head()
+    # P0-6：检查迁移版本是否 head（只检查不自动迁移）；P2 单元1 异步化（PG 兼容）
+    await ensure_db_at_head()
     await _seed_admin()
     await _warmup_bm25()
     from app.services import semantic_cache
