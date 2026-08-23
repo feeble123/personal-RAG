@@ -208,9 +208,17 @@ _EXCLUDED_MINERU_TYPES = frozenset({"header", "footer", "page_number"})
 
 
 def _norm_mineru_text(text: str) -> str:
-    """文本清洗：去中文间多余空格 / 日期连字符 / 表题归一（参考参考项目实测清洗）。"""
+    """文本清洗：去中文间多余空格 / 日期连字符 / 表题归一（参考参考项目实测清洗）。
+
+    容错：MinerU 某些元素的 text/table_caption 可能是 list（多行文本），
+    此时转换为空格拼接的字符串。
+    """
     import re
 
+    if isinstance(text, list):
+        text = " ".join(str(t) for t in text if t)
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
     t = text.strip()
     t = re.sub(r"(?<=[㐀-鿿])\s+(?=[㐀-鿿])", "", t)  # 中文间空格
     t = re.sub(r"(?<=\d)\s*-\s*(?=\d)", "-", t)  # 日期连字符
