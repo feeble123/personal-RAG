@@ -136,10 +136,30 @@ def _numbered_cites(cites) -> str:
     return "\n".join(lines)
 
 
+def _out_of_range_citations(answer: str, cites) -> list[int]:
+    """确定性超范围引用检测（不依赖 LLM）：回答里 [n] 且 n > 资料条数 → 幻觉编号。"""
+    import re
+
+    n_cites = len(cites)
+    nums = [int(x) for x in re.findall(r"\[(\d+)\]", answer or "")]
+    return sorted({n for n in nums if n > n_cites or n < 1})
+
+
 async def verify_citations(answer: str, cites) -> CitationVerdict:
-    """引用忠实校验：回答里的每个 [n] 是否被第 n 条资料真实支撑。"""
+    """引用忠实校验：回答里的每个 [n] 是否被第 n 条资料真实支撑。
+
+    两层校验：
+    1. 确定性：解析 [n]，n 超出资料条数（或 <1）→ 幻觉编号，必判无效
+       （防「cites=8 却引用 [15]」这类编造编号）
+    2. LLM：对范围内编号判「语义是否被第 n 条支撑」（可选，防 LLM 波动误报）
+    """
     if not answer or not cites:
         return CitationVerdict()
+    # 第一层：确定性超范围检测（稳定，不随 LLM 波动）
+    over = _out_of_range_citations(answer, cites)
+    if over:
+        return CitationVerdict(ok=False, bad_numbers=over, note=f"引用编号超出资料条数: {over}")
+
     prompt = _CITATION_PROMPT.format(
         answer=_head_tail(answer, head=3000, tail=1500),
         cites=_numbered_cites(cites)[:4000],
@@ -156,6 +176,7 @@ async def verify_citations(answer: str, cites) -> CitationVerdict:
         bad = data.get("bad_numbers") or []
         if isinstance(bad, list):
             bad = [int(x) for x in bad if str(x).isdigit()]
+        # 第二层：LLM 判「语义不支撑」，但超范围已由第一层排除
         return CitationVerdict(
             ok=bool(data.get("ok", not bad)),
             bad_numbers=bad,

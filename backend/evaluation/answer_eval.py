@@ -59,8 +59,21 @@ def _fact_check(answer: str, hint: str | None) -> bool | None:
         words = [w for w in re.split(r"[的在于和与是了为须]", p) if len(w) >= 2]
         if words:
             core_words.append(max(words, key=len))
-    # 过滤明显的冗余核心词（hint 开头常是「X是什么」的 X）
-    core_words = [w for w in core_words if w not in ("什么", "如何", "哪些")]
+    # 过滤明显的冗余核心词（hint 开头常是「X是什么」的 X）和位置标注
+    # （「见 6.1」「第X章」是标注依据，不是答案内容）
+    import re as _re
+
+    _DROP_PATTERNS = (
+        _re.compile(r"^见\s*[\d.]"),        # 见 6.1
+        _re.compile(r"^第[\d一二三四五六七八九十]+[章节篇]"),  # 第 6 章
+        _re.compile(r"^[一二三四五六七八九十]+\.\d+"),  # 6.1
+        _re.compile(r"^[（(]试行[）)]$"),
+    )
+    core_words = [
+        w for w in core_words
+        if w not in ("什么", "如何", "哪些", "哪些内容", "哪些要求")
+        and not any(p.match(w) for p in _DROP_PATTERNS)
+    ]
     if not core_words:
         return None
 
