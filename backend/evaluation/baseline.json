@@ -1,19 +1,141 @@
 {
   "aggregate": {
-    "total": 20,
-    "recall_at_5": 0.95,
-    "recall_at_10": 1.0,
+    "total": 60,
+    "recall_at_5": 0.9167,
+    "recall_at_10": 0.9167,
     "citation_hit": 1.0,
+    "clause_at_5": 0.8462,
+    "clause_at_10": 0.8718,
     "by_intent": {
       "general": {
-        "n": 12,
-        "recall5": 0.9167,
-        "recall10": 1.0
+        "n": 32,
+        "recall5": 0.9375,
+        "recall10": 0.9375,
+        "clause5": 0.8696,
+        "clause10": 0.913,
+        "clause_n": 23
       },
       "enumeration": {
-        "n": 8,
+        "n": 26,
+        "recall5": 0.8846,
+        "recall10": 0.8846,
+        "clause5": 0.8125,
+        "clause10": 0.8125,
+        "clause_n": 16
+      },
+      "named_doc": {
+        "n": 1,
         "recall5": 1.0,
-        "recall10": 1.0
+        "recall10": 1.0,
+        "clause5": null,
+        "clause10": null,
+        "clause_n": 0
+      },
+      "table": {
+        "n": 1,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": null,
+        "clause10": null,
+        "clause_n": 0
+      }
+    },
+    "by_kb": {
+      "水利工程基础": {
+        "n": 4,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": 0.75,
+        "clause10": 0.75,
+        "clause_n": 4
+      },
+      "数字孪生水利导则": {
+        "n": 5,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": 0.6667,
+        "clause10": 0.6667,
+        "clause_n": 3
+      },
+      "数字孪生农村供水工程建设技术指南（试行）": {
+        "n": 5,
+        "recall5": 0.8,
+        "recall10": 0.8,
+        "clause5": 0.75,
+        "clause10": 0.75,
+        "clause_n": 4
+      },
+      "水利技术标准编写规定": {
+        "n": 5,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": 0.0,
+        "clause10": 0.0,
+        "clause_n": 2
+      },
+      "重庆市防汛抗旱应急预案": {
+        "n": 6,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": 1.0,
+        "clause10": 1.0,
+        "clause_n": 4
+      },
+      "SL 483-2017 洪水风险图编制导则": {
+        "n": 5,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": 1.0,
+        "clause10": 1.0,
+        "clause_n": 5
+      },
+      "GB 38509-2020 滑坡防治设计规范": {
+        "n": 5,
+        "recall5": 0.8,
+        "recall10": 0.8,
+        "clause5": 1.0,
+        "clause10": 1.0,
+        "clause_n": 3
+      },
+      "高支模专项施工方案": {
+        "n": 5,
+        "recall5": 0.8,
+        "recall10": 0.8,
+        "clause5": null,
+        "clause10": null,
+        "clause_n": 0
+      },
+      "已报送方案台账": {
+        "n": 3,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": null,
+        "clause10": null,
+        "clause_n": 0
+      },
+      "四方井仓库及管理用房主要电气设备材料表": {
+        "n": 2,
+        "recall5": 0.5,
+        "recall10": 0.5,
+        "clause5": null,
+        "clause10": null,
+        "clause_n": 0
+      },
+      "GB 50332给水排水工程管道结构设计规范": {
+        "n": 3,
+        "recall5": 1.0,
+        "recall10": 1.0,
+        "clause5": 1.0,
+        "clause10": 1.0,
+        "clause_n": 2
+      },
+      "水力学第5版": {
+        "n": 12,
+        "recall5": 0.9167,
+        "recall10": 0.9167,
+        "clause5": 0.9167,
+        "clause10": 1.0,
+        "clause_n": 12
       }
     }
   }
