@@ -31,3 +31,4 @@ frontend/tsconfig.tsbuildinfo
 # OS
 Thumbs.db
 .DS_Store
+backend/evaluation/answer_report.json
