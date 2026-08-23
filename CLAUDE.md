@@ -39,8 +39,10 @@
 - **检索流**：向量 + BM25 混合 → RRF 融合 → rerank → LLM 带引用生成
 - **入库流**：上传隔离 → 分层解析(PDF 文字层/OCR) → DocumentElement IR → 结构感知分块(parent-child) → embedding 缓存 → Chroma + BM25 → 原子发布
 - **所有同步阻塞**（Chroma/BM25/解析/embedding）走 `asyncio.to_thread`，rerank 是唯一真 async IO
+- **数据库（P2 单元4 起）**：正式使用 **PostgreSQL 17**（本机服务，`rag` 库，`rag_app` 账号）；`.env` 的 DATABASE_URL 已切 PG；SQLite 数据已迁移并备份（`app.db.bak_p2u4_pre_pg`），**暂留作回退保险，待 PG 稳定后可删**
+- **可观测性（P2 单元2/3）**：结构化日志开关（LOG_JSON）、请求日志中间件、`/api/health` 真探活（DB 挂返回 503）、全局异常处理器留现场、`/metrics` Prometheus 指标（10 个业务指标，Grafana 可拉取）
 - **可迁移性**：SQLAlchemy 全部方言通用类型；config 已预留 MySQL/PG 切换；未来可接 pgvector/Milvus/Qdrant
-- 数据：`backend/data/`（app.db 222MB + .chroma 115MB + uploads 131MB）——**这些是真实用户数据，不可随意删除**
+- 数据：PG（关系库，`pg_dump` 备份）+ `backend/data/`（.chroma 向量库 + uploads 原文）——**这些是真实用户数据，不可随意删除**
 
 ## 五、评测基线（已建立的严谨体系）
 
@@ -64,11 +66,15 @@
 - **README.md**：快速上手（用户可读）
 - **docs/PROJECT_RECORD.md**：技术档案（当前定位描述）
 - **docs/agent-vision.md**：Agent 愿景（未来方向）
+- **docs/P2-PG-MIGRATION.md**：PG 升级路径（P2 单元1，含建库/初始化/迁移/回退）
+- **docs/P2-BACKUP.md**：数据备份方案（P2 单元5，pg_dump + Chroma + 整包）
+- **docs/P2-DEPLOYMENT.md**：部署形态指南（P2 单元5，单机→Docker→云演进）
 - **.planning/**：各阶段计划 + 进度（计划驱动的开发记录）
-- 历史基线：P0 安全/隔离/入库、P1 检索质量/评测严谨化已收官，详见 `.planning/2026-08-16-rag-optimization-plan/progress.md`
+- 历史基线：P0 安全/隔离/入库、P1 检索质量/评测严谨化、P2 生产工程已收官，详见 `.planning/2026-08-16-rag-optimization-plan/progress.md`
 
 ## 八、默认状态确认
 
 - 当前分支 `feature/rag-optimization`；main 保持 aa372b6 不动；无远程 push
+- 数据库：正式 PostgreSQL（本机 5432，`rag_app`/`rag`）；测试仍用独立临时 SQLite（conftest 隔离，不碰 PG）
 - 生产启动走 `APP_ENV=production` fail-safe（缺密钥/DEBUG 直接拒绝启动）
-- 测试全离线（fake embedding/LLM、临时数据目录），pytest 当前 400+ 绿
+- 测试全离线（fake embedding/LLM、临时数据目录），pytest 当前 427+ 绿
