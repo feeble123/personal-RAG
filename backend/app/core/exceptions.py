@@ -5,9 +5,13 @@
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+logger = logging.getLogger(__name__)
 
 
 class BizError(Exception):
@@ -37,6 +41,8 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        # P2 单元2：从「静默吞错」到「留现场」——未捕获异常必须记日志（含堆栈）
+        logger.exception("未处理异常 %s %s", request.method, request.url.path)
         # 生产环境不泄露内部堆栈；开发环境保留便于调试
         from app.core.config import settings
 

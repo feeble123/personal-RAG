@@ -16,13 +16,10 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
+from app.core.logging import setup_logging
 from app.core.ratelimit import limiter
 from app.db.session import async_session_factory, ensure_db_at_head, init_db
 
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s | %(message)s",
-)
 logger = logging.getLogger("app")
 
 
@@ -77,6 +74,9 @@ async def _warmup_bm25() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # P2 单元2：统一日志配置在 lifespan 执行（而非模块 import 时）——
+    # 避免 pytest 收集阶段（import app.main）触发与 pytest logging 插件的冲突
+    setup_logging()
     # 准备数据目录（quarantine 隔离区随 uploads 一并创建）
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.upload_dir_path.mkdir(parents=True, exist_ok=True)
@@ -128,6 +128,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # P2 单元2：请求日志（最外层，罩住 429/OPTIONS；不消费 body，SSE 安全）
+    from app.core.middleware import RequestLoggingMiddleware
+
+    app.add_middleware(RequestLoggingMiddleware)
+
     # 统一异常处理
     register_exception_handlers(app)
 
@@ -153,10 +158,40 @@ def create_app() -> FastAPI:
     app.include_router(memory_router, prefix=api_prefix)
     app.include_router(kb_memories_router, prefix=api_prefix)
 
-    # 健康检查
+    # 健康检查（P2 单元2 真探活）：摸数据库脉搏；可选探 Chroma（默认关保持快）
     @app.get("/api/health")
     async def health() -> JSONResponse:
-        return JSONResponse({"status": "ok", "app": settings.app_name})
+        import sqlalchemy as sa
+
+        checks: dict = {}
+        ok = True
+        try:
+            async with async_session_factory() as db:
+                await db.execute(sa.text("SELECT 1"))
+            checks["db"] = "ok"
+        except Exception as exc:  # noqa: BLE001  健康检查需覆盖任何 DB 故障
+            ok = False
+            checks["db"] = f"error: {exc!r}"
+        if settings.health_check_chroma:
+            try:
+                import asyncio
+
+                from app.services import vector_store
+
+                await asyncio.to_thread(vector_store.count)
+                checks["chroma"] = "ok"
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                checks["chroma"] = f"error: {exc!r}"
+        return JSONResponse(
+            status_code=200 if ok else 503,
+            content={
+                "status": "ok" if ok else "degraded",
+                "app": settings.app_name,
+                "version": "1.0.0",
+                "checks": checks,
+            },
+        )
 
     # 静态资源（前端构建产物；开发时前端跑 Vite dev server 走 CORS/proxy）
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

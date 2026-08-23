@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     debug: bool = False
     host: str = "0.0.0.0"
     port: int = 8000
+    # P2 单元2 可观测性：日志级别 / JSON 结构化日志开关（对接 Grafana/Loki 时开）/ 健康检查是否探 Chroma
+    log_level: str = "INFO"
+    log_json: bool = False
+    health_check_chroma: bool = False
     # CORS 允许的来源（前端开发服务器）
     cors_origins: list[str] = [
         "http://localhost:5173",
@@ -200,6 +204,10 @@ class Settings(BaseSettings):
         if env not in ("development", "test", "production"):
             raise ValueError(f"APP_ENV 仅支持 development/test/production，收到: {self.app_env!r}")
         self.app_env = env
+
+        # P2 单元2：LOG_LEVEL 只允许标准级别（默认 INFO 不触发，不影响现有测试）
+        if (self.log_level or "").upper() not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            raise ValueError(f"LOG_LEVEL 仅支持 DEBUG/INFO/WARNING/ERROR/CRITICAL，收到: {self.log_level!r}")
 
         if env == "production":
             if not self.jwt_secret:

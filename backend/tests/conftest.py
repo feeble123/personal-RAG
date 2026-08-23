@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 # 必须先于 app 导入设置环境（settings 在导入时加载）
+# P2 单元2：测试环境标记——setup_logging 在 test 下跳过（避免与 pytest logging 插件冲突）
+os.environ["APP_ENV"] = "test"
 os.environ["EMBEDDING_PROVIDER"] = "fake"
 os.environ["LLM_PROVIDER"] = "fake"
 os.environ["RERANK_ENABLED"] = "false"  # 集成测试离线，不走 rerank API
