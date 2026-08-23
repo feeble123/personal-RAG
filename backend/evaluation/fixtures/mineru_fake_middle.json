@@ -1,0 +1,17 @@
+{
+  "_version_name": "3.4.4",
+  "pdf_info": {
+    "pages_count": 2,
+    "pdf_parser_used": "pdfminer"
+  },
+  "para_bboxes": [
+    [120, 90, 880, 130],
+    [140, 160, 400, 185],
+    [140, 200, 380, 220],
+    [140, 230, 860, 255]
+  ],
+  "perf": {
+    "model_load_time": 12.5,
+    "parse_time": 45.2
+  }
+}

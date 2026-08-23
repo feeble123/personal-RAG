@@ -1,0 +1,14 @@
+[
+  {"type": "title", "text": "水利工程规范测试", "text_level": 0, "bbox": [120, 90, 880, 130], "page_idx": 0},
+  {"type": "header", "text": "ICS 93.160", "bbox": [120, 30, 220, 55], "page_idx": 0},
+  {"type": "text", "text": "第一章 总则", "text_level": 1, "bbox": [140, 160, 400, 185], "page_idx": 0},
+  {"type": "text", "text": "1.1 适用范围", "text_level": 2, "bbox": [140, 200, 380, 220], "page_idx": 0},
+  {"type": "text", "text": "本规范适用于水利工程的规划、设计与施工。", "bbox": [140, 230, 860, 255], "page_idx": 0},
+  {"type": "text", "text": "1.2 引用标准", "text_level": 2, "bbox": [140, 270, 380, 290], "page_idx": 0},
+  {"type": "text", "text": "按 GB 50201 执行。", "bbox": [140, 300, 500, 320], "page_idx": 0},
+  {"type": "table", "table_caption": "表 1 参数一览", "bbox": [140, 340, 860, 500], "page_idx": 0,
+   "table_body": "<table><tr><td>参数</td><td>取值</td></tr><tr><td>糙率</td><td>0.025</td></tr><tr><td>流速</td><td>2.5m/s</td></tr></table>"},
+  {"type": "text", "text": "第二章 设计", "text_level": 1, "bbox": [140, 520, 400, 545], "page_idx": 1},
+  {"type": "image", "bbox": [140, 560, 500, 700], "page_idx": 1, "image_path": "img1.png"},
+  {"type": "footer", "text": "第 1 页 共 2 页", "bbox": [300, 800, 700, 820], "page_idx": 1}
+]

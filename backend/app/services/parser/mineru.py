@@ -195,3 +195,191 @@ def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None) -> 
         raise RuntimeError("MinerU 完成但未产出 content_list.json")
     logger.info("MinerU 完成: %s", path)
     return result
+
+
+# =====================================================================
+# P1-2 单元C：MinerU 产物 → 本项目 DocumentElement IR（adapter）
+# =====================================================================
+
+# MinerU 元素类型 → 本项目 ElementType 映射（排除项过滤）
+_EXCLUDED_MINERU_TYPES = frozenset({"header", "footer", "page_number"})
+
+
+def _norm_mineru_text(text: str) -> str:
+    """文本清洗：去中文间多余空格 / 日期连字符 / 表题归一（参考参考项目实测清洗）。"""
+    import re
+
+    t = text.strip()
+    t = re.sub(r"(?<=[㐀-鿿])\s+(?=[㐀-鿿])", "", t)  # 中文间空格
+    t = re.sub(r"(?<=\d)\s*-\s*(?=\d)", "-", t)  # 日期连字符
+    t = re.sub(r"^(表\s*\d+)", lambda m: m.group(1).replace(" ", ""), t)  # 表 1 → 表1
+    return t
+
+
+def _parse_table_html(html: str) -> dict | None:
+    """解析 MinerU table_body HTML → {rows, header_path}（供 IR table 字段）。
+
+    容错：解析失败降级为纯文本行（不抛异常）。
+    """
+    import re
+
+    if not html:
+        return None
+    try:
+        rows_raw = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL | re.IGNORECASE)
+        rows: list[list[str]] = []
+        for r in rows_raw:
+            cells = [
+                re.sub(r"<[^>]+>", "", c).strip()
+                for c in re.findall(r"<td[^>]*>(.*?)</td>", r, re.DOTALL | re.IGNORECASE)
+            ]
+            if cells and any(c for c in cells):
+                rows.append(cells)
+        if not rows:
+            return None
+        header_path = rows[0]
+        return {"rows": rows, "header_path": header_path}
+    except Exception:  # noqa: BLE001  容错降级
+        logger.debug("MinerU 表格 HTML 解析失败，降级纯文本", exc_info=True)
+        return None
+
+
+def adapt_mineru_output(
+    content_list: list[dict],
+    middle: dict | None = None,
+    *,
+    doc_name: str = "document",
+) -> list["DocumentElement"]:
+    """把 MinerU 的 _content_list.json 映射为 DocumentElement 列表。
+
+    - header/footer/page_number 排除
+    - text 带 text_level → HEADING（MinerU 版面模型直接给层级，不标 inferred_heading）
+    - table → TABLE（table_body HTML 解析成 table 字段）
+    - image → FIGURE
+    - 顺序 = content_list 顺序（MinerU 已按阅读顺序排布）→ reading_order
+    """
+    from app.services.parser.ir import DocumentElement, ElementType
+
+    elements: list[DocumentElement] = []
+    order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
+    for idx, raw in enumerate(content_list):
+        mtype = raw.get("type") or "text"
+        if mtype in _EXCLUDED_MINERU_TYPES:
+            continue
+        text = _norm_mineru_text(raw.get("text") or "")
+
+        if mtype == "table":
+            etype = ElementType.TABLE
+            table = _parse_table_html(raw.get("table_body") or "")
+            heading_level = None
+            # 表格文本：优先表题（table_caption），空则用解析出的行拼接（避免空文本）
+            if not text:
+                caption = _norm_mineru_text(raw.get("table_caption") or "")
+                if caption:
+                    text = caption
+                elif table and table["rows"]:
+                    text = " | ".join(" | ".join(row) for row in table["rows"][:5])
+        elif mtype == "image":
+            etype = ElementType.FIGURE
+            table = None
+            heading_level = None
+        elif mtype in ("title", "text"):
+            lvl = raw.get("text_level")
+            table = None
+            if lvl is not None and lvl >= 1:
+                etype = ElementType.HEADING
+                heading_level = int(lvl)
+            else:
+                etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
+                heading_level = int(lvl) if lvl is not None and lvl >= 1 else None
+        else:
+            # 未知类型兜底为段落
+            etype = ElementType.PARAGRAPH
+            heading_level = None
+            table = None
+
+        bbox_raw = raw.get("bbox")
+        bbox = tuple(float(v) for v in bbox_raw) if bbox_raw and len(bbox_raw) == 4 else None
+        page_idx = raw.get("page_idx")
+        page = page_idx + 1 if isinstance(page_idx, int) else None
+
+        flags = frozenset({"layout_model"})
+        elements.append(
+            DocumentElement(
+                element_id=f"mineru-{order}",
+                type=etype,
+                text=text,
+                page_start=page,
+                page_end=page,
+                bbox=bbox,
+                reading_order=order,
+                heading_level=heading_level,
+                table=table,
+                source_ref={
+                    "parser": "mineru",
+                    "parser_version": (middle or {}).get("_version_name", "unknown"),
+                    "block_index": idx,
+                },
+                flags=flags,
+            )
+        )
+        order += 1
+    return elements
+
+
+def mineru_to_blocks(elements: list["DocumentElement"]) -> list["ParsedBlock"]:
+    """IR elements → ParsedBlock（兼容层：保证旧 chunker 链路不破坏）。"""
+    from app.services.parser.base import ParsedBlock
+
+    blocks: list[ParsedBlock] = []
+    for el in elements:
+        if el.type.value == "heading":
+            btype = "heading"
+        elif el.type.value == "table":
+            btype = "table"
+        else:
+            btype = "paragraph"
+        section = "/".join(el.section_path) if el.section_path else None
+        blocks.append(
+            ParsedBlock(text=el.text, section=section, page=el.page_start, block_type=btype)
+        )
+    return blocks
+
+
+class MinerUPDFParser:
+    """MinerU PDF 解析器（P1-2 单元D 注册用）。parse() = run_mineru → adapt。
+
+    不在 factory 注册（默认关闭）；单元D 决定启用方式。
+    """
+
+    extensions: tuple[str, ...] = ("pdf",)
+
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old"):
+        """运行 MinerU → 组装 ParsedDocument（blocks + elements + quality）。"""
+        import json
+
+        from app.services.parser.base import ParsedDocument
+
+        out_dir = settings.data_dir / "mineru_output" / path.stem
+        result = run_mineru(path, out_dir)
+        if result["content_list"] is None:
+            raise RuntimeError("MinerU 未产出 content_list.json")
+
+        with open(result["content_list"], encoding="utf-8") as f:
+            content = json.load(f)
+        middle = None
+        if result["middle"]:
+            with open(result["middle"], encoding="utf-8") as f:
+                middle = json.load(f)
+
+        elements = adapt_mineru_output(content, middle, doc_name=filename)
+        blocks = mineru_to_blocks(elements)
+        quality = {
+            "parser": "mineru",
+            "engine": "mineru",
+            "pages": len({el.page_start for el in elements if el.page_start}),
+            "elements": len(elements),
+            "blocks": len(blocks),
+            "mineru_version": (middle or {}).get("_version_name", "unknown"),
+        }
+        return ParsedDocument(blocks=blocks, page_count=quality["pages"], quality=quality, elements=elements)
