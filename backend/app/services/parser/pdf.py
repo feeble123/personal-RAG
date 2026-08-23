@@ -194,9 +194,26 @@ class PDFParser(DocumentParser):
         chunk_strategy：old=经典（目录页当正文，不做大纲）；new=识别目录页提取权威大纲。
         流程：分类页 → 渲染 OCR 页为 PNG（主线程，快）→ 线程池并行识别
               → 按页序组装 blocks（保持章节推进顺序）。
+
+        P1-2 单元D：文档级路由——扫描占比高且启用 MinerU 时，整文档改走 MinerU
+        （bake-off 证明扫描件 MinerU 更快更准）；否则维持 RapidOCR 文字层/OCR 路径。
         """
         detect_toc = chunk_strategy == "new"
         from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # P1-2 单元D：轻量预检扫描页数 → 路由决策（纯函数，可单测）
+        from app.services.parser.router import route_pdf
+
+        _pre_doc = fitz.open(str(path))
+        _pre_scan = sum(1 for p in _pre_doc if _page_needs_ocr(p))
+        _pre_total = _pre_doc.page_count
+        _pre_doc.close()
+        route = route_pdf(total_pages=_pre_total, scanned_pages=_pre_scan)
+        if route.use_mineru:
+            logger.info("PDF 路由→MinerU: %s（%s）", path.name, "; ".join(route.reasons))
+            from app.services.parser.mineru import MinerUPDFParser
+
+            return MinerUPDFParser().parse(path, filename, chunk_strategy)
 
         doc = fitz.open(str(path))
         page_count = doc.page_count

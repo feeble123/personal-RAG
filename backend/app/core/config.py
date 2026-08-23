@@ -206,6 +206,12 @@ class Settings(BaseSettings):
     mineru_page_timeout_sec: int = 300    # 单页解析超时（秒）
     mineru_device: str = "cpu"            # 设备：cpu（本项目纯 CPU 方案）
 
+    # ---- 解析路由（P1-2 单元D）：扫描 PDF 走哪个引擎 ----
+    # rapid=RapidOCR（快）；mineru=MinerU（bake-off 证明扫描件快且准）；auto=按扫描占比自动
+    pdf_scan_engine: str = "rapid"
+    # 文档扫描页占比 ≥ 该值才考虑 MinerU（mineru_enabled 且引擎为 mineru/auto 时）
+    mineru_min_scan_ratio: float = 0.5
+
     # ---- P0-1 生产环境 fail-safe 校验 ----
     # production 缺安全必需配置 → 构造即抛 ValidationError，启动直接失败。
     @model_validator(mode="after")
