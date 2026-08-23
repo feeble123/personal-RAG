@@ -1,0 +1,7 @@
+# MinerU 解析引擎（P1-2）：扫描 PDF 高质量替代
+# 独立文件保持主 requirements.txt 轻量；装进本项目同一个 venv（Python 3.10 已确认支持）
+# 安装：.venv/Scripts/python.exe -m pip install -r requirements-mineru.txt -i https://mirrors.aliyun.com/pypi/simple/
+# 注意：torch 需 CPU 版（Windows 用 pytorch 官方 CPU index 覆盖，避免装 CUDA 版体积大）
+
+mineru[pipeline]==3.4.4
+six==1.17.0

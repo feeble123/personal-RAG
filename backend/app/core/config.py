@@ -198,6 +198,14 @@ class Settings(BaseSettings):
     # 乱码页 ≈0。低于该阈值 → 该页转 OCR）
     chinese_common_threshold: float = 0.2
 
+    # ---- MinerU 解析引擎（P1-2：扫描 PDF 高质量替代，默认关闭）----
+    mineru_enabled: bool = False          # 启用后扫描 PDF 才可能走 MinerU
+    mineru_model_source: str = "local"    # 模型来源：local（本地模型目录）
+    mineru_model_dir: str = ""            # 模型目录；空则用 MinerU 默认 cache，可指向 data/mineru_models
+    mineru_timeout_sec: int = 1800        # 整文档解析超时（秒）
+    mineru_page_timeout_sec: int = 300    # 单页解析超时（秒）
+    mineru_device: str = "cpu"            # 设备：cpu（本项目纯 CPU 方案）
+
     # ---- P0-1 生产环境 fail-safe 校验 ----
     # production 缺安全必需配置 → 构造即抛 ValidationError，启动直接失败。
     @model_validator(mode="after")
