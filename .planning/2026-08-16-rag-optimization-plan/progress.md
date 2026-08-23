@@ -46,6 +46,22 @@
 - ⬜ 单元6：P1-3/4/5 最小集 + 收尾提交
 - ⏸ 裁剪延期：P1-2（外部引擎 bake-off）/ P1-8（pgvector）→ 答辩后
 
+## P2 生产工程（2026-08-23 收官，项目定位升级为真实产品）
+
+| 单元 | 工作包 | 关键产出 |
+| --- | --- | --- |
+| 单元1 | PG 迁移应用层就绪 | asyncpg + ensure_db_at_head 异步化 + pg_guard 迁移守卫 + pg_init + docs/P2-PG-MIGRATION.md（427 绿基线前） |
+| 单元2 | 可观测性·基础 | 结构化日志开关(LOG_JSON) + 请求日志中间件 + /api/health 真探活 + 全局异常补日志（417 绿） |
+| 单元3 | 可观测性·Prometheus | /metrics 端点 + 10 业务指标 + 路径归一化 + SPA fallback 顺序防护（427 绿） |
+| 单元4 | PG 真迁移 | 修复 pg_hba.conf(空文件) + 重置密码 + 建 rag_app/rag 库 + migrate_sqlite_to_pg 脚本(12库/2692 chunks/4416 emb) + pg_init create_all+stamp + .env 正式切 PG + 登录/列表/问答验证（427 绿） |
+| 单元5 | 真实产品化收尾 | docs/P2-BACKUP.md + docs/P2-DEPLOYMENT.md + CLAUDE.md 更新（427 绿） |
+
+**P2 状态**：
+- ✅ **数据库正式切 PostgreSQL**（本机 5432，`.env` DATABASE_URL 已指向 PG）；SQLite 数据迁移并备份（`app.db.bak_p2u4_pre_pg`），**暂留作回退保险，PG 稳定后用户确认可删**
+- ✅ 可观测性：日志/请求/健康/异常/指标全就位，Grafana 可拉 `/metrics`
+- ✅ 全量 427 测试绿（测试仍用独立临时 SQLite，不碰 PG）
+- 🎉 **P2 全部收官**（PG 生产地基 + 可观测性 + 真实产品化收尾）
+
 ## 用户约束
 - 只保存到 feature/rag-optimization 分支，main 保持 aa372b6 不动
 - 不 push 到远程
