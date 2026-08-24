@@ -300,6 +300,7 @@ def adapt_mineru_output(
 
     elements: list[DocumentElement] = []
     section_stack: list[str] = []  # 标题栈：按层级累积 section_path
+    stack_touched = False  # 是否已遇到第一个数字编号标题（跳过封面书名）
     order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
     for idx, raw in enumerate(content_list):
         mtype = raw.get("type") or "text"
@@ -326,8 +327,17 @@ def adapt_mineru_output(
             lvl = raw.get("text_level")
             table = None
             if lvl is not None and lvl >= 1:
-                etype = ElementType.HEADING
                 heading_level = int(lvl)
+                # MinerU 把章节标题（如「5 洪水影响分析」）标为 lvl=2，
+                # 但「数字+空格+中文」无点号 → 应升级为 lvl=1（一级章标题）
+                if heading_level == 2 and re.match(r"^\d+\s+\S", text) and "." not in text.split()[0]:
+                    heading_level = 1
+                # 封面书名等非编号标题 → 跳过（不进入正文 section_stack）
+                # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等）
+                if heading_level == 1 and re.match(r"^\d+\s+\S", text) and not stack_touched:
+                    section_stack.clear()
+                    stack_touched = True
+                etype = ElementType.HEADING
                 # 标题层级更新 section_stack：1/2 级覆盖，更深级追加
                 if heading_level <= len(section_stack):
                     section_stack = section_stack[: heading_level - 1]
