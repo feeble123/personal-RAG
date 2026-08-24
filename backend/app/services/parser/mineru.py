@@ -298,12 +298,26 @@ def adapt_mineru_output(
     elements: list[DocumentElement] = []
     section_stack: list[str] = []  # 标题栈：按层级累积 section_path
     stack_touched = False  # 是否已遇到第一个数字编号标题（跳过封面书名）
+    pending_bare_number: str | None = None  # 裸编号标题缓冲（如 "3.4" — 等下一个元素合并）
     order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
     for idx, raw in enumerate(content_list):
         mtype = raw.get("type") or "text"
         if mtype in _EXCLUDED_MINERU_TYPES:
             continue
         text = _norm_mineru_text(raw.get("text") or "")
+
+        # Merging bare-number heading: MinerU splits "3.4 专题洪水风险图" into
+        # [lvl=2 "3.4"] + [lvl=None "专题洪水风险图"]. Merge the number into the next element.
+        if pending_bare_number:
+            if text:
+                text = pending_bare_number + " " + text
+            else:
+                text = pending_bare_number
+            pending_bare_number = None
+            # also carry over the heading level from the bare number
+            if raw.get("text_level") is None:
+                raw = {**raw, "text_level": heading_level}
+            heading_level = heading_level  # preserve from previous iteration
 
         if mtype == "table":
             etype = ElementType.TABLE
@@ -333,6 +347,11 @@ def adapt_mineru_output(
             table = None
             if lvl is not None and lvl >= 1:
                 heading_level = int(lvl)
+                # MinerU 把「3.4」和「专题洪水风险图」拆成两行：
+                # 裸编号标题（如 "3.4" text≤5字）→ 缓冲，合并到下一个元素
+                if heading_level >= 2 and re.match(r"^\d+(?:\.\d+)?$", text):
+                    pending_bare_number = text
+                    continue
                 # MinerU 把章节标题（如「5 洪水影响分析」）标为 lvl=2，
                 # 但「数字+空格+中文」无点号 → 应升级为 lvl=1（一级章标题）
                 if heading_level == 2 and re.match(r"^\d+\s+\S", text) and "." not in text.split()[0]:
