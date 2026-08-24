@@ -87,7 +87,10 @@ def _atoms_from_elements(elements) -> list[dict[str, Any]]:
         if not text.strip():
             continue
         if type_name in ("title", "heading"):
-            continue  # 边界，不单独成 atom
+            lvl = getattr(el, "heading_level", None)
+            if isinstance(lvl, int) and lvl <= 2:
+                continue  # 1/2 级标题是边界，不单独成 atom
+            # 3 级及以上标题保留为正文（作为切片内容）
         section = " / ".join(getattr(el, "section_path", ())) or None
         page = getattr(el, "page_start", None)
         atoms.append(

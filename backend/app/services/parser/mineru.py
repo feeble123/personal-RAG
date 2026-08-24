@@ -214,8 +214,8 @@ _HEADING_GUESS = re.compile(r"^(?:(?:附录)?[A-Z])|(?:(\d+(?:\.\d+)*)\s+\S)")
 def _guess_heading_level(text: str) -> int | None:
     """MinerU 未标 text_level 时，用正则推断标题层级。
 
-    「6 避洪转移分析」→ 1；「7.4 地图版面布局」→ 2；「附录A」→ 1。
-    短文本（≤3 字）或纯数字编号不判为标题。
+    只推断 1/2 级：「6 避洪转移分析」→ 1；「7.4 地图版面布局」→ 2。
+    三级及以上（「4.6.16」）不推断——保留为正文，放在切片 body 里。
     """
     import re
 
@@ -224,13 +224,10 @@ def _guess_heading_level(text: str) -> int | None:
         return None
     m = re.match(r"^(\d+)(?:\s+)(\S)", t)  # 「6 避洪…」
     if m:
-        # 只有一级编号（无点号）→ level 1
         return 1
-    m = re.match(r"^(\d+(?:\.\d+)+)(?:\s+)(\S)", t)  # 「4.4.2 基础…」
+    m = re.match(r"^(\d+\.\d+)(?:\s+)(\S)", t)  # 「7.4 地图…」
     if m:
-        return m.group(1).count(".") + 1
-    if re.match(r"^附录[A-Z]", t):
-        return 1
+        return 2
     return None
 
 
