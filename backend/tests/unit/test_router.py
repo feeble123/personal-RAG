@@ -26,7 +26,7 @@ class TestRouteTextLayer:
 class TestRouteScannedDefault:
     def test_scanned_to_rapid_default(self):
         """扫描页默认 rapid（MinerU 未启用）。"""
-        d = route_pdf(total_pages=10, scanned_pages=8)
+        d = route_pdf(total_pages=10, scanned_pages=8, policy=_policy())
         assert d.doc_level == ENGINE_RAPID
         assert not d.use_mineru
 

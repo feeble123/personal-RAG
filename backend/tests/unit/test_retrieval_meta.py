@@ -74,7 +74,7 @@ class TestWriteChunksCarriesMeta:
             # 至少一个块有 clause_no（md 有「## 明渠均匀流」，但 md 走解析器路径 section 是标题路径）
             # 块类型默认 text
             for c in rows:
-                assert c.block_type in ("text", "table"), f"block_type 非法: {c.block_type}"
+                assert c.block_type in ("text", "table", "parent"), f"block_type 非法: {c.block_type}"
                 assert isinstance(c.clause_no, (str, type(None)))
                 assert isinstance(c.formula_no, (str, type(None)))
 

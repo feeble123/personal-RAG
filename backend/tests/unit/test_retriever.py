@@ -75,7 +75,7 @@ class TestRetrieverEndToEnd:
             # sample_kb 的 md 无条款号/公式号，应为 None
             assert isinstance(src.clause_no, (str, type(None)))
             assert isinstance(src.formula_no, (str, type(None)))
-            assert src.block_type in ("text", "table")
+            assert src.block_type in ("text", "table", "parent")
             assert src.doc_id is not None
             assert src.chunk_id is not None
 

@@ -25,6 +25,7 @@ from app.db.models import Chunk, Document, DocumentVersion, IngestionJob, Knowle
 from app.db.session import async_session_factory
 from app.services import bm25, semantic_cache, vector_store
 from app.services.chunker import chunk_blocks, chunk_toc_pages
+from app.services.chunking.parent_child import ParentChildChunk, build_parent_child
 from app.services.embedding import embed_documents, load_cache_vectors, store_cache_vectors
 from app.services.parser.factory import get_parser
 from app.services.parser.ocr_progress import clear_progress
@@ -608,16 +609,28 @@ async def _process_document(doc_id: int) -> None:
             doc.quality = {**parsed.quality, "gap_check": gap_info}
         await db.commit()
 
-        chunks = chunk_blocks(parsed.blocks)
-        # 目录内容单独成「目录」切片（只增不减：原文件所有内容都必须进知识库）
-        if getattr(parsed, "toc_texts", None):
-            toc_chunks = chunk_toc_pages(parsed.toc_texts)
-            if toc_chunks:
-                chunks = toc_chunks + chunks
-        # P0-9：分块完成 → job 推进到 embedding；批次间协作式取消检查
-        await _update_job_stage(db, doc.id, "embedding")
-        await _raise_if_cancelled(db, doc.id)
-        # 完整性自检：原文件每行是否都保留在切片中（不阻塞入库，作预警 + 答辩数据）
+        # P1-4 接入 parent-child（大小块）：正文用 build_parent_child 产出子块+父块
+        # 目录单独保留经典切片（转成 ParentChildChunk 保持统一）——「目录必定有父块」，整体走两遍插入
+        body_pc = build_parent_child(parsed.elements or [], blocks=parsed.blocks)
+        if not body_pc:
+            # 回退经典：无 parent-child 产出时用经典 chunk
+            chunks = chunk_blocks(parsed.blocks)
+        else:
+            # 把经典 Chunk 转成 ParentChildChunk（父=子，满足 _write_chunks 两遍插入）
+            toc_pc: list[ParentChildChunk] = []
+            if getattr(parsed, "toc_texts", None):
+                for c in chunk_toc_pages(parsed.toc_texts):
+                    toc_pc.append(
+                        ParentChildChunk(
+                            content=c.content, parent_content=c.content,
+                            section=c.section, page=c.page,
+                            child_hash=c.content_hash,
+                            parent_hash="toc_" + c.content_hash,
+                            block_type=c.block_type,
+                        )
+                    )
+            chunks = toc_pc + body_pc  # 目录 + 正文统一为 parent-child 列表
+        # 完整性自检（对最终 chunks）
         from app.services.parser.completeness import check_content_completeness
 
         comp = check_content_completeness(parsed.blocks, chunks)
