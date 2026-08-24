@@ -338,10 +338,11 @@ def adapt_mineru_output(
                     section_stack.clear()
                     stack_touched = True
                 etype = ElementType.HEADING
-                # 标题层级更新 section_stack：1/2 级覆盖，更深级追加
-                if heading_level <= len(section_stack):
-                    section_stack = section_stack[: heading_level - 1]
-                section_stack.append(text)
+                # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈（作为正文内容）
+                if heading_level in (1, 2):
+                    if heading_level <= len(section_stack):
+                        section_stack = section_stack[: heading_level - 1]
+                    section_stack.append(text)
             else:
                 # MinerU 未标 text_level 时，用正则回退检测编号标题（如「6 避洪转移分析」）
                 # 匹配模式：数字开头 + 空格 + 中文标题（≥4 字）
@@ -349,9 +350,10 @@ def adapt_mineru_output(
                 if inferred_level:
                     etype = ElementType.HEADING
                     heading_level = inferred_level
-                    if heading_level <= len(section_stack):
-                        section_stack = section_stack[: heading_level - 1]
-                    section_stack.append(text)
+                    if heading_level in (1, 2):
+                        if heading_level <= len(section_stack):
+                            section_stack = section_stack[: heading_level - 1]
+                        section_stack.append(text)
                 else:
                     etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
                     heading_level = None
