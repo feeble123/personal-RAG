@@ -320,6 +320,14 @@ def adapt_mineru_output(
             etype = ElementType.FIGURE
             table = None
             heading_level = None
+            # 图片 text 为空时用 caption（如 "图1 河道洪水计算范围示意图"）
+            if not text:
+                cap = raw.get("image_caption") or raw.get("table_caption") or ""
+                if isinstance(cap, list):
+                    cap = " ".join(str(c) for c in cap if c)
+                cap = _norm_mineru_text(cap)
+                if cap:
+                    text = cap
         elif mtype in ("title", "text"):
             lvl = raw.get("text_level")
             table = None
