@@ -180,13 +180,11 @@ export const kbApi = {
   upload: (
     kbId: number,
     file: File,
-    chunkStrategy?: string,
     docType?: string,
     onProgress?: (pct: number) => void,
   ) => {
     const form = new FormData()
     form.append('file', file)
-    form.append('chunk_strategy', chunkStrategy ?? 'old')
     form.append('doc_type', docType ?? 'other')
     return api
       .post(`/admin/kbs/${kbId}/documents/upload`, form, {

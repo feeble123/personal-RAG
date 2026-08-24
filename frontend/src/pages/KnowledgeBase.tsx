@@ -212,8 +212,8 @@ export default function KnowledgeBase() {
 
   // ---- 上传 ----
   const uploadMutation = useMutation({
-    mutationFn: ({ file, kbId, strategy, type }: { file: File; kbId: number; strategy: string; type: DocType }) =>
-      kbApi.upload(kbId, file, strategy, type, () => {}),
+    mutationFn: ({ file, kbId, type }: { file: File; kbId: number; type: DocType }) =>
+      kbApi.upload(kbId, file, type, () => {}),
     onSuccess: () => {
       message.success('上传成功，正在后台入库')
       queryClient.invalidateQueries({ queryKey: ['kb-docs'] })
@@ -519,7 +519,7 @@ export default function KnowledgeBase() {
                         message.error('文件超过 200MB 限制')
                         return Upload.LIST_IGNORE
                       }
-                      uploadMutation.mutate({ file, kbId: activeKb, strategy: 'old', type: docType })
+                      uploadMutation.mutate({ file, kbId: activeKb, type: docType })
                       return false
                     }}
                   >

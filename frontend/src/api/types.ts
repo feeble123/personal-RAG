@@ -46,8 +46,7 @@ export interface DocumentItem {
   page_count: number | null
   chunk_count: number
   quality: Record<string, unknown> | null
-  // 切片策略（上传时选择，供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
-  chunk_strategy: string
+  chunk_strategy: string   // 后端保留字段，兼容旧数据
   // P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other
   doc_type: string
   created_at: string
