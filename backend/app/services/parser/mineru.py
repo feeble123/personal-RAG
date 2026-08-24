@@ -267,10 +267,12 @@ def adapt_mineru_output(
     - table → TABLE（table_body HTML 解析成 table 字段）
     - image → FIGURE
     - 顺序 = content_list 顺序（MinerU 已按阅读顺序排布）→ reading_order
+    - **section_path 按 heading 层级构建**：MinerU 给出 heading_level，从顶层标题累积
     """
     from app.services.parser.ir import DocumentElement, ElementType
 
     elements: list[DocumentElement] = []
+    section_stack: list[str] = []  # 标题栈：按层级累积 section_path
     order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
     for idx, raw in enumerate(content_list):
         mtype = raw.get("type") or "text"
@@ -299,6 +301,10 @@ def adapt_mineru_output(
             if lvl is not None and lvl >= 1:
                 etype = ElementType.HEADING
                 heading_level = int(lvl)
+                # 标题层级更新 section_stack：1/2 级覆盖，更深级追加
+                if heading_level <= len(section_stack):
+                    section_stack = section_stack[: heading_level - 1]
+                section_stack.append(text)
             else:
                 etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
                 heading_level = int(lvl) if lvl is not None and lvl >= 1 else None
@@ -314,6 +320,7 @@ def adapt_mineru_output(
         page = page_idx + 1 if isinstance(page_idx, int) else None
 
         flags = frozenset({"layout_model"})
+        section_path = tuple(section_stack) if section_stack else ()
         elements.append(
             DocumentElement(
                 element_id=f"mineru-{order}",
@@ -324,6 +331,7 @@ def adapt_mineru_output(
                 bbox=bbox,
                 reading_order=order,
                 heading_level=heading_level,
+                section_path=section_path,
                 table=table,
                 source_ref={
                     "parser": "mineru",
