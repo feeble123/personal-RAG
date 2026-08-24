@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -205,6 +206,32 @@ def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None) -> 
 
 # MinerU 元素类型 → 本项目 ElementType 映射（排除项过滤）
 _EXCLUDED_MINERU_TYPES = frozenset({"header", "footer", "page_number"})
+# 正则：检测编号标题（MinerU 漏标 text_level 时的回退）
+# 「6 避洪转移分析」→ level 1；「4.4.2 基础资料」→ level 3；「附录A」→ level 1
+_HEADING_GUESS = re.compile(r"^(?:(?:附录)?[A-Z])|(?:(\d+(?:\.\d+)*)\s+\S)")
+
+
+def _guess_heading_level(text: str) -> int | None:
+    """MinerU 未标 text_level 时，用正则推断标题层级。
+
+    「6 避洪转移分析」→ 1；「7.4 地图版面布局」→ 2；「附录A」→ 1。
+    短文本（≤3 字）或纯数字编号不判为标题。
+    """
+    import re
+
+    t = text.strip()
+    if len(t) <= 3:
+        return None
+    m = re.match(r"^(\d+)(?:\s+)(\S)", t)  # 「6 避洪…」
+    if m:
+        # 只有一级编号（无点号）→ level 1
+        return 1
+    m = re.match(r"^(\d+(?:\.\d+)+)(?:\s+)(\S)", t)  # 「4.4.2 基础…」
+    if m:
+        return m.group(1).count(".") + 1
+    if re.match(r"^附录[A-Z]", t):
+        return 1
+    return None
 
 
 def _norm_mineru_text(text: str) -> str:
@@ -306,8 +333,18 @@ def adapt_mineru_output(
                     section_stack = section_stack[: heading_level - 1]
                 section_stack.append(text)
             else:
-                etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
-                heading_level = int(lvl) if lvl is not None and lvl >= 1 else None
+                # MinerU 未标 text_level 时，用正则回退检测编号标题（如「6 避洪转移分析」）
+                # 匹配模式：数字开头 + 空格 + 中文标题（≥4 字）
+                inferred_level = _guess_heading_level(text)
+                if inferred_level:
+                    etype = ElementType.HEADING
+                    heading_level = inferred_level
+                    if heading_level <= len(section_stack):
+                        section_stack = section_stack[: heading_level - 1]
+                    section_stack.append(text)
+                else:
+                    etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
+                    heading_level = None
         else:
             # 未知类型兜底为段落
             etype = ElementType.PARAGRAPH

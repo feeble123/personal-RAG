@@ -740,7 +740,7 @@ async def _write_chunks(
                 )
                 db.add(child)
                 next_idx += 1
-            target.chunk_count = len(chunks)
+            target.chunk_count = len(parent_rows) + len(chunks)  # 父块 + 子块总数
             await db.flush()
             return
 
