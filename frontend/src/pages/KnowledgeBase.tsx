@@ -11,8 +11,7 @@ import {
   Modal,
   Popconfirm,
   Progress,
-  Radio,
-  Select,
+    Select,
   Space,
   Table,
   Tabs,
@@ -182,8 +181,6 @@ export default function KnowledgeBase() {
   const { message } = App.useApp()
   const queryClient = useQueryClient()
   const [activeKb, setActiveKb] = useState<number | null>(null)
-  // 切片策略（上传时选择，供 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
-  const [chunkStrategy, setChunkStrategy] = useState<'old' | 'new'>('old')
   // P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
   const [docType, setDocType] = useState<DocType>('other')
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
@@ -308,20 +305,6 @@ export default function KnowledgeBase() {
       ),
     },
     { title: '类型', dataIndex: 'file_type', key: 'file_type', width: 80 },
-    {
-      title: '切片策略',
-      dataIndex: 'chunk_strategy',
-      key: 'chunk_strategy',
-      width: 100,
-      render: (v: string) =>
-        v === 'new' ? (
-          <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
-            目录+LLM
-          </Tag>
-        ) : (
-          <Tag style={{ marginInlineEnd: 0 }}>经典</Tag>
-        ),
-    },
     {
       title: '大小',
       dataIndex: 'file_size',
@@ -527,30 +510,6 @@ export default function KnowledgeBase() {
                     options={DOC_TYPE_OPTIONS}
                     placeholder="文档类型"
                   />
-                  <Tooltip
-                    overlayStyle={{ maxWidth: 380 }}
-                    title={
-                      <>
-                        <div>
-                          <b>经典切片</b>：按版面启发式（字号/编号）识别一、二级标题作切分边界，速度与成本低；适用于文本层清晰、排版规范的资料。
-                        </div>
-                        <div style={{ marginTop: 6 }}>
-                          <b>目录+LLM补全</b>：先解析文档目录建立权威章节骨架，正文识别缺失的一、二级标题用目录补全，并经 LLM 校验三至五级编号断号补全软边界；章节结构更完整，但每份文档多一次 LLM 判断；适用于扫描件、OCR 质量差或目录编号混乱的资料。
-                        </div>
-                      </>
-                    }
-                  >
-                    <Radio.Group
-                      size="small"
-                      value={chunkStrategy}
-                      onChange={(e) => setChunkStrategy(e.target.value)}
-                      optionType="button"
-                      buttonStyle="solid"
-                    >
-                      <Radio.Button value="old">经典切片</Radio.Button>
-                      <Radio.Button value="new">目录+LLM补全</Radio.Button>
-                    </Radio.Group>
-                  </Tooltip>
                   <Upload
                     accept={ACCEPT}
                     showUploadList={false}
@@ -560,7 +519,7 @@ export default function KnowledgeBase() {
                         message.error('文件超过 200MB 限制')
                         return Upload.LIST_IGNORE
                       }
-                      uploadMutation.mutate({ file, kbId: activeKb, strategy: chunkStrategy, type: docType })
+                      uploadMutation.mutate({ file, kbId: activeKb, strategy: 'old', type: docType })
                       return false
                     }}
                   >
