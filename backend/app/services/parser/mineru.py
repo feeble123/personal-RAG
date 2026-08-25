@@ -29,7 +29,7 @@ DEFAULT_ARGS = [
     "--backend", "pipeline",
     "--method", "ocr",
     "--lang", "ch",
-    "--formula", "false",
+    "--formula", "true",
     "--table", "true",
 ]
 
@@ -228,6 +228,9 @@ def _guess_heading_level(text: str) -> int | None:
     # 公式守卫：含数学符号的文本不是标题
     if any(c in t for c in "φ√αβγμρΣ∫→=+∂∇∮"):
         return None
+    # 日期守卫：数字后跟「年/月/日」（如 1979年2月、1982年7月10日）不是标题
+    if re.match(r"^\d{3,4}年", t):
+        return None
     m = re.match(r"^(\d+)\s*([一-鿿])", t)  # 「6 避洪…」或「1绪论」(无空格)
     if m:
         return 1
@@ -305,7 +308,7 @@ def adapt_mineru_output(
     elements: list[DocumentElement] = []
     section_stack: list[str] = []  # 标题栈：按层级累积 section_path
     stack_touched = False  # 是否已遇到第一个数字编号标题（跳过封面书名）
-    seen_headers: set[str] = set()  # header 页眉去重：同一标题只进栈一次
+    last_header_key: str | None = None  # header 连续去重：记录上一个页眉文本
     pending_bare_number: str | None = None  # 裸编号标题缓冲（如 "3.4" — 等下一个元素合并）
     order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
     for idx, raw in enumerate(content_list):
@@ -419,14 +422,15 @@ def adapt_mineru_output(
                 # MinerU 未标 text_level（header 页眉 / title）时，用正则回退检测编号标题
                 inferred_level = _guess_heading_level(text)
                 if inferred_level:
-                    # header 页眉去重：同一标题（如「1绪论」每页重复）只进栈一次
                     key = text.split("\n")[0].strip()
-                    if mtype == "header" and key in seen_headers:
-                        etype = ElementType.PARAGRAPH  # 重复页眉 → 当正文，不进栈
+                    # header 页眉「连续去重」：同一标题连续出现（页眉）时跳过；
+                    # 间隔出现（如章节重新开始）时仍进栈。避免全局去重导致二级标题丢失。
+                    if mtype == "header" and key == last_header_key:
+                        etype = ElementType.PARAGRAPH  # 连续重复页眉 → 当正文
                         heading_level = None
                     else:
                         if mtype == "header":
-                            seen_headers.add(key)
+                            last_header_key = key
                         etype = ElementType.HEADING
                         heading_level = inferred_level
                         if heading_level in (1, 2):
