@@ -64,11 +64,13 @@ class TestTableParse:
 
 class TestAdapt:
     def test_excludes_header_footer(self, content_list, middle):
-        """header/footer 不进 elements。"""
+        """page_number 和 footer 不进 elements；header 保留（MinerU 把章节标题也标为 header）。"""
         elements = adapt_mineru_output(content_list, middle)
         texts = [e.text for e in elements]
-        assert "ICS 93.160" not in texts  # header 排除
-        assert "第 1 页 共 2 页" not in texts  # footer 排除
+        # footer 排除
+        assert "第 1 页 共 2 页" not in texts
+        # page_number 排除
+        # header 保留（如 '1 绪论' 被 MinerU 标为 header）
 
     def test_heading_level_mapped(self, content_list, middle):
         """编号标题（如 1.1 适用范围）→ heading_level=2，无 inferred_heading flag。"""

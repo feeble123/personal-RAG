@@ -205,7 +205,7 @@ def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None) -> 
 # =====================================================================
 
 # MinerU 元素类型 → 本项目 ElementType 映射（排除项过滤）
-_EXCLUDED_MINERU_TYPES = frozenset({"header", "footer", "page_number"})
+_EXCLUDED_MINERU_TYPES = frozenset({"footer", "page_number"})
 # 正则：检测编号标题（MinerU 漏标 text_level 时的回退）
 # 「6 避洪转移分析」→ level 1；「4.4.2 基础资料」→ level 3；「附录A」→ level 1
 _HEADING_GUESS = re.compile(r"^(?:(?:附录)?[A-Z])|(?:(\d+(?:\.\d+)*)\s+\S)")
