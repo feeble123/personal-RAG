@@ -225,7 +225,7 @@ def _guess_heading_level(text: str) -> int | None:
     # 公式守卫：含数学符号的文本不是标题
     if any(c in t for c in "φ√αβγμρΣ∫→=+∂∇∮"):
         return None
-    m = re.match(r"^(\d+)(?:\s+)([一-鿿])", t)  # 「6 避洪…」
+    m = re.match(r"^(\d+)\s*([一-鿿])", t)  # 「6 避洪…」或「1绪论」(无空格)
     if m:
         return 1
     m = re.match(r"^(\d+\.\d+)(?:\s+)([一-鿿])", t)  # 「7.4 地图…」
@@ -346,7 +346,9 @@ def adapt_mineru_output(
                 cap = _norm_mineru_text(cap)
                 if cap:
                     text = cap
-        elif mtype in ("title", "text"):
+        elif mtype in ("title", "text", "header"):
+            # MinerU 把「1 绪论」标为 type=header, text_level=None
+            # header 也走标题检测，避免章节标题被当成段落
             lvl = raw.get("text_level")
             table = None
             if lvl is not None and lvl >= 1:
