@@ -222,10 +222,13 @@ def _guess_heading_level(text: str) -> int | None:
     t = text.strip()
     if len(t) <= 3:
         return None
-    m = re.match(r"^(\d+)(?:\s+)(\S)", t)  # 「6 避洪…」
+    # 公式守卫：含数学符号的文本不是标题
+    if any(c in t for c in "φ√αβγμρΣ∫→=+∂∇∮"):
+        return None
+    m = re.match(r"^(\d+)(?:\s+)([一-鿿])", t)  # 「6 避洪…」
     if m:
         return 1
-    m = re.match(r"^(\d+\.\d+)(?:\s+)(\S)", t)  # 「7.4 地图…」
+    m = re.match(r"^(\d+\.\d+)(?:\s+)([一-鿿])", t)  # 「7.4 地图…」
     if m:
         return 2
     return None
@@ -364,6 +367,10 @@ def adapt_mineru_output(
                 _is_sub3 = bool(re.match(r"^\d+\.\d+\.\d+\S", text))
                 _is_numbered = (_is_chapter or _is_section or _is_sub3) and len(text) <= 100
                 if _is_numbered:
+                    # 公式守卫：标题文本不应含数学符号（φ√αβγμρΣ∫→=+ 等）
+                    if any(c in text for c in "φ√αβγμρΣ∫→=+∂∇∮∈∀∃ℵℜ"):
+                        etype = ElementType.PARAGRAPH
+                        heading_level = None
                     # 章标题（如「5 洪水影响分析」）MinerU 标 lvl=2 但应升级为 lvl=1
                     if heading_level == 2 and "." not in text.split()[0]:
                         heading_level = 1
@@ -394,8 +401,8 @@ def adapt_mineru_output(
                             section_stack.append(text.split("\n")[0].strip())
                 else:
                     # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
-                    # — 短文本（≤15字）作为一级标题，长文本（目录页全文等）作为段落
-                    if len(text) <= 15 and heading_level in (1, 2):
+                    # — 短文本（≤15字）+ 纯中文（无数字/括号/标点）作为一级标题
+                    if len(text) <= 15 and heading_level in (1, 2) and re.match(r"^[一-鿿\s]+$", text):
                         etype = ElementType.HEADING
                         if heading_level == 1 and not stack_touched:
                             section_stack.clear()
