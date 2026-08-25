@@ -353,10 +353,14 @@ def adapt_mineru_output(
                 if heading_level >= 2 and re.match(r"^\d+(?:\.\d+)?$", text):
                     pending_bare_number = text
                     continue
-                # 只有编号开头 + 短文本（≤100字）的标题才进 section_stack。
-                # MinerU 把目录页全文标为 text_level，开头碰巧是「1 绪论1」，
-                # 但正文几百字——长度守卫过滤掉这类伪标题。
-                _is_numbered = bool(re.match(r"^\d+(?:\.\d+)*\s", text)) and len(text) <= 100
+                # 区分真正的章节标题 vs 列表项/公式：
+                # - 章标题：数字+空格+中文（如 1 绪论）
+                # - 节标题：数字.数字+空格+中文（如 1.1 水力学的任务）
+                # - 列表项 1. 绝对压强 → 不匹配（单数字+句号）
+                # - 公式 1 -mu² → 不匹配（数字后是公式符号）
+                _is_chapter = bool(re.match(r"^\d+\s+\S", text))
+                _is_section = bool(re.match(r"^\d+\.\d+(?:\.\d+)*\s+\S", text))
+                _is_numbered = (_is_chapter or _is_section) and len(text) <= 100
                 if _is_numbered:
                     # 章标题（如「5 洪水影响分析」）MinerU 标 lvl=2 但应升级为 lvl=1
                     if heading_level == 2 and "." not in text.split()[0]:
@@ -373,10 +377,19 @@ def adapt_mineru_output(
                         # 只取第一行作为标题（去掉换行后的子节列表/目录页文本）
                         section_stack.append(text.split("\n")[0].strip())
                 else:
-                    # 非编号标题（如目录页全文、内容简介、图书在版编目等）
-                    # — 作为段落，不进入 section_stack
-                    etype = ElementType.PARAGRAPH
-                    heading_level = None
+                    # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
+                    # — 短文本（≤15字）作为一级标题，长文本（目录页全文等）作为段落
+                    if len(text) <= 15 and heading_level in (1, 2):
+                        etype = ElementType.HEADING
+                        if heading_level == 1 and not stack_touched:
+                            section_stack.clear()
+                            stack_touched = True
+                        if heading_level <= len(section_stack):
+                            section_stack = section_stack[: heading_level - 1]
+                        section_stack.append(text.split("\n")[0].strip())
+                    else:
+                        etype = ElementType.PARAGRAPH
+                        heading_level = None
             else:
                 # MinerU 未标 text_level 时，用正则回退检测编号标题（如「6 避洪转移分析」）
                 # 匹配模式：数字开头 + 空格 + 中文标题（≥4 字）
@@ -403,7 +416,11 @@ def adapt_mineru_output(
         page = page_idx + 1 if isinstance(page_idx, int) else None
 
         flags = frozenset({"layout_model"})
-        section_path = tuple(section_stack) if section_stack else ()
+        # 第一个编号标题之前的内容 → section_path=("目录/前言",)
+        if not stack_touched:
+            section_path = ("目录/前言",)
+        else:
+            section_path = tuple(section_stack) if section_stack else ()
         elements.append(
             DocumentElement(
                 element_id=f"mineru-{order}",
