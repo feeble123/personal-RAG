@@ -240,6 +240,37 @@ def _guess_heading_level(text: str) -> int | None:
     return None
 
 
+def _clean_latex(text: str) -> str:
+    """清理 LaTeX 公式标记，转为可检索文字。
+
+    $$\rho = \frac{m}{V}\tag{1.3}$$ → ρ = m/V (1.3)
+    保留希腊字母、运算符和编号，去掉 LaTeX 命令与定界符。
+    """
+    import re
+
+    if not text:
+        return ""
+    t = text.strip()
+    # 先替换已知的 LaTeX 希腊字母/符号命令（完整命令，含反斜杠）
+    t = re.sub(r"\\[a-zA-Z]+", lambda m: _LATEX_GREEK.get(m.group(0), " "), t)
+    # 再删剩余 LaTeX 结构标记（\frac、\tag、{}、$$ 等）
+    t = re.sub(r"\\frac|\\tag|\\text|\\begin|\\end", " ", t)
+    t = t.replace("{", " ").replace("}", " ").replace("$", " ")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+# LaTeX 命令 → 希腊字母/符号映射（公式可检索性）
+_LATEX_GREEK = {
+    "\\rho": "ρ", "\\mu": "μ", "\\sigma": "σ", "\\alpha": "α", "\\beta": "β",
+    "\\gamma": "γ", "\\delta": "δ", "\\lambda": "λ", "\\theta": "θ", "\\omega": "ω",
+    "\\pi": "π", "\\phi": "φ", "\\psi": "ψ", "\\eta": "η", "\\tau": "τ",
+    "\\times": "×", "\\cdot": "·", "\\leq": "≤", "\\geq": "≥", "\\neq": "≠",
+    "\\approx": "≈", "\\pm": "±", "\\infty": "∞", "\\sum": "∑", "\\int": "∫",
+    "\\partial": "∂", "\\nabla": "∇", "\\sqrt": "√",
+}
+
+
 def _norm_mineru_text(text: str) -> str:
     """文本清洗：去中文间多余空格 / 日期连字符 / 表题归一（参考参考项目实测清洗）。
 
@@ -353,6 +384,15 @@ def adapt_mineru_output(
                 cap = _norm_mineru_text(cap)
                 if cap:
                     text = cap
+        elif mtype == "equation":
+            # 公式：MinerU 公式识别的结果是 LaTeX（如 $$\rho = \frac{m}{V}\tag{1.3}$$）
+            # 清理 LaTeX 标记，保留可检索的公式文字（如 ρ = m/V (1.3)）
+            etype = ElementType.PARAGRAPH
+            table = None
+            heading_level = None
+            if not text:
+                text = _norm_mineru_text(raw.get("text") or raw.get("latex") or "")
+            text = _clean_latex(text)
         elif mtype in ("title", "text", "header"):
             # MinerU 把「1 绪论」标为 type=header, text_level=None
             # header 也走标题检测，避免章节标题被当成段落
