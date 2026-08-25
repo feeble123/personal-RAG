@@ -378,27 +378,25 @@ def adapt_mineru_output(
                     # 只有一二级（0或1个点）进栈
                     num = text.split()[0] if text else ""
                     dot_count = num.count(".")
+                    is_valid = True
                     if dot_count >= 2:
-                        etype = ElementType.PARAGRAPH
-                        heading_level = None
-                    # 编号后第一个字必须是中文（过滤公式 1 ω2R2、1 -mu² 等）
+                        is_valid = False
                     elif _is_chapter or _is_section:
                         _after_num = text[len(num):].strip()
                         if _after_num and not re.match(r"[一-鿿]", _after_num[0]):
-                            etype = ElementType.PARAGRAPH
-                            heading_level = None
-                    else:
-                        # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等非编号标题）
+                            is_valid = False
+                    if is_valid:
                         if heading_level == 1 and not stack_touched:
                             section_stack.clear()
                             stack_touched = True
                         etype = ElementType.HEADING
-                        # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈
                         if heading_level in (1, 2):
                             if heading_level <= len(section_stack):
                                 section_stack = section_stack[: heading_level - 1]
-                            # 只取第一行作为标题（去掉换行后的子节列表/目录页文本）
                             section_stack.append(text.split("\n")[0].strip())
+                    else:
+                        etype = ElementType.PARAGRAPH
+                        heading_level = None
                 else:
                     # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
                     # — 短文本（≤15字）+ 纯中文（无数字/括号/标点）作为一级标题
