@@ -220,7 +220,10 @@ def _guess_heading_level(text: str) -> int | None:
     import re
 
     t = text.strip()
-    if len(t) <= 3:
+    if len(t) <= 2:
+        return None
+    # 长度守卫：标题 ≤ 40 字（过滤「1883年雷诺…」这种长正文误判）
+    if len(t) > 40:
         return None
     # 公式守卫：含数学符号的文本不是标题
     if any(c in t for c in "φ√αβγμρΣ∫→=+∂∇∮"):
@@ -302,6 +305,7 @@ def adapt_mineru_output(
     elements: list[DocumentElement] = []
     section_stack: list[str] = []  # 标题栈：按层级累积 section_path
     stack_touched = False  # 是否已遇到第一个数字编号标题（跳过封面书名）
+    seen_headers: set[str] = set()  # header 页眉去重：同一标题只进栈一次
     pending_bare_number: str | None = None  # 裸编号标题缓冲（如 "3.4" — 等下一个元素合并）
     order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
     for idx, raw in enumerate(content_list):
@@ -359,15 +363,13 @@ def adapt_mineru_output(
                     pending_bare_number = text
                     continue
                 # 区分真正的章节标题 vs 列表项/公式：
-                # - 章标题：数字+空格+中文（如 1 绪论）
-                # - 节标题：数字.数字+空格+中文（如 1.1 水力学的任务）
+                # - 章标题：数字+空格+中文（1 绪论）或 数字+中文（1绪论，MinerU 无空格）
+                # - 节标题：数字.数字+空格+中文（1.1 水力学的任务）或 数字.数字+中文（1.1水力学的任务）
                 # - 列表项 1. 绝对压强 → 不匹配（单数字+句号）
                 # - 公式 1 -mu² → 不匹配（数字后是公式符号）
-                _is_chapter = bool(re.match(r"^\d+\s+\S", text))
-                _is_section = bool(re.match(r"^\d+\.\d+(?:\.\d+)*\s+\S", text))
-                # 三级编号（如 1.3.1）可能无空格（MinerU OCR 漏空格）→ 单独匹配
-                _is_sub3 = bool(re.match(r"^\d+\.\d+\.\d+\S", text))
-                _is_numbered = (_is_chapter or _is_section or _is_sub3) and len(text) <= 100
+                _is_chapter = bool(re.match(r"^\d+\s*[一-鿿]", text))  # 1 绪论 / 1绪论
+                _is_section = bool(re.match(r"^\d+\.\d+(?:\.\d+)*\s*[一-鿿]", text))  # 1.1 水力学的任务 / 1.1水力学的任务
+                _is_numbered = (_is_chapter or _is_section) and len(text) <= 40
                 if _is_numbered:
                     # 公式守卫：标题文本不应含数学符号（φ√αβγμρΣ∫→=+ 等）
                     if any(c in text for c in "φ√αβγμρΣ∫→=+∂∇∮∈∀∃ℵℜ"):
@@ -414,16 +416,26 @@ def adapt_mineru_output(
                         etype = ElementType.PARAGRAPH
                         heading_level = None
             else:
-                # MinerU 未标 text_level 时，用正则回退检测编号标题（如「6 避洪转移分析」）
-                # 匹配模式：数字开头 + 空格 + 中文标题（≥4 字）
+                # MinerU 未标 text_level（header 页眉 / title）时，用正则回退检测编号标题
                 inferred_level = _guess_heading_level(text)
                 if inferred_level:
-                    etype = ElementType.HEADING
-                    heading_level = inferred_level
-                    if heading_level in (1, 2):
-                        if heading_level <= len(section_stack):
-                            section_stack = section_stack[: heading_level - 1]
-                        section_stack.append(text.split("\n")[0].strip())
+                    # header 页眉去重：同一标题（如「1绪论」每页重复）只进栈一次
+                    key = text.split("\n")[0].strip()
+                    if mtype == "header" and key in seen_headers:
+                        etype = ElementType.PARAGRAPH  # 重复页眉 → 当正文，不进栈
+                        heading_level = None
+                    else:
+                        if mtype == "header":
+                            seen_headers.add(key)
+                        etype = ElementType.HEADING
+                        heading_level = inferred_level
+                        if heading_level in (1, 2):
+                            if heading_level == 1 and not stack_touched:
+                                section_stack.clear()
+                                stack_touched = True
+                            if heading_level <= len(section_stack):
+                                section_stack = section_stack[: heading_level - 1]
+                            section_stack.append(key)
                 else:
                     etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
                     heading_level = None
