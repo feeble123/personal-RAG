@@ -374,6 +374,12 @@ def adapt_mineru_output(
                     if dot_count >= 2:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
+                    # 编号后第一个字必须是中文（过滤公式 1 ω2R2、1 -mu² 等）
+                    elif _is_chapter or _is_section:
+                        _after_num = text[len(num):].strip()
+                        if _after_num and not re.match(r"[一-鿿]", _after_num[0]):
+                            etype = ElementType.PARAGRAPH
+                            heading_level = None
                     else:
                         # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等非编号标题）
                         if heading_level == 1 and not stack_touched:
