@@ -360,22 +360,32 @@ def adapt_mineru_output(
                 # - 公式 1 -mu² → 不匹配（数字后是公式符号）
                 _is_chapter = bool(re.match(r"^\d+\s+\S", text))
                 _is_section = bool(re.match(r"^\d+\.\d+(?:\.\d+)*\s+\S", text))
-                _is_numbered = (_is_chapter or _is_section) and len(text) <= 100
+                # 三级编号（如 1.3.1）可能无空格（MinerU OCR 漏空格）→ 单独匹配
+                _is_sub3 = bool(re.match(r"^\d+\.\d+\.\d+\S", text))
+                _is_numbered = (_is_chapter or _is_section or _is_sub3) and len(text) <= 100
                 if _is_numbered:
                     # 章标题（如「5 洪水影响分析」）MinerU 标 lvl=2 但应升级为 lvl=1
                     if heading_level == 2 and "." not in text.split()[0]:
                         heading_level = 1
-                    # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等非编号标题）
-                    if heading_level == 1 and not stack_touched:
-                        section_stack.clear()
-                        stack_touched = True
-                    etype = ElementType.HEADING
-                    # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈
-                    if heading_level in (1, 2):
-                        if heading_level <= len(section_stack):
-                            section_stack = section_stack[: heading_level - 1]
-                        # 只取第一行作为标题（去掉换行后的子节列表/目录页文本）
-                        section_stack.append(text.split("\n")[0].strip())
+                    # 三级及以上编号（如 1.3.1）→ 作为段落，不进 section_stack
+                    # 只有一二级（0或1个点）进栈
+                    num = text.split()[0] if text else ""
+                    dot_count = num.count(".")
+                    if dot_count >= 2:
+                        etype = ElementType.PARAGRAPH
+                        heading_level = None
+                    else:
+                        # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等非编号标题）
+                        if heading_level == 1 and not stack_touched:
+                            section_stack.clear()
+                            stack_touched = True
+                        etype = ElementType.HEADING
+                        # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈
+                        if heading_level in (1, 2):
+                            if heading_level <= len(section_stack):
+                                section_stack = section_stack[: heading_level - 1]
+                            # 只取第一行作为标题（去掉换行后的子节列表/目录页文本）
+                            section_stack.append(text.split("\n")[0].strip())
                 else:
                     # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
                     # — 短文本（≤15字）作为一级标题，长文本（目录页全文等）作为段落
