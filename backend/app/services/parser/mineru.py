@@ -300,10 +300,8 @@ def adapt_mineru_output(
     from app.services.parser.ir import DocumentElement, ElementType
 
     elements: list[DocumentElement] = []
-    section_stack: list[str] = []  # 标题栈：按层级累积 section_path
-    stack_touched = False  # 是否已遇到第一个数字编号标题（跳过封面书名）
     pending_bare_number: str | None = None  # 裸编号标题缓冲（如 "3.4" — 等下一个元素合并）
-    order = 0  # 排除 header/footer 后重新编号（validator 要求 reading_order 连续 = 列表序）
+    order = 0  # 排除 header/footer 后重新编号
     for idx, raw in enumerate(content_list):
         mtype = raw.get("type") or "text"
         if mtype in _EXCLUDED_MINERU_TYPES:
@@ -349,84 +347,19 @@ def adapt_mineru_output(
         elif mtype in ("title", "text"):
             lvl = raw.get("text_level")
             table = None
+            # P1-2 根本修复：adapter 不再参与 section 构建。
+            # heading 检测交给旧策略的 heading_level()（成熟可靠，覆盖所有编号格式）。
+            # adapter 只做「元素翻译」：MinerU JSON → ParsedBlock。
+            # section 字段在 mineru_to_blocks 之后由 _annotate_blocks_with_sections 统一补。
             if lvl is not None and lvl >= 1:
                 heading_level = int(lvl)
-                # MinerU 把「3.4」和「专题洪水风险图」拆成两行：
-                # 裸编号标题（如 "3.4" text≤5字）→ 缓冲，合并到下一个元素
                 if heading_level >= 2 and re.match(r"^\d+(?:\.\d+)?$", text):
                     pending_bare_number = text
                     continue
-                # 区分真正的章节标题 vs 列表项/公式：
-                # - 章标题：数字+空格+中文（如 1 绪论）
-                # - 节标题：数字.数字+空格+中文（如 1.1 水力学的任务）
-                # - 列表项 1. 绝对压强 → 不匹配（单数字+句号）
-                # - 公式 1 -mu² → 不匹配（数字后是公式符号）
-                _is_chapter = bool(re.match(r"^\d+\s+\S", text))
-                _is_section = bool(re.match(r"^\d+\.\d+(?:\.\d+)*\s+\S", text))
-                # 三级编号（如 1.3.1）可能无空格（MinerU OCR 漏空格）→ 单独匹配
-                _is_sub3 = bool(re.match(r"^\d+\.\d+\.\d+\S", text))
-                _is_numbered = (_is_chapter or _is_section or _is_sub3) and len(text) <= 100
-                if _is_numbered:
-                    # 公式守卫：标题文本不应含数学符号（φ√αβγμρΣ∫→=+ 等）
-                    if any(c in text for c in "φ√αβγμρΣ∫→=+∂∇∮∈∀∃ℵℜ"):
-                        etype = ElementType.PARAGRAPH
-                        heading_level = None
-                    # 章标题（如「5 洪水影响分析」）MinerU 标 lvl=2 但应升级为 lvl=1
-                    if heading_level == 2 and "." not in text.split()[0]:
-                        heading_level = 1
-                    # 三级及以上编号（如 1.3.1）→ 作为段落，不进 section_stack
-                    # 只有一二级（0或1个点）进栈
-                    num = text.split()[0] if text else ""
-                    dot_count = num.count(".")
-                    if dot_count >= 2:
-                        etype = ElementType.PARAGRAPH
-                        heading_level = None
-                    # 编号后第一个字必须是中文（过滤公式 1 ω2R2、1 -mu² 等）
-                    elif _is_chapter or _is_section:
-                        _after_num = text[len(num):].strip()
-                        if _after_num and not re.match(r"[一-鿿]", _after_num[0]):
-                            etype = ElementType.PARAGRAPH
-                            heading_level = None
-                    else:
-                        # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等非编号标题）
-                        if heading_level == 1 and not stack_touched:
-                            section_stack.clear()
-                            stack_touched = True
-                        etype = ElementType.HEADING
-                        # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈
-                        if heading_level in (1, 2):
-                            if heading_level <= len(section_stack):
-                                section_stack = section_stack[: heading_level - 1]
-                            # 只取第一行作为标题（去掉换行后的子节列表/目录页文本）
-                            section_stack.append(text.split("\n")[0].strip())
-                else:
-                    # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
-                    # — 短文本（≤15字）+ 纯中文（无数字/括号/标点）作为一级标题
-                    if len(text) <= 15 and heading_level in (1, 2) and re.match(r"^[一-鿿\s]+$", text):
-                        etype = ElementType.HEADING
-                        if heading_level == 1 and not stack_touched:
-                            section_stack.clear()
-                            stack_touched = True
-                        if heading_level <= len(section_stack):
-                            section_stack = section_stack[: heading_level - 1]
-                        section_stack.append(text.split("\n")[0].strip())
-                    else:
-                        etype = ElementType.PARAGRAPH
-                        heading_level = None
+                etype = ElementType.HEADING
             else:
-                # MinerU 未标 text_level 时，用正则回退检测编号标题（如「6 避洪转移分析」）
-                # 匹配模式：数字开头 + 空格 + 中文标题（≥4 字）
-                inferred_level = _guess_heading_level(text)
-                if inferred_level:
-                    etype = ElementType.HEADING
-                    heading_level = inferred_level
-                    if heading_level in (1, 2):
-                        if heading_level <= len(section_stack):
-                            section_stack = section_stack[: heading_level - 1]
-                        section_stack.append(text.split("\n")[0].strip())
-                else:
-                    etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
-                    heading_level = None
+                etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
+                heading_level = _guess_heading_level(text)
         else:
             # 未知类型兜底为段落
             etype = ElementType.PARAGRAPH
@@ -439,11 +372,8 @@ def adapt_mineru_output(
         page = page_idx + 1 if isinstance(page_idx, int) else None
 
         flags = frozenset({"layout_model"})
-        # 第一个编号标题之前的内容 → section_path=("目录/前言",)
-        if not stack_touched:
-            section_path = ("目录/前言",)
-        else:
-            section_path = tuple(section_stack) if section_stack else ()
+        # section_path 由 _annotate_blocks_with_sections 统一处理（adapter 不参与）
+        section_path = ()
         elements.append(
             DocumentElement(
                 element_id=f"mineru-{order}",
@@ -469,7 +399,10 @@ def adapt_mineru_output(
 
 
 def mineru_to_blocks(elements: list["DocumentElement"]) -> list["ParsedBlock"]:
-    """IR elements → ParsedBlock（兼容层：保证旧 chunker 链路不破坏）。"""
+    """IR elements → ParsedBlock（兼容层：保证旧 chunker 链路不破坏）。
+
+    section 字段不在此处填——由 _annotate_blocks_with_sections 统一处理。
+    """
     from app.services.parser.base import ParsedBlock
 
     blocks: list[ParsedBlock] = []
@@ -480,11 +413,33 @@ def mineru_to_blocks(elements: list["DocumentElement"]) -> list["ParsedBlock"]:
             btype = "table"
         else:
             btype = "paragraph"
-        section = "/".join(el.section_path) if el.section_path else None
         blocks.append(
-            ParsedBlock(text=el.text, section=section, page=el.page_start, block_type=btype)
+            ParsedBlock(text=el.text, section=None, page=el.page_start, block_type=btype)
         )
     return blocks
+
+
+def _annotate_blocks_with_sections(blocks: list["ParsedBlock"]) -> None:
+    """用旧策略的 heading_level() 检测标题，给 blocks 补 section 字段。
+
+    adapter 不参与标题识别——heading_level() 已覆盖所有编号格式，成熟可靠。
+    只取 1/2 级标题进 section_stack（与 old_strategy 行为一致）。
+    """
+    from app.services.parser.headings import heading_level
+
+    stack: list[str] = []
+    stack_touched = False
+    for b in blocks:
+        if b.block_type == "heading" and b.text.strip():
+            lvl = heading_level(b.text)
+            if lvl in (1, 2):
+                if lvl == 1 and not stack_touched:
+                    stack.clear()
+                    stack_touched = True
+                if lvl <= len(stack):
+                    stack = stack[: lvl - 1]
+                stack.append(b.text.split("\n")[0].strip())
+        b.section = " / ".join(stack) if stack else None
 
 
 class MinerUPDFParser:
@@ -515,6 +470,8 @@ class MinerUPDFParser:
 
         elements = adapt_mineru_output(content, middle, doc_name=filename)
         blocks = mineru_to_blocks(elements)
+        # 用旧策略的 heading_level() 给 blocks 补 section（1/2 级标题）
+        _annotate_blocks_with_sections(blocks)
         quality = {
             "parser": "mineru",
             "engine": "mineru",
