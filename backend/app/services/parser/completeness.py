@@ -33,6 +33,11 @@ def check_content_completeness(blocks, chunks) -> dict:
         text = (b.text or "").strip()
         if not text:
             continue
+        # 标题块不参与完整性检查：parent-child 方案中标题是章节边界，
+        # 不存进切片正文（标题作为 section breadcrumb 前缀保留），
+        # 逐行检查标题会误报缺失。
+        if b.block_type == "heading":
+            continue
         for line in text.split("\n"):
             t = _norm(line)
             if not t or len(t) < 4:

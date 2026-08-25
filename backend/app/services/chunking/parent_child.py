@@ -130,20 +130,25 @@ def _section_tree_from_blocks(blocks) -> list[dict[str, Any]]:
 
     返回 [{"text": 标题, "level": 1..2, "section_path": "..."}]。
     """
+    from app.services.parser.headings import heading_level
+
     tree: list[dict[str, Any]] = []
-    stack: list[str] = []
     for b in blocks:
         if b.block_type != "heading" or not b.text.strip():
             continue
-        from app.services.parser.headings import heading_level
-
-        lvl = heading_level(b.text)
-        if lvl not in (1, 2):
-            continue  # 只以 1/2 级为父块边界
-        if len(stack) >= lvl:
-            stack = stack[: lvl - 1]
-        stack.append(b.text.strip())
-        tree.append({"text": b.text.strip(), "level": lvl, "section_path": " / ".join(stack)})
+        # 优先用 section 字段（已由 outline/TOC 校准）
+        if b.section:
+            parts = [p.strip() for p in b.section.split("/") if p.strip()]
+            lvl = len(parts)
+            if lvl not in (1, 2):
+                continue
+            path = " / ".join(parts)
+        else:
+            lvl = heading_level(b.text)
+            if lvl not in (1, 2):
+                continue
+            path = b.text.strip()
+        tree.append({"text": b.text.strip(), "level": lvl, "section_path": path})
     return tree
 
 
