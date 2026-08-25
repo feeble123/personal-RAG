@@ -579,6 +579,10 @@ async def _process_document(doc_id: int) -> None:
         # 目录权威大纲 + LLM 断号补全（切片保险）：TOC 补 1/2 级硬边界，
         # LLM 确认缺失的 3/4/5 级注入软边界。必须在 repair_ocr_gaps 之后（重 OCR 按页重建
         # blocks 会冲掉注入块）、chunk_blocks 之前。LLM 失败降级为全候选，不阻塞入库。
+        #
+        # P1-2 修复：outline 注入（demote_front_matter + demote_non_toc_headings
+        # + inject_blocks）不仅对 "new" 策略生效——MinerU 解析的文档也需要这些清理
+        # 来过滤封面/目录页污染、校准 section 路径。LLM gap_check 仅 "new" 策略启用。
         if chunk_strategy == "new" and settings.gap_check_enabled:
             from app.services.parser import gap_check
             from app.services.parser import outline as outline_mod
@@ -601,6 +605,20 @@ async def _process_document(doc_id: int) -> None:
             except Exception:
                 # 增强是「保险」：任何异常都回退经典切片结果（parsed.blocks 保持原样），不阻塞入库
                 logger.exception("目录+LLM补全切片增强失败，降级为经典切片（不阻塞入库）")
+        elif parsed.outline and parsed.outline.entries:
+            # P1-2 修复：MinerU 解析的文档（chunk_strategy="old"）也需要 outline 清理
+            # front matter 降级 + 非 TOC 确认的标题降级——不做 LLM 补全，不阻塞入库
+            from app.services.parser import outline as outline_mod
+
+            try:
+                parsed.blocks = outline_mod.inject_blocks(parsed.blocks, parsed.outline, set(), [])
+                parsed.quality["outline"] = {
+                    "toc_entries": len(parsed.outline.entries),
+                    "toc_pages": len(parsed.outline.toc_pages) if parsed.outline.toc_pages else 0,
+                    "chunk_strategy": "old_with_outline",
+                }
+            except Exception:
+                logger.exception("outline 清理失败（MinerU 文档），跳过（不阻塞入库）")
 
         doc.status = "embedding"
         doc.page_count = parsed.page_count

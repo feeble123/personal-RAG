@@ -278,40 +278,6 @@ def _parse_table_html(html: str) -> dict | None:
         return None
 
 
-def _heading_number(text: str) -> str | None:
-    """提取文本开头的章节编号（如 1.3.1、7.4、A.2）。"""
-    m = re.match(r"^\s*(\d{1,3}(?:\.\d{1,3}){0,3})\.?\s", text)
-    return m.group(1) if m else None
-
-
-def _extract_toc_from_content_list(content_list: list[dict]) -> dict[str, tuple[int, str]]:
-    """从 MinerU content_list 提取 TOC 映射 {编号: (level, 标题)}。
-
-    扫描所有 text_level 为 1/2 的元素，提取编号开头的数据作为章节目录。
-    遇到标题编号时的层级来自 text_level 和编号格式推断。
-    """
-    toc: dict[str, tuple[int, str]] = {}
-    for item in content_list:
-        lvl = item.get("text_level")
-        txt = (item.get("text") or "").strip()
-        tp = item.get("type") or "text"
-        if tp != "text" or lvl not in (1, 2) or not txt:
-            continue
-        num = _heading_number(txt)
-        if not num:
-            continue
-        # 标题文本：去掉编号后的剩余部分
-        title = re.sub(r"^\s*\d+(?:\.\d+)*\.?\s*", "", txt).strip()
-        if not title:
-            continue
-        # 推断层级：如果编号只有一个数字（如 1 绪论），升级为 lvl=1
-        if "." not in num and lvl == 2:
-            toc[num] = (1, title)
-        else:
-            toc[num] = (lvl, title)
-    return toc
-
-
 def adapt_mineru_output(
     content_list: list[dict],
     middle: dict | None = None,
@@ -329,11 +295,6 @@ def adapt_mineru_output(
       覆盖 MinerU 不准确的 heading 检测（尤其教科书公式被误判为标题的问题）
     """
     from app.services.parser.ir import DocumentElement, ElementType
-
-    # 1) 从 content_list 提取 TOC 条目（编号→标题映射）
-    toc_map = _extract_toc_from_content_list(content_list)
-    if toc_map:
-        logger.info("MinerU TOC 提取: %d 条章节映射", len(toc_map))
 
     elements: list[DocumentElement] = []
     section_stack: list[str] = []  # 标题栈：按层级累积 section_path
@@ -392,27 +353,30 @@ def adapt_mineru_output(
                 if heading_level >= 2 and re.match(r"^\d+(?:\.\d+)?$", text):
                     pending_bare_number = text
                     continue
-                # TOC 校准：用编号匹配 TOC 条目的权威标题和级别
-                heading_num = _heading_number(text)
-                if heading_num and heading_num in toc_map:
-                    toc_level, toc_title = toc_map[heading_num]
-                    heading_level = toc_level
-                    text = heading_num + " " + toc_title
-                # MinerU 把章节标题（如「5 洪水影响分析」）标为 lvl=2，
-                # 但「数字+空格+中文」无点号 → 应升级为 lvl=1（一级章标题）
-                if heading_level == 2 and re.match(r"^\d+\s+\S", text) and "." not in text.split()[0]:
-                    heading_level = 1
-                # 封面书名等非编号标题 → 跳过（不进入正文 section_stack）
-                # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等）
-                if heading_level == 1 and re.match(r"^\d+\s+\S", text) and not stack_touched:
-                    section_stack.clear()
-                    stack_touched = True
-                etype = ElementType.HEADING
-                # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈（作为正文内容）
-                if heading_level in (1, 2):
-                    if heading_level <= len(section_stack):
-                        section_stack = section_stack[: heading_level - 1]
-                    section_stack.append(text)
+                # 只有编号开头 + 短文本（≤100字）的标题才进 section_stack。
+                # MinerU 把目录页全文标为 text_level，开头碰巧是「1 绪论1」，
+                # 但正文几百字——长度守卫过滤掉这类伪标题。
+                _is_numbered = bool(re.match(r"^\d+(?:\.\d+)*\s", text)) and len(text) <= 100
+                if _is_numbered:
+                    # 章标题（如「5 洪水影响分析」）MinerU 标 lvl=2 但应升级为 lvl=1
+                    if heading_level == 2 and "." not in text.split()[0]:
+                        heading_level = 1
+                    # 第一个数字编号标题出现时清空栈（去掉封面/书名/公告等非编号标题）
+                    if heading_level == 1 and not stack_touched:
+                        section_stack.clear()
+                        stack_touched = True
+                    etype = ElementType.HEADING
+                    # 只有 1/2 级标题更新 section_stack；3 级及以上不进栈
+                    if heading_level in (1, 2):
+                        if heading_level <= len(section_stack):
+                            section_stack = section_stack[: heading_level - 1]
+                        # 只取第一行作为标题（去掉换行后的子节列表/目录页文本）
+                        section_stack.append(text.split("\n")[0].strip())
+                else:
+                    # 非编号标题（如目录页全文、内容简介、图书在版编目等）
+                    # — 作为段落，不进入 section_stack
+                    etype = ElementType.PARAGRAPH
+                    heading_level = None
             else:
                 # MinerU 未标 text_level 时，用正则回退检测编号标题（如「6 避洪转移分析」）
                 # 匹配模式：数字开头 + 空格 + 中文标题（≥4 字）
@@ -423,7 +387,7 @@ def adapt_mineru_output(
                     if heading_level in (1, 2):
                         if heading_level <= len(section_stack):
                             section_stack = section_stack[: heading_level - 1]
-                        section_stack.append(text)
+                        section_stack.append(text.split("\n")[0].strip())
                 else:
                     etype = ElementType.HEADING if mtype == "title" else ElementType.PARAGRAPH
                     heading_level = None

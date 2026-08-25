@@ -71,13 +71,12 @@ class TestAdapt:
         assert "第 1 页 共 2 页" not in texts  # footer 排除
 
     def test_heading_level_mapped(self, content_list, middle):
-        """text_level=1 → heading_level=1，无 inferred_heading flag。"""
+        """编号标题（如 1.1 适用范围）→ heading_level=2，无 inferred_heading flag。"""
         elements = adapt_mineru_output(content_list, middle)
-        # _norm_mineru_text 会去中文间空格（第一章 总则 → 第一章总则），检索等价
-        heading = [e for e in elements if e.type == ElementType.HEADING and "第一章" in e.text]
+        heading = [e for e in elements if e.type == ElementType.HEADING and "1.1" in e.text]
         assert heading
-        assert heading[0].heading_level == 1
-        assert "inferred_heading" not in heading[0].flags  # MinerU 直接给层级，非推断
+        assert heading[0].heading_level == 2
+        assert "inferred_heading" not in heading[0].flags
         assert "layout_model" in heading[0].flags
 
     def test_table_structure(self, content_list, middle):
@@ -132,4 +131,4 @@ class TestBlocksCompat:
         assert "paragraph" in types
         # 标题块是块，非表格
         headings = [b for b in blocks if b.block_type == "heading"]
-        assert any("第一章" in b.text for b in headings)
+        assert any("1.1" in b.text for b in headings)

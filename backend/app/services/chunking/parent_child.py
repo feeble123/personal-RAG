@@ -106,17 +106,19 @@ def _atoms_from_elements(elements) -> list[dict[str, Any]]:
 
 
 def _atoms_from_blocks(blocks) -> list[dict[str, Any]]:
-    """ParsedBlock → 原子块（无 IR 时回退；heading 跳过，其余成 atom）。"""
+    """ParsedBlock → 原子块（heading 也参与构建，正文内容不丢失）。"""
     atoms: list[dict[str, Any]] = []
     for b in blocks:
         if not b.text.strip():
             continue
-        if b.block_type == "heading":
-            continue
+        # section 截断到 300 字符（DB Chunk.section 限制），超长则截断并警告
+        section = b.section
+        if section and len(section) > 300:
+            section = section[:297] + "..."
         atoms.append(
             {
                 "text": b.text.strip(),
-                "section": b.section,
+                "section": section,
                 "page": b.page,
                 "type": b.block_type or "paragraph",
                 "level": None,
