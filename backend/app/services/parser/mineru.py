@@ -214,6 +214,65 @@ _EXCLUDED_MINERU_TYPES = frozenset({"footer", "page_number"})
 _HEADING_GUESS = re.compile(r"^(?:(?:附录)?[A-Z])|(?:(\d+(?:\.\d+)*)\s+\S)")
 
 
+def _extract_toc_map(content_list: list[dict]) -> dict[str, tuple[str, int]]:
+    """从 MinerU 的 content_list 提取目录权威骨架：{编号 → (标题, level)}。
+
+    MinerU 把目录页输出成完整文本块，每行格式：`编号(可选) 标题 ……页码`。
+    MinerU 的编号有 OCR 瑕疵（1. 4、2水静力学、2.5作用），需专门清洗：
+    - `1. 4` → `1.4`（点号后空格合并）
+    - `2水静力学` → `2 水静力学`（章编号粘连）
+    - `2.5作用` → `2.5 作用`（二级编号粘连）
+
+    只收一二级编号（level ≤ 2），构建 {编号 → (标题, level)} 权威映射。
+    """
+    import re
+
+    # 定位目录文本块：含多个「X.Y 标题」编号行的多行文本（最长者）
+    toc_blocks: list[str] = []
+    for item in content_list:
+        txt = (item.get("text") or "")
+        if not isinstance(txt, str) or not txt.strip():
+            continue
+        numbered = re.findall(r"(?:^|\n)\s*\d+(?:\.\d+)*\s*\S", txt)
+        if len(numbered) >= 5:  # 目录块：至少 5 个编号行
+            toc_blocks.append(txt)
+
+    if not toc_blocks:
+        return {}
+
+    toc_text = max(toc_blocks, key=lambda t: len(re.findall(r"\d", t)))
+
+    toc_map: dict[str, tuple[str, int]] = {}
+    for line in toc_text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # 清洗编号：`1. 4 标题` → `1.4 标题`（点号后空格合并）
+        line = re.sub(r"(\d)\s*\.\s*(?=\d)", r"\1.", line)
+        # 两类行：
+        # A) 带省略号：编号 + 标题 + …页码（1.1 水力学的任务…………………1）
+        # B) 章标题无省略号：编号 + 空格 + 中文标题 + 页码（1 绪论1、2水静力学……19）
+        m = re.match(r"^(\d+(?:\.\d+)*)\s*(.*?)\s*[\.·…]{3,}\s*\d+\s*$", line)
+        if m:
+            num = m.group(1).strip()
+            title = m.group(2).strip()
+        else:
+            # 章标题无省略号：单数字编号 + 中文标题 + 末尾数字页码
+            m2 = re.match(r"^(\d+)\s+([一-鿿][一-鿿\s]{1,30}?)\s*(\d+)\s*$", line)
+            if not m2:
+                continue
+            num = m2.group(1)
+            title = m2.group(2).strip()
+        # 只收一二级（0 或 1 个点）
+        if num.count(".") > 1:
+            continue
+        if not num or not title:
+            continue
+        level = num.count(".") + 1
+        toc_map[num] = (title, level)
+    return toc_map
+
+
 def _guess_heading_level(text: str) -> int | None:
     """MinerU 未标 text_level 时，用正则推断标题层级。
 
@@ -353,6 +412,11 @@ def adapt_mineru_output(
     """
     from app.services.parser.ir import DocumentElement, ElementType
 
+    # P1-2 单元3：提取目录权威骨架 {编号 → (标题, level)}，用于校验标题
+    toc_map = _extract_toc_map(content_list)
+    if toc_map:
+        logger.info("MinerU TOC 骨架提取: %d 条章节映射", len(toc_map))
+
     elements: list[DocumentElement] = []
     section_stack: list[str] = []  # 标题栈：按层级累积 section_path
     stack_touched = False  # 是否已遇到第一个数字编号标题（跳过封面书名）
@@ -449,6 +513,20 @@ def adapt_mineru_output(
                         _after_num = text[len(num):].strip()
                         if _after_num and not re.match(r"[一-鿿]", _after_num[0]):
                             is_valid = False
+                    # P1-2 单元3：目录权威骨架校验——一二级编号必须在 TOC 里，
+                    # 在 TOC 则用 TOC 的权威标题覆盖 MinerU 标题（习题 9.6 已知某流场→9.6 液体运动的连续性方程），
+                    # 不在（习题题目/页眉误判）则判为正文，不进 section
+                    if is_valid and toc_map and dot_count <= 1:
+                        num_clean = re.match(r"^(\d+(?:\.\d+)?)", text)
+                        if num_clean:
+                            num_key = num_clean.group(1)
+                            if num_key in toc_map:
+                                toc_title, toc_level = toc_map[num_key]
+                                # 用 TOC 权威标题 + level 覆盖
+                                text = f"{num_key} {toc_title}"
+                                heading_level = toc_level
+                            else:
+                                is_valid = False
                     if is_valid:
                         if heading_level == 1 and not stack_touched:
                             section_stack.clear()
@@ -478,6 +556,11 @@ def adapt_mineru_output(
             else:
                 # MinerU 未标 text_level（header 页眉 / title）时，用正则回退检测编号标题
                 inferred_level = _guess_heading_level(text)
+                # P1-2 单元3：目录权威骨架校验——编号不在 TOC 则判为正文
+                if inferred_level and toc_map:
+                    num_clean = re.match(r"^(\d+(?:\.\d+)?)", text)
+                    if num_clean and num_clean.group(1) not in toc_map:
+                        inferred_level = None
                 if inferred_level:
                     key = text.split("\n")[0].strip()
                     # header 页眉「连续去重」：同一标题连续出现（页眉）时跳过；
