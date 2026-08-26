@@ -607,14 +607,30 @@ def adapt_mineru_output(
                             inferred_level = None
                 if inferred_level:
                     key = _normalize_section_title(text.split("\n")[0].strip())
-                    # header 页眉「连续去重」：同一标题连续出现（页眉）时跳过；
-                    # 间隔出现（如章节重新开始）时仍进栈。避免全局去重导致二级标题丢失。
-                    if mtype == "header" and key == last_header_key:
-                        etype = ElementType.PARAGRAPH  # 连续重复页眉 → 当正文
-                        heading_level = None
+                    # P1-2 单元1：header 页眉只更新「自己那一层」，不清更深层。
+                    # header 是每页重复的章标记（如「1 绪论」），但也是章标题——
+                    # 更新一级栈（清掉封面「上册」等），但保留二级栈（不清 1.3），
+                    # 避免跨页正文的 section 退化。
+                    if mtype == "header":
+                        etype = ElementType.HEADING
+                        heading_level = inferred_level
+                        if heading_level == 1:
+                            stack_touched = True
+                            # 一级标题：只更新第 0 层，保留二级（第 1 层）
+                            if not section_stack:
+                                section_stack = [key]
+                            else:
+                                section_stack[0] = key
+                        elif heading_level == 2:
+                            stack_touched = True
+                            # 二级标题：更新第 1 层（若存在），保留一级
+                            if len(section_stack) < 1:
+                                section_stack = [key]
+                            elif len(section_stack) < 2:
+                                section_stack.append(key)
+                            else:
+                                section_stack[1] = key
                     else:
-                        if mtype == "header":
-                            last_header_key = key
                         etype = ElementType.HEADING
                         heading_level = inferred_level
                         if heading_level in (1, 2):
