@@ -206,22 +206,30 @@ def build_parent_child(elements, blocks=None) -> list[ParentChildChunk]:
 
 
 def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | None) -> list[ParentChildChunk]:
-    """一组原子的子块 + 父块。"""
-    # 子块：贪心合并到 ≤ CHILD_MAX
-    children: list[str] = []
+    """一组原子的子块 + 父块。
+
+    page 修复（P1-2 单元1）：每个子块用「它包含的 atoms 的实际 page」，
+    不再统一用 group 首页——跨页 section 的中间页不再被标成首页。
+    """
+    # 子块：贪心合并到 ≤ CHILD_MAX，同时记录每个子块包含的 atom 的 page
+    children: list[dict[str, Any]] = []  # {text, page}
     cur: list[str] = []
+    cur_page: int | None = None
     cur_tokens = 0
     for atom in group:
         text = atom["text"]
         tokens = _count_tokens(text)
         if cur and cur_tokens + tokens > CHILD_MAX_TOKENS and cur_tokens >= CHILD_MIN_TOKENS:
-            children.append("\n".join(cur))
+            children.append({"text": "\n".join(cur), "page": cur_page})
             cur = []
+            cur_page = None
             cur_tokens = 0
         cur.append(text)
+        if cur_page is None:
+            cur_page = atom.get("page")
         cur_tokens += tokens
     if cur:
-        children.append("\n".join(cur))
+        children.append({"text": "\n".join(cur), "page": cur_page})
 
     # 父块：整组作为父（≤ PARENT_MAX），超限按子块拆
     group_text = "\n".join(a["text"] for a in group)
@@ -234,12 +242,12 @@ def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | N
         buf: list[str] = []
         buf_tokens = 0
         for child in children:
-            ct = _count_tokens(child)
+            ct = _count_tokens(child["text"])
             if buf and buf_tokens + ct > PARENT_MAX_TOKENS:
                 parent_contents.append("\n".join(buf))
                 buf = []
                 buf_tokens = 0
-            buf.append(child)
+            buf.append(child["text"])
             buf_tokens += ct
         if buf:
             parent_contents.append("\n".join(buf))
@@ -251,19 +259,20 @@ def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | N
     parent_acc = 0
     parent_lens = [_count_tokens(p) for p in parent_contents]
     for child in children:
+        child_text = child["text"]
         # 找到覆盖该子块的父块（累积 token 定位）
-        while parent_idx < len(parent_lens) - 1 and parent_acc + _count_tokens(child) > parent_lens[parent_idx]:
+        while parent_idx < len(parent_lens) - 1 and parent_acc + _count_tokens(child_text) > parent_lens[parent_idx]:
             parent_acc = 0
             parent_idx += 1
-        parent_acc += _count_tokens(child)
+        parent_acc += _count_tokens(child_text)
         parent_text = parent_contents[parent_idx]
         results.append(
             ParentChildChunk(
-                content=prefix + child,
+                content=prefix + child_text,
                 parent_content=prefix + parent_text,
                 section=section,
-                page=page,
-                child_hash=_norm_hash(child),
+                page=child["page"],
+                child_hash=_norm_hash(child_text),
                 parent_hash=_norm_hash(parent_text),
                 block_type="table" if any(a["type"] == "table" for a in group) else "text",
             )
