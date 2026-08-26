@@ -202,7 +202,33 @@ def build_parent_child(elements, blocks=None) -> list[ParentChildChunk]:
         section = group[0]["section"]
         page = next((a["page"] for a in group if a["page"]), None)
         out.extend(_chunk_group(group, section, page))
+    # P1-2 单元5：过滤噪声 chunk——纯标题重复块（正文==标题）和纯图片引用碎片
+    out = [c for c in out if not _is_noise_chunk(c)]
     return out
+
+
+def _is_noise_chunk(chunk: "ParentChildChunk") -> bool:
+    """判断 chunk 是否为噪声（纯标题重复 / 纯图片引用碎片），应被过滤。
+
+    保留表题（表X.Y ...）等有实质内容的分片。
+    """
+    import re
+
+    body = chunk.content.split("\n", 1)[-1].strip() if "\n" in chunk.content else chunk.content.strip()
+    if not body:
+        return True
+    # 1) 纯标题重复：正文 == section 最后一级标题（如「1 绪论」「习题」「思考题」）
+    if chunk.section:
+        last = chunk.section.split("/")[-1].strip()
+        if body == last:
+            return True
+    # 2) 纯图片引用：只含「图X.Y」或「(a)/(b)/(c)」等图片编号，无文字
+    stripped = re.sub(r"图\d+(?:\.\d+)*", "", body)
+    stripped = re.sub(r"^\(\w\)\s*$", "", stripped, flags=re.M)
+    stripped = re.sub(r"[\s\n\(\)\[\]（）]+", "", stripped)
+    if len(stripped) < 3:
+        return True
+    return False
 
 
 def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | None) -> list[ParentChildChunk]:
