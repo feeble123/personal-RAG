@@ -248,17 +248,25 @@ def _clean_latex(text: str) -> str:
 
     $$\rho = \frac{m}{V}\tag{1.3}$$ → ρ = m/V (1.3)
     保留希腊字母、运算符和编号，去掉 LaTeX 命令与定界符。
+    处理下标 _ 上标 ^ 和花括号 {}，数字间多余空格合并。
     """
     import re
 
     if not text:
         return ""
     t = text.strip()
-    # 先替换已知的 LaTeX 希腊字母/符号命令（完整命令，含反斜杠）
+    # 1) 替换 LaTeX 命令为对应符号（\rho→ρ、\frac→/、\mathrm→空 等）
     t = re.sub(r"\\[a-zA-Z]+", lambda m: _LATEX_GREEK.get(m.group(0), " "), t)
-    # 再删剩余 LaTeX 结构标记（\frac、\tag、{}、$$ 等）
-    t = re.sub(r"\\frac|\\tag|\\text|\\begin|\\end", " ", t)
-    t = t.replace("{", " ").replace("}", " ").replace("$", " ")
+    # 2) 去掉花括号（{0} → 0），但保留内容
+    t = t.replace("{", "").replace("}", "")
+    # 3) 去掉行内/行间定界符 $
+    t = t.replace("$", " ")
+    # 4) 下标 _ 上标 ^：去掉孤立的下划线/脱字符，紧跟的内容连写（p_0 → p0）
+    #    但保留「_」和「^」作为「下标/上标」语义时，直接删除更可检索
+    t = t.replace("_", "").replace("^", "")
+    # 5) 数字间多余空格合并（1 1 2 → 112）：连续数字被空格分隔时合并
+    t = re.sub(r"(?<=\d)\s+(?=\d)", "", t)
+    # 6) 压缩连续空格
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
@@ -271,6 +279,12 @@ _LATEX_GREEK = {
     "\\times": "×", "\\cdot": "·", "\\leq": "≤", "\\geq": "≥", "\\neq": "≠",
     "\\approx": "≈", "\\pm": "±", "\\infty": "∞", "\\sum": "∑", "\\int": "∫",
     "\\partial": "∂", "\\nabla": "∇", "\\sqrt": "√",
+    # 结构/字体命令 → 空（不影响可检索性）
+    "\\frac": "/", "\\mathrm": "", "\\textrm": "", "\\mathbf": "", "\\mathit": "",
+    "\\left": "", "\\right": "", "\\overline": "", "\\underline": "",
+    "\\begin": "", "\\end": "", "\\tag": " ", "\\text": "",
+    "\\varOmega": "Ω", "\\varepsilon": "ε", "\\varphi": "φ", "\\prime": "′",
+    "\\qquad": " ", "\\quad": " ", "\\limits": "", "\\displaystyle": "",
 }
 
 
@@ -498,6 +512,10 @@ def adapt_mineru_output(
         page = page_idx + 1 if isinstance(page_idx, int) else None
 
         flags = frozenset({"layout_model"})
+        # P1-2 单元2：段落文本含 LaTeX 标记时统一清理（行内公式 $p_0$、\frac 等）
+        # 标题（heading）不含公式，不清理；只清理段落正文里的公式残留
+        if etype == ElementType.PARAGRAPH and text and ("$" in text or "\\" in text):
+            text = _clean_latex(text)
         # 第一个编号标题之前的内容 → section_path=("目录/前言",)
         if not stack_touched:
             section_path = ("目录/前言",)
