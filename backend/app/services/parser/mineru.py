@@ -156,14 +156,22 @@ def output_paths(out_dir: Path) -> dict[str, Path | None]:
     }
 
 
-def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None) -> dict:
+def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None, force: bool = False) -> dict:
     """调用 mineru CLI 解析一个 PDF/PNG，输出到 out_dir。返回产物路径字典。
 
-    幂等：out_dir 下已有 _content_list.json 则跳过重跑（bake-off 可续跑）。
+    force=False（默认）：out_dir 已有 _content_list.json 则跳过重跑（bake-off 续跑用）。
+    force=True：删除旧产物，强制 MinerU 重新解析（入库重灌必须用，保证真正重跑）。
     """
     timeout = timeout_sec or settings.mineru_timeout_sec
     out_dir = out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # force=True 时删除旧产物，强制重新解析
+    if force and out_dir.exists():
+        import shutil
+
+        shutil.rmtree(out_dir, ignore_errors=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     # 幂等检查
     existing = output_paths(out_dir)
@@ -692,13 +700,17 @@ class MinerUPDFParser:
     extensions: tuple[str, ...] = ("pdf",)
 
     def parse(self, path: Path, filename: str, chunk_strategy: str = "old"):
-        """运行 MinerU → 组装 ParsedDocument（blocks + elements + quality）。"""
+        """运行 MinerU → 组装 ParsedDocument（blocks + elements + quality）。
+
+        force=True：每次入库都删除旧产物、强制 MinerU 真正重新解析（保证重灌真实重跑，
+        不弄虚作假）。
+        """
         import json
 
         from app.services.parser.base import ParsedDocument
 
         out_dir = settings.data_dir / "mineru_output" / path.stem
-        result = run_mineru(path, out_dir)
+        result = run_mineru(path, out_dir, force=True)
         if result["content_list"] is None:
             raise RuntimeError("MinerU 未产出 content_list.json")
 
