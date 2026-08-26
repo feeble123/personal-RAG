@@ -125,7 +125,10 @@ def _get_mineru_env() -> dict[str, str]:
         "MINERU_MODEL_SOURCE": settings.mineru_model_source or "local",
         "MINERU_TOOLS_CONFIG_JSON": str(_ensure_tools_config()),
         "MINERU_PDF_RENDER_THREADS": "1",
-        "MINERU_PROCESSING_WINDOW_SIZE": "1",
+        # 关键修复：window_size 从 1 改为 64（MinerU 默认值）——
+        # 1 会导致 547 页拆成 547 批，每批重复初始化公式模型，内存尖峰 OOM；
+        # 64 页一批则 547 页仅 ~9 批，批间释放内存，不会 OOM。
+        "MINERU_PROCESSING_WINDOW_SIZE": "64",
         "MINERU_API_MAX_CONCURRENT_REQUESTS": "1",
         "MINERU_INTRA_OP_NUM_THREADS": "2",
         "MINERU_INTER_OP_NUM_THREADS": "1",
