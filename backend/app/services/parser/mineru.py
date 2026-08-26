@@ -469,6 +469,9 @@ def adapt_mineru_output(
                     text = caption
                 elif table and table["rows"]:
                     text = " | ".join(" | ".join(row) for row in table["rows"][:5])
+            # P1-2 单元5补充：表格单元格含行内公式时也清理 LaTeX（如表头 $h/m$）
+            if text and ("$" in text or "\\" in text):
+                text = _clean_latex(text)
         elif mtype == "image":
             etype = ElementType.FIGURE
             table = None
@@ -481,6 +484,9 @@ def adapt_mineru_output(
                 cap = _norm_mineru_text(cap)
                 if cap:
                     text = cap
+            # P1-2 单元5补充：图注含行内公式时也清理 LaTeX（如「(a) $0<t<\frac{L}{a}$」）
+            if text and ("$" in text or "\\" in text):
+                text = _clean_latex(text)
         elif mtype == "equation":
             # 公式：MinerU 公式识别的结果是 LaTeX（如 $$\rho = \frac{m}{V}\tag{1.3}$$）
             # 清理 LaTeX 标记，保留可检索的公式文字（如 ρ = m/V (1.3)）
@@ -572,11 +578,25 @@ def adapt_mineru_output(
             else:
                 # MinerU 未标 text_level（header 页眉 / title）时，用正则回退检测编号标题
                 inferred_level = _guess_heading_level(text)
-                # P1-2 单元3：目录权威骨架校验——编号不在 TOC 则判为正文
+                # P1-2 单元3：目录权威骨架校验——编号必须匹配 TOC，
+                # 且 MinerU 标题与 TOC 标题一致（不一致=习题/页眉误判，判为正文）
                 if inferred_level and toc_map:
                     num_clean = re.match(r"^(\d+(?:\.\d+)?)", text)
-                    if num_clean and num_clean.group(1) not in toc_map:
-                        inferred_level = None
+                    if num_clean:
+                        num_key = num_clean.group(1)
+                        if num_key in toc_map:
+                            toc_title, toc_level = toc_map[num_key]
+                            # 提取 MinerU 给的标题（编号后）
+                            mineru_title = re.sub(r"^\d+(?:\.\d+)?\s*", "", text).strip()
+                            # 标题一致性：MinerU 标题是 TOC 标题的子串/前缀才认作真标题
+                            if mineru_title and mineru_title[:2] != toc_title[:2]:
+                                inferred_level = None
+                            else:
+                                # 真标题：用 TOC 权威标题 + level 覆盖
+                                text = f"{num_key} {toc_title}"
+                                inferred_level = toc_level
+                        else:
+                            inferred_level = None
                 if inferred_level:
                     key = _normalize_section_title(text.split("\n")[0].strip())
                     # header 页眉「连续去重」：同一标题连续出现（页眉）时跳过；
