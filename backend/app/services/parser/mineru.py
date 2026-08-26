@@ -302,6 +302,22 @@ def _guess_heading_level(text: str) -> int | None:
     return None
 
 
+def _normalize_section_title(text: str) -> str:
+    """规范化 section 标题：编号与标题之间统一为「编号 + 空格 + 标题」。
+
+    「1绪论」→「1 绪论」；「6明渠流动」→「6 明渠流动」；「2.5作用」→「2.5 作用」。
+    消除 MinerU OCR 的空格不一致，让同一章节的 section 文本统一。
+    """
+    import re
+
+    t = text.strip()
+    # 编号 + 标题粘连（无空格）→ 加空格
+    m = re.match(r"^(\d+(?:\.\d+)*)([一-鿿])", t)
+    if m:
+        return f"{m.group(1)} {m.group(2)}{t[m.end():]}".rstrip()
+    return t
+
+
 def _clean_latex(text: str) -> str:
     """清理 LaTeX 公式标记，转为可检索文字。
 
@@ -535,7 +551,7 @@ def adapt_mineru_output(
                         if heading_level in (1, 2):
                             if heading_level <= len(section_stack):
                                 section_stack = section_stack[: heading_level - 1]
-                            section_stack.append(text.split("\n")[0].strip())
+                            section_stack.append(_normalize_section_title(text.split("\n")[0].strip()))
                     else:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
@@ -549,7 +565,7 @@ def adapt_mineru_output(
                             stack_touched = True
                         if heading_level <= len(section_stack):
                             section_stack = section_stack[: heading_level - 1]
-                        section_stack.append(text.split("\n")[0].strip())
+                        section_stack.append(_normalize_section_title(text.split("\n")[0].strip()))
                     else:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
@@ -562,7 +578,7 @@ def adapt_mineru_output(
                     if num_clean and num_clean.group(1) not in toc_map:
                         inferred_level = None
                 if inferred_level:
-                    key = text.split("\n")[0].strip()
+                    key = _normalize_section_title(text.split("\n")[0].strip())
                     # header 页眉「连续去重」：同一标题连续出现（页眉）时跳过；
                     # 间隔出现（如章节重新开始）时仍进栈。避免全局去重导致二级标题丢失。
                     if mtype == "header" and key == last_header_key:
