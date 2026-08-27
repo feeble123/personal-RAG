@@ -337,6 +337,9 @@ def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
     t = text.strip()
     if len(t) > 40:
         return None
+    # 日期守卫：数字后跟「年/月/日」（如 1979年2月）不是标题
+    if re.match(r"^\d{3,4}年", t):
+        return None
     m = re.match(r"^(\d+(?:\.\d+)*)\s*([一-鿿])", t)
     if not m:
         return None
