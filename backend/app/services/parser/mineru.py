@@ -533,12 +533,17 @@ def adapt_mineru_output(
                     if heading_level == 2 and "." not in text.split()[0]:
                         heading_level = 1
                     # 三级及以上编号（如 1.3.1）→ 作为段落，不进 section_stack
-                    # 只有一二级（0或1个点）进栈
+                    # 只有一二级（0或1个点）进栈；三级标题用前缀锚定二级（见下方）
                     num = text.split()[0] if text else ""
                     dot_count = num.count(".")
                     is_valid = True
+                    anchor_prefix = None  # 三级标题的前缀锚定（如 1.3.4 → 1.3）
                     if dot_count >= 2:
                         is_valid = False
+                        # P1-2 单元2：三级标题不进 section，但锚定编号前缀——
+                        # 1.3.4 → 前缀 1.3，用它更新二级栈（保持一级 1），
+                        # 让三级标题下跨页正文能定位到二级 section。
+                        anchor_prefix = ".".join(num.split(".")[:-1])
                     elif _is_chapter or _is_section:
                         _after_num = text[len(num):].strip()
                         if _after_num and not re.match(r"[一-鿿]", _after_num[0]):
@@ -569,6 +574,17 @@ def adapt_mineru_output(
                     else:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
+                        # P1-2 单元2：三级标题锚定前缀——用前缀（如 1.3）更新二级栈，
+                        # 让三级标题下跨页正文 section = 一级/二级（不退化）
+                        if anchor_prefix and stack_touched:
+                            if anchor_prefix in toc_map and toc_map[anchor_prefix][1] == 2:
+                                # 前缀是二级标题，用 TOC 权威标题
+                                section_stack = section_stack[:1]  # 保留一级
+                                section_stack.append(f"{anchor_prefix} {toc_map[anchor_prefix][0]}")
+                            elif len(section_stack) >= 1:
+                                # 前缀不在 TOC，用编号本身锚定
+                                section_stack = section_stack[:1]
+                                section_stack.append(anchor_prefix)
                 else:
                     # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
                     # — 短文本（≤15字）+ 纯中文（无数字/括号/标点）作为一级标题
