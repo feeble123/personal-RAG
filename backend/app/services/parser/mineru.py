@@ -326,6 +326,29 @@ def _normalize_section_title(text: str) -> str:
     return t
 
 
+def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
+    """统一解析编号标题，返回 (编号, 层级) 或 None。
+
+    编号 → 层级：`1`→1、`1.3`→2、`1.3.4`→3（层级 = 点号数 + 1）。
+    只认「数字(点数字)*」开头的标题，编号后必须是中文（过滤公式 1 -mu²、列表项 1.）。
+    """
+    import re
+
+    t = text.strip()
+    if len(t) > 40:
+        return None
+    m = re.match(r"^(\d+(?:\.\d+)*)\s*([一-鿿])", t)
+    if not m:
+        return None
+    num = m.group(1)
+    # 公式守卫：编号后的标题文本含数学符号则不是标题
+    title_part = t[m.end(1):]
+    if any(c in title_part for c in "φ√αβγμρΣ∫→=+∂∇∮"):
+        return None
+    level = num.count(".") + 1
+    return num, level
+
+
 def _clean_latex(text: str) -> str:
     """清理 LaTeX 公式标记，转为可检索文字。
 
@@ -516,75 +539,44 @@ def adapt_mineru_output(
                 if heading_level >= 2 and re.match(r"^\d+(?:\.\d+)?$", text):
                     pending_bare_number = text
                     continue
-                # 区分真正的章节标题 vs 列表项/公式：
-                # - 章标题：数字+空格+中文（1 绪论）或 数字+中文（1绪论，MinerU 无空格）
-                # - 节标题：数字.数字+空格+中文（1.1 水力学的任务）或 数字.数字+中文（1.1水力学的任务）
-                # - 列表项 1. 绝对压强 → 不匹配（单数字+句号）
-                # - 公式 1 -mu² → 不匹配（数字后是公式符号）
-                _is_chapter = bool(re.match(r"^\d+\s*[一-鿿]", text))  # 1 绪论 / 1绪论
-                _is_section = bool(re.match(r"^\d+\.\d+(?:\.\d+)*\s*[一-鿿]", text))  # 1.1 水力学的任务 / 1.1水力学的任务
-                _is_numbered = (_is_chapter or _is_section) and len(text) <= 40
-                if _is_numbered:
-                    # 公式守卫：标题文本不应含数学符号（φ√αβγμρΣ∫→=+ 等）
-                    if any(c in text for c in "φ√αβγμρΣ∫→=+∂∇∮∈∀∃ℵℜ"):
+                # P1-2 单元3：统一用「编号层级推导」——_parse_numbered_heading 返回 (编号, 层级)
+                parsed = _parse_numbered_heading(text)
+                if parsed:
+                    num, num_level = parsed
+                    # 三级及以上编号（如 1.3.4）→ 不进 section，但锚定前缀到二级
+                    if num_level >= 3:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
-                    # 章标题（如「5 洪水影响分析」）MinerU 标 lvl=2 但应升级为 lvl=1
-                    if heading_level == 2 and "." not in text.split()[0]:
-                        heading_level = 1
-                    # 三级及以上编号（如 1.3.1）→ 作为段落，不进 section_stack
-                    # 只有一二级（0或1个点）进栈；三级标题用前缀锚定二级（见下方）
-                    num = text.split()[0] if text else ""
-                    dot_count = num.count(".")
-                    is_valid = True
-                    anchor_prefix = None  # 三级标题的前缀锚定（如 1.3.4 → 1.3）
-                    if dot_count >= 2:
-                        is_valid = False
-                        # P1-2 单元2：三级标题不进 section，但锚定编号前缀——
-                        # 1.3.4 → 前缀 1.3，用它更新二级栈（保持一级 1），
-                        # 让三级标题下跨页正文能定位到二级 section。
+                        # 锚定前缀（1.3.4 → 1.3），让三级标题下跨页正文保持二级 section
                         anchor_prefix = ".".join(num.split(".")[:-1])
-                    elif _is_chapter or _is_section:
-                        _after_num = text[len(num):].strip()
-                        if _after_num and not re.match(r"[一-鿿]", _after_num[0]):
-                            is_valid = False
-                    # P1-2 单元3：目录权威骨架校验——一二级编号必须在 TOC 里，
-                    # 在 TOC 则用 TOC 的权威标题覆盖 MinerU 标题（习题 9.6 已知某流场→9.6 液体运动的连续性方程），
-                    # 不在（习题题目/页眉误判）则判为正文，不进 section
-                    if is_valid and toc_map and dot_count <= 1:
-                        num_clean = re.match(r"^(\d+(?:\.\d+)?)", text)
-                        if num_clean:
-                            num_key = num_clean.group(1)
-                            if num_key in toc_map:
-                                toc_title, toc_level = toc_map[num_key]
-                                # 用 TOC 权威标题 + level 覆盖
-                                text = f"{num_key} {toc_title}"
-                                heading_level = toc_level
-                            else:
-                                is_valid = False
-                    if is_valid:
-                        if heading_level == 1 and not stack_touched:
-                            section_stack.clear()
-                            stack_touched = True
-                        etype = ElementType.HEADING
+                        if stack_touched:
+                            if anchor_prefix in toc_map and toc_map[anchor_prefix][1] == 2:
+                                section_stack = section_stack[:1]
+                                section_stack.append(f"{anchor_prefix} {toc_map[anchor_prefix][0]}")
+                            elif len(section_stack) >= 1:
+                                section_stack = section_stack[:1]
+                                section_stack.append(anchor_prefix)
+                    # 一二级编号 → 进 section
+                    elif num_level in (1, 2):
+                        # 目录权威骨架校验：编号必须在 TOC，且用 TOC 权威标题覆盖
+                        if toc_map and num in toc_map:
+                            toc_title, toc_level = toc_map[num]
+                            text = f"{num} {toc_title}"
+                            heading_level = toc_level
+                        elif toc_map and num not in toc_map:
+                            # 编号不在 TOC（习题/页眉误判）→ 正文
+                            etype = ElementType.PARAGRAPH
+                            heading_level = None
+                        else:
+                            heading_level = num_level
                         if heading_level in (1, 2):
+                            if heading_level == 1 and not stack_touched:
+                                section_stack.clear()
+                                stack_touched = True
+                            etype = ElementType.HEADING
                             if heading_level <= len(section_stack):
                                 section_stack = section_stack[: heading_level - 1]
                             section_stack.append(_normalize_section_title(text.split("\n")[0].strip()))
-                    else:
-                        etype = ElementType.PARAGRAPH
-                        heading_level = None
-                        # P1-2 单元2：三级标题锚定前缀——用前缀（如 1.3）更新二级栈，
-                        # 让三级标题下跨页正文 section = 一级/二级（不退化）
-                        if anchor_prefix and stack_touched:
-                            if anchor_prefix in toc_map and toc_map[anchor_prefix][1] == 2:
-                                # 前缀是二级标题，用 TOC 权威标题
-                                section_stack = section_stack[:1]  # 保留一级
-                                section_stack.append(f"{anchor_prefix} {toc_map[anchor_prefix][0]}")
-                            elif len(section_stack) >= 1:
-                                # 前缀不在 TOC，用编号本身锚定
-                                section_stack = section_stack[:1]
-                                section_stack.append(anchor_prefix)
                 else:
                     # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
                     # — 短文本（≤15字）+ 纯中文（无数字/括号/标点）作为一级标题
