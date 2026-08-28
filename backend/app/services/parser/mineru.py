@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from app.core.config import settings
@@ -434,6 +435,18 @@ def _norm_mineru_text(text: str) -> str:
     t = text.strip()
     t = re.sub(r"(?<=[㐀-鿿])\s+(?=[㐀-鿿])", "", t)  # 中文间空格
     t = re.sub(r"(?<=\d)\s*-\s*(?=\d)", "-", t)  # 日期连字符
+    # 小数空格合并：MinerU 把公式里的小数拆散成「2 . 5」「0 . 9 5」。
+    # 只合并「点号两侧都有空格」的小数点（说明是被拆散的），并继续合并小数点
+    # 右侧被空格拆散的各位数字（0 . 9 5 → 0.95）。
+    # 守卫：点号前必须是数字（lookbehind）；正常小数（3.4，点两侧无空格）不动；
+    #       列表项「1. 2」/ 编号「9.4. 3」（点前无空格）不动。
+    # 不碰「整数拆散」（13 → 1 3）：数字+空格+数字 的假阳性太多（页码+章节号、
+    # 编号列表），无法安全区分，风险过高。
+    t = re.sub(
+        r"(?<=\d)\s+\.\s+\d(?:\s+\d)*",
+        lambda m: re.sub(r"\s+", "", m.group(0)),
+        t,
+    )
     t = re.sub(r"^(表\s*\d+)", lambda m: m.group(1).replace(" ", ""), t)  # 表 1 → 表1
     return t
 
@@ -540,6 +553,13 @@ def adapt_mineru_output(
                 cap = _norm_mineru_text(cap)
                 if cap:
                     text = cap
+            # 单元 A 补漏：caption 也为空时，在 IR 层生成可检索占位「图 pXX」。
+            # 此前占位只在 blocks 兼容层（mineru_to_blocks）生成，但切片走 elements 层，
+            # 空 figure 被 _atoms_from_elements 跳过 → 占位从未进检索，还触发完整性误报。
+            if not text.strip():
+                pidx = raw.get("page_idx")
+                page_no = pidx + 1 if isinstance(pidx, int) else None
+                text = f"图 p{page_no}" if page_no else "图"
             # P1-2 单元5补充：图注含行内公式时也清理 LaTeX（如「(a) $0<t<\frac{L}{a}$」）
             if text and ("$" in text or "\\" in text):
                 text = _clean_latex(text)
@@ -741,7 +761,12 @@ def adapt_mineru_output(
 
 
 def mineru_to_blocks(elements: list["DocumentElement"]) -> list["ParsedBlock"]:
-    """IR elements → ParsedBlock（兼容层：保证旧 chunker 链路不破坏）。"""
+    """IR elements → ParsedBlock（兼容层：保证旧 chunker 链路不破坏）。
+
+    单元 A（图片检索）：figure 保留 block_type="figure"（不再降级 paragraph），
+    出处元数据（retriever 契约 text/table/formula/figure）从此真正有 figure 值；
+    无图注的图片生成「图 pXX」可检索占位，避免空文本块在切片/合并阶段被丢弃。
+    """
     from app.services.parser.base import ParsedBlock
 
     blocks: list[ParsedBlock] = []
@@ -750,6 +775,14 @@ def mineru_to_blocks(elements: list["DocumentElement"]) -> list["ParsedBlock"]:
             btype = "heading"
         elif el.type.value == "table":
             btype = "table"
+        elif el.type.value == "figure":
+            btype = "figure"
+            if not el.text.strip():
+                # 图片无图注/无识别文字 → 生成可检索占位（含来源页），
+                # 让「第X页那张图」类提问仍能定位到图片块。
+                # DocumentElement 冻结（不可变），用 replace 生成新对象，不改原 el。
+                page = f"p{el.page_start}" if el.page_start else ""
+                el = replace(el, text=f"图 {page}".strip())
         else:
             btype = "paragraph"
         section = "/".join(el.section_path) if el.section_path else None

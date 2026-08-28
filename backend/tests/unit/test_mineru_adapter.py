@@ -49,6 +49,23 @@ class TestNormText:
         """日期连字符归一。"""
         assert _norm_mineru_text("2023 - 11 - 14") == "2023-11-14"
 
+    def test_decimal_spaces_merged(self):
+        """单元 B：小数空格合并（2 . 5 → 2.5、0 . 9 5 → 0.95）。"""
+        assert _norm_mineru_text("H = 0 . 5 m") == "H = 0.5 m"
+        assert _norm_mineru_text("0 . 9 5 × 1 . 3 3") == "0.95 × 1.33"
+        assert _norm_mineru_text("t_s = 2 . 4 q") == "t_s = 2.4 q"
+
+    def test_decimal_spaces_not_overmerge(self):
+        """单元 B 防误伤：正常小数/列表项/编号/章节号不动。"""
+        # 正常小数（点两侧无空格）不动
+        assert _norm_mineru_text("深 h 为 3.6m") == "深 h 为 3.6m"
+        # 列表项「1. 2」（点前无空格）不动
+        assert _norm_mineru_text("1. 总压力") == "1. 总压力"
+        # 编号+章节号（点前无空格，如 7.2.4）不动
+        assert _norm_mineru_text("22 7.2.4 工控网") == "22 7.2.4 工控网"
+        # 中文句号不是小数点（点两侧无空格）不动
+        assert _norm_mineru_text("第 3.4 节") == "第 3.4 节"
+
 
 class TestTableParse:
     def test_parse_table_html_rows(self):
@@ -107,10 +124,10 @@ class TestAdapt:
         assert titled and titled[0].bbox == (120.0, 90.0, 880.0, 130.0)
 
     def test_figure_mapped(self, content_list, middle):
-        """image → FIGURE。"""
+        """image → FIGURE，无图注时 IR 层生成可检索占位「图 pXX」。"""
         elements = adapt_mineru_output(content_list, middle)
         figs = [e for e in elements if e.type == ElementType.FIGURE]
-        assert figs and figs[0].text == ""
+        assert figs and figs[0].text == "图 p2"  # fixture page_idx=1 → 页 2
 
     def test_elements_validate(self, content_list, middle):
         """整体过 IR validator。"""
@@ -137,6 +154,29 @@ class TestBlocksCompat:
         # 标题块是块，非表格
         headings = [b for b in blocks if b.block_type == "heading"]
         assert any("1.1" in b.text for b in headings)
+
+    def test_figure_keeps_block_type(self, content_list, middle):
+        """单元 A：figure 保留 block_type="figure"，不再降级 paragraph。"""
+        elements = adapt_mineru_output(content_list, middle)
+        blocks = mineru_to_blocks(elements)
+        figs = [b for b in blocks if b.block_type == "figure"]
+        assert figs, "图元素应保留 figure 类型"
+
+    def test_figure_without_caption_gets_placeholder(self, content_list, middle):
+        """单元 A：无图注的图片生成「图 pXX」占位，不再产生空文本块。"""
+        elements = adapt_mineru_output(content_list, middle)
+        blocks = mineru_to_blocks(elements)
+        figs = [b for b in blocks if b.block_type == "figure"]
+        assert figs and all(b.text.strip() for b in figs), "图片块文本不得为空"
+
+    def test_figure_placeholder_survives_into_chunks(self, content_list, middle):
+        """单元 A 补漏：figure 占位必须穿过 parent-child 切片进 chunk（此前空 figure 被跳过）。"""
+        from app.services.chunking.parent_child import build_parent_child
+
+        elements = adapt_mineru_output(content_list, middle)
+        pc = build_parent_child(elements, blocks=[])
+        blob = " ".join(c.content for c in pc)
+        assert "图 p2" in blob, "figure 占位文本应出现在切片中"
 
 
 class TestCleanLatex:

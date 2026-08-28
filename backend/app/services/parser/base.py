@@ -23,7 +23,7 @@ class ParsedBlock:
     text: str
     section: str | None = None  # 章节路径，如 "第三章 明渠恒定流 / 3.1 均匀流"
     page: int | None = None     # 来源页码（1 起）
-    block_type: str = "paragraph"  # paragraph / heading / table
+    block_type: str = "paragraph"  # paragraph / heading / table / figure
 
     def to_element(
         self,
@@ -45,6 +45,8 @@ class ParsedBlock:
             etype = ElementType.HEADING
         elif btype == "table":
             etype = ElementType.TABLE
+        elif btype == "figure":
+            etype = ElementType.FIGURE
         else:
             etype = ElementType.PARAGRAPH
 

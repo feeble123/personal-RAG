@@ -199,6 +199,14 @@ class StructureAwareChunker:
                     chunks.append(t)
                 continue
 
+            if block.block_type == "figure":
+                flush()
+                # 图片单独成块；标记 block_type=figure（出处元数据），与 table 同等待遇。
+                # 图片块文本短（图注/占位），不参与正文 buffer 合并，保证块类型不丢失。
+                for f in self._emit(block.text, current_section, page, block_type="figure"):
+                    chunks.append(f)
+                continue
+
             # 普通段落
             if buffer and page != buffer_page:
                 flush()  # 页边界：内容不跨页合并，chunk 页号准确（第 27 页不再被吞进 28）
@@ -262,7 +270,11 @@ def merge_tiny_chunks(chunks: list[Chunk], min_len: int = 40) -> list[Chunk]:
 
     out: list[Chunk] = []
     for c in chunks:
-        if out and len(out[-1].content) < min_len and out[-1].section == c.section:
+        # 图片块独立不合并：figure 是独立语义单元（图注/占位），合并进正文会丢块类型
+        if out and out[-1].block_type == "figure":
+            out.append(c)
+            continue
+        if out and len(out[-1].content) < min_len and out[-1].section == c.section and c.block_type != "figure":
             prev = out.pop()
             body = _body(prev) + "\n" + _body(c)
             content = _section_prefix(c.section) + body if c.section else body
