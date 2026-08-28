@@ -88,6 +88,10 @@ async def lifespan(app: FastAPI):
     settings.upload_dir_path.mkdir(parents=True, exist_ok=True)
     settings.quarantine_dir_path.mkdir(parents=True, exist_ok=True)
     settings.chroma_dir_path.mkdir(parents=True, exist_ok=True)
+    # 单元 D：启动时清理 Chroma 残留孤儿 HNSW 目录（delete 后句柄未释放，只能在启动时安全 move）
+    from app.services import vector_store
+
+    vector_store.gc_orphan_hnsw_dirs()
     # 建表 + 种子 + 预热 + 清空语义缓存（防旧检索答案残留劫持新检索）
     await init_db()
     # P0-6：检查迁移版本是否 head（只检查不自动迁移）；P2 单元1 异步化（PG 兼容）

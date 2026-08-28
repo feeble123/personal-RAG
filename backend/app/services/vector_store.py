@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import sqlite3
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import chromadb
@@ -198,6 +201,70 @@ def drop_shadow() -> None:
         client.delete_collection(shadow)
     except Exception:  # 不存在时忽略
         pass
+
+
+def gc_orphan_hnsw_dirs() -> int:
+    """清理 Chroma 残留的孤儿 HNSW 索引目录（治本：防重灌累积垃圾）。
+
+    背景：`delete_collection` 只删 chroma.sqlite3 里的登记记录，不删磁盘上的
+    旧 HNSW 索引目录，每次重灌都留下 ~10MB 孤儿，越攒越多（实测一度 22 个 211MB）。
+
+    挂载点（重要）：在**应用启动时**调用（lifespan），而非 `delete_collection` 之后。
+    因为 Windows 上 Chroma 删除 collection 后 HNSW 文件句柄不会立即释放，紧跟着
+    move 旧目录会撞 `WinError 32`（实测）。启动时不存在刚发生的 delete，历史孤儿
+    的句柄早已释放，move 才安全。
+
+    安全策略（绝不碰 active 索引）：
+    1. 以 chroma.sqlite3 的 segments 表为唯一权威，取出当前 VECTOR scope 的
+       segment id（active 索引目录名 == segment id）。
+    2. 只把「磁盘上存在、但 segments 表里没有」的 HNSW 目录**移到**回收区
+       （`<chroma_dir>/../_chroma_gc_backup/`），而非 rm——可恢复。
+    3. active 目录一律跳过。
+
+    返回移走的目录数量（0 表示无残留）。
+    """
+    chroma_dir = Path(settings.chroma_dir_path)
+    if not chroma_dir.is_dir():
+        return 0
+
+    # 1) 从登记簿取 active VECTOR segment id（可能为空，例如刚初始化无索引）
+    sqlite_path = chroma_dir / "chroma.sqlite3"
+    if not sqlite_path.is_file():
+        return 0  # 尚无登记簿（新库/测试临时目录），无残留可清
+    active_ids: set[str] = set()
+    try:
+        con = sqlite3.connect(f"file:{sqlite_path.as_posix()}?mode=ro", uri=True)
+        try:
+            cur = con.cursor()
+            cur.execute("SELECT id FROM segments WHERE scope = 'VECTOR'")
+            active_ids = {row[0] for row in cur.fetchall()}
+        finally:
+            con.close()
+    except Exception as exc:  # 登记簿不可读时不做任何删除，安全失败
+        logger.warning("GC 读取 chroma.sqlite3 失败，跳过残留清理: %s", exc)
+        return 0
+
+    # 2) 扫描 HNSW 目录（特征文件 data_level0.bin），分类孤儿
+    backup_root = chroma_dir.parent / "_chroma_gc_backup"
+    moved = 0
+    for entry in sorted(chroma_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        # 只认 HNSW 索引目录：必须含 data_level0.bin，且目录名是 UUID
+        if not (entry / "data_level0.bin").is_file():
+            continue
+        if entry.name in active_ids:
+            continue  # active 索引，绝不碰
+        # 孤儿：移到回收区（跨盘可能 fallback 到复制+删除）
+        try:
+            backup_root.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(entry), str(backup_root / entry.name))
+            moved += 1
+            logger.info("GC 移走孤儿 HNSW 目录: %s", entry.name)
+        except Exception as exc:
+            logger.warning("GC 移走 %s 失败，保留原样: %s", entry.name, exc)
+
+    return moved
 
 
 def upsert_vectors(
