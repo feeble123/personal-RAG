@@ -16,6 +16,9 @@ from app.services.parser.mineru import (
     mineru_to_blocks,
     _norm_mineru_text,
     _parse_table_html,
+    _clean_latex,
+    _extract_toc_map,
+    _parse_numbered_heading,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "evaluation" / "fixtures"
@@ -134,3 +137,101 @@ class TestBlocksCompat:
         # 标题块是块，非表格
         headings = [b for b in blocks if b.block_type == "heading"]
         assert any("1.1" in b.text for b in headings)
+
+
+class TestCleanLatex:
+    def test_tag_to_paren(self):
+        """\\tag{3.15} → (3.15)。"""
+        assert _clean_latex(r"Q = A_1 v_1 = A_2 v_2\tag{3.15}") == "Q = A_1 v_1 = A_2 v_2 (3.15)"
+
+    def test_begin_end_array_removed(self):
+        """\\begin{array}{ll} 环境被清理，无 \\\\ 和 & 残留。"""
+        out = _clean_latex(r"\begin{array}{l l} f x = F x / m \\ f y = F y / m \end{array}")
+        assert "\\array" not in out
+        assert "\\begin" not in out
+        assert "\\end" not in out
+        assert "\\\\" not in out
+        assert "&" not in out
+        assert "f x = F x / m" in out
+
+    def test_subscript_superscript_preserved(self):
+        """下标/上标保留且紧凑化：A _ { 1 } → A_1。"""
+        assert _clean_latex(r"F _ { \mathrm { p } } = \rho g h") == "F_p = ρ g h"
+        assert _clean_latex(r"L ^ { \alpha }") == "L^α"
+
+    def test_frac_tag_combined(self):
+        """\\frac + \\tag 组合正确。"""
+        out = _clean_latex(r"$$\rho = \frac{m}{V}\tag{1.3}$$")
+        assert "(1.3)" in out
+        assert "ρ" in out
+
+    def test_escaped_vertical_bar_removed(self):
+        """转义竖线 \\| 是噪声（绝对值/分数线 OCR 误识别），清洗后不残留反斜杠。"""
+        out = _clean_latex(r"p^′ = p_\|")
+        assert "\\" not in out
+        assert "\\|" not in out
+
+    def test_escaped_punctuation_restored(self):
+        """转义标点 \\~ \\% \\_ \\^ 还原成本字符；反斜杠+空格清掉（回归「公式乱码」）。"""
+        assert _clean_latex(r"0.5\~1.0m") == "0.5~1.0m"
+        assert _clean_latex(r"4 \% 温度") == "4 % 温度"
+        assert _clean_latex(r"p_2 \_- 2") == "p_2_- 2"
+        assert _clean_latex(r"x\^2") == "x^2"
+        assert _clean_latex(r"a\ b") == "a b"
+
+    def test_varrho_greek(self):
+        """希腊字母变体 \\varrho → ρ。"""
+        assert _clean_latex(r"\varrho g h") == "ρ g h"
+
+
+class TestExtractToc:
+    def test_two_dot_ellipsis_extracted(self):
+        """两点的省略号行（……28）也提取（此前 {3,} 漏掉）。"""
+        content = [{
+            "type": "text",
+            "text": (
+                "1 绪论1\n"
+                "1.1 水力学的任务与研究对象…………………1\n"
+                "1.2 水力学发展简史……2\n"
+                "2 水静力学……19\n"
+                "2.3 重力作用下静水压强的基本公式……28\n"
+                "2.4 重力和惯性力同时作用下的液体平衡……35\n"
+                "3.4 恒定总流的能量方程……74\n"
+            ),
+        }]
+        toc = _extract_toc_map(content)
+        assert "2.3" in toc
+        assert toc["2.3"] == ("重力作用下静水压强的基本公式", 2)
+        assert "3.4" in toc
+        assert toc["3.4"] == ("恒定总流的能量方程", 2)
+
+    def test_level3_excluded(self):
+        """三级编号不进 TOC。"""
+        content = [{
+            "type": "text",
+            "text": (
+                "1 绪论1\n"
+                "1.1 任务……1\n"
+                "1.2 历史……2\n"
+                "1.3 性质……5\n"
+                "1.1.1 子节……2\n"
+                "1.4 概念……13\n"
+            ),
+        }]
+        toc = _extract_toc_map(content)
+        assert "1.1" in toc
+        assert "1.1.1" not in toc
+
+
+class TestParseNumberedHeading:
+    def test_list_item_rejected(self):
+        """列表项「1. 总压力的大小」不是章标题。"""
+        assert _parse_numbered_heading("1. 总压力的大小") is None
+
+    def test_chapter_heading_accepted(self):
+        """「3.1 描述液体运动的方法」是二级标题。"""
+        assert _parse_numbered_heading("3.1 描述液体运动的方法") == ("3.1", 2)
+
+    def test_date_rejected(self):
+        """「1979年2月」不是标题。"""
+        assert _parse_numbered_heading("1979年2月") is None

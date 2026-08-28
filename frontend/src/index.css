@@ -200,6 +200,23 @@ body {
   margin: 8px 0;
 }
 
+/* KaTeX 公式防溢出：公式是一串不可断行的 span，word-break 对它们无效，
+   超长公式（如带分数/上下标的流体力学公式）会硬撑破气泡。
+   - 独立公式（$$...$$ → .katex-display）：整块横向滚动，绝不撑破气泡
+   - 行内公式（$...$ → .katex）：溢出时按字符断行兜底（overflow-wrap 只在放不下时生效，
+     正常短公式零影响，不会像 word-break 那样把分数从中间劈开） */
+.msg-bubble .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 2px;
+  max-width: 100%;
+  scrollbar-width: thin;
+}
+.msg-bubble .katex {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 /* Markdown 排版（回答层次感：标题加粗加大 / 列表 / 表格，像 Word 分级） */
 .msg-bubble h1,
 .msg-bubble h2,

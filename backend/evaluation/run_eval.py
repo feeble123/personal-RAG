@@ -44,11 +44,22 @@ async def _resolve_kb(db, name: str) -> int | None:
 
 
 async def _rebuild_bm25(db) -> int:
-    """评测前重建全部库 BM25 语料（进程内内存索引，须显式预热才可复现）。"""
-    from app.services import bm25
-    from app.db.models import Chunk
+    """评测前重建全部库 BM25 语料（进程内内存索引，须显式预热才可复现）。
 
-    rows = (await db.execute(select(Chunk.kb_id, Chunk.id, Chunk.content))).all()
+    P1-2 单元2：只保留 active 版本切片。重灌后旧版本标记 retired 但 chunk 行仍留库，
+    若连 retired 一起灌进 BM25，评测就会命中旧垃圾切片，指标与生产真实配置（只索引
+    active）不一致。
+    """
+    from app.services import bm25
+    from app.db.models import Chunk, Document
+
+    rows = (
+        await db.execute(
+            select(Chunk.kb_id, Chunk.id, Chunk.content)
+            .join(Document, Chunk.doc_id == Document.id)
+            .where(Chunk.document_version_id == Document.active_version_id)
+        )
+    ).all()
     grouped: dict[int, list[tuple[int, str]]] = {}
     for kid, cid, content in rows:
         grouped.setdefault(kid, []).append((cid, content))

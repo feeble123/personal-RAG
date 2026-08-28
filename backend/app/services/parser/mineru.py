@@ -260,7 +260,8 @@ def _extract_toc_map(content_list: list[dict]) -> dict[str, tuple[str, int]]:
         # 两类行：
         # A) 带省略号：编号 + 标题 + …页码（1.1 水力学的任务…………………1）
         # B) 章标题无省略号：编号 + 空格 + 中文标题 + 页码（1 绪论1、2水静力学……19）
-        m = re.match(r"^(\d+(?:\.\d+)*)\s*(.*?)\s*[\.·…]{3,}\s*\d+\s*$", line)
+        # 省略号数量 OCR 不稳定（2个～6个点），用 {2,} 而非 {3,} 兜住「……28」这类两点的行
+        m = re.match(r"^(\d+(?:\.\d+)*)\s*(.*?)\s*[\.·…]{2,}\s*\d+\s*$", line)
         if m:
             num = m.group(1).strip()
             title = m.group(2).strip()
@@ -330,7 +331,8 @@ def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
     """统一解析编号标题，返回 (编号, 层级) 或 None。
 
     编号 → 层级：`1`→1、`1.3`→2、`1.3.4`→3（层级 = 点号数 + 1）。
-    只认「数字(点数字)*」开头的标题，编号后必须是中文（过滤公式 1 -mu²、列表项 1.）。
+    只认「数字(点数字)*」开头的标题，编号后必须是中文。
+    过滤：公式（1 -mu²）、列表项（1. 总压力）、日期（1979年2月）。
     """
     import re
 
@@ -344,6 +346,11 @@ def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
     if not m:
         return None
     num = m.group(1)
+    # 列表项守卫：单数字编号后紧跟点号（如「1. 总压力的大小」）→ 列表项，非章标题
+    if num.count(".") == 0:
+        after_num = t[m.end(1):]
+        if re.match(r"^\s*\.", after_num):
+            return None
     # 公式守卫：编号后的标题文本含数学符号则不是标题
     title_part = t[m.end(1):]
     if any(c in title_part for c in "φ√αβγμρΣ∫→=+∂∇∮"):
@@ -357,24 +364,38 @@ def _clean_latex(text: str) -> str:
 
     $$\rho = \frac{m}{V}\tag{1.3}$$ → ρ = m/V (1.3)
     保留希腊字母、运算符和编号，去掉 LaTeX 命令与定界符。
-    处理下标 _ 上标 ^ 和花括号 {}，数字间多余空格合并。
+    保留下标 _ 和上标 ^（可检索可见）；\tag{...} → (...)。
+    兜底清洗 LaTeX 转义标点（\| \~ \% \_ \^ \* \\空格）——这些「反斜杠+非字母」
+    不是命令，旧正则捕不到，会残留成「\| \|_\|_」乱码。
     """
     import re
 
     if not text:
         return ""
     t = text.strip()
-    # 1) 替换 LaTeX 命令为对应符号（\rho→ρ、\frac→/、\mathrm→空 等）
+    # 0) 移除 \begin{...} 和 \end{...} 环境（含参数，如 \begin{array}{ll}）
+    t = re.sub(r"\\begin\{[^}]*\}", " ", t)
+    t = re.sub(r"\\end\{[^}]*\}", " ", t)
+    # 1) \tag{...} → ( ... ) 先处理（避免花括号被后续步骤剥离后丢失括号）
+    #    前面加空格：`v_2\tag{3.15}` → `v_2 (3.15)`，编号不与公式粘连
+    t = re.sub(r"\\tag\s*\{([^}]*)\}", r" (\1)", t)
+    # 2) 替换 LaTeX 命令为对应符号（\rho→ρ、\frac→/、\mathrm→空 等）
     t = re.sub(r"\\[a-zA-Z]+", lambda m: _LATEX_GREEK.get(m.group(0), " "), t)
-    # 2) 去掉花括号（{0} → 0），但保留内容
+    # 2.5) 转义标点兜底：反斜杠 + 非字母（\| \~ \% \_ \^ \* \; \: \空格）。
+    #       第 2 步只捕「反斜杠+字母」命令，这些特殊字符的 LaTeX 转义捕不到，
+    #       原样残留成「\| \|_\|_」乱码。有检索含义的还原成本字符（% ~ _ ^），
+    #       纯噪声/空格命令（\| \* \; \:）替换成空格。
+    _latex_esc = {"%": "%", "~": "~", "_": "_", "^": "^"}
+    t = re.sub(r"\\([%~_^|*;:])", lambda m: _latex_esc.get(m.group(1), " "), t)
+    t = re.sub(r"\\ ", " ", t)  # 反斜杠+空格（强制空格）
+    # 3) 去掉花括号（{0} → 0），但保留内容
     t = t.replace("{", "").replace("}", "")
-    # 3) 去掉行内/行间定界符 $
+    # 3.5) 紧凑化下标/上标：`A _ { 1 }` → `A_1`、`L ^ { 2 }` → `L^2`（去 _/^ 前后空格）
+    t = re.sub(r"\s*([_^])\s*", r"\1", t)
+    # 4) 去掉行内/行间定界符 $
     t = t.replace("$", " ")
-    # 4) 下标 _ 上标 ^：去掉孤立的下划线/脱字符，紧跟的内容连写（p_0 → p0）
-    #    但保留「_」和「^」作为「下标/上标」语义时，直接删除更可检索
-    t = t.replace("_", "").replace("^", "")
-    # 5) 数字间多余空格合并（1 1 2 → 112）：连续数字被空格分隔时合并
-    t = re.sub(r"(?<=\d)\s+(?=\d)", "", t)
+    # 5) 清理 LaTeX 表格对齐符 & 和换行符 \\（array 环境残留）
+    t = t.replace("\\\\", " ").replace("&", " ")
     # 6) 压缩连续空格
     t = re.sub(r"\s+", " ", t).strip()
     return t
@@ -393,6 +414,7 @@ _LATEX_GREEK = {
     "\\left": "", "\\right": "", "\\overline": "", "\\underline": "",
     "\\begin": "", "\\end": "", "\\tag": " ", "\\text": "",
     "\\varOmega": "Ω", "\\varepsilon": "ε", "\\varphi": "φ", "\\prime": "′",
+    "\\varrho": "ρ", "\\varpi": "ϖ", "\\varsigma": "ς",
     "\\qquad": " ", "\\quad": " ", "\\limits": "", "\\displaystyle": "",
 }
 
@@ -579,18 +601,26 @@ def adapt_mineru_output(
                             etype = ElementType.HEADING
                             if heading_level <= len(section_stack):
                                 section_stack = section_stack[: heading_level - 1]
+                            # P1-2 单元4修复：跨章二级标题（如 3.1）自动将一级更新为对应章
+                            # MinerU 把页眉放在正文之后——3.1 出现在 header「3 液体运动的流束理论」之前，
+                            # 此时栈中一级仍是「2 水静力学」，形成混乱的「2 水静力学 / 3.1」。
+                            # 修复：二级标题检测到章号不匹配时，从 TOC 查找并更新一级。
+                            if heading_level == 2 and parsed and num_level == 2:
+                                chapter_num = num.split(".")[0]
+                                if toc_map and chapter_num in toc_map:
+                                    chapter_title = f"{chapter_num} {toc_map[chapter_num][0]}"
+                                    if not section_stack:
+                                        section_stack = [chapter_title]
+                                    elif section_stack[0].split()[0] != chapter_num:
+                                        section_stack[0] = chapter_title
                             section_stack.append(_normalize_section_title(text.split("\n")[0].strip()))
                 else:
-                    # 非编号但像标题的文本（如「思考题」「习题」「参考文献」）
-                    # — 短文本（≤15字）+ 纯中文（无数字/括号/标点）作为一级标题
+                    # 非编号标题（如「思考题」「习题」「参考文献」「附录」）——
+                    # 它们是章节附属标记，不是一二级大纲，**不进 section**（用户要求 section 只含一二级）。
+                    # 保留为 HEADING（前端目录可显示、切片作边界），但 section_path 维持当前栈不变。
                     if len(text) <= 15 and heading_level in (1, 2) and re.match(r"^[一-鿿\s]+$", text):
                         etype = ElementType.HEADING
-                        if heading_level == 1 and not stack_touched:
-                            section_stack.clear()
-                            stack_touched = True
-                        if heading_level <= len(section_stack):
-                            section_stack = section_stack[: heading_level - 1]
-                        section_stack.append(_normalize_section_title(text.split("\n")[0].strip()))
+                        # 不更新 section_stack：习题/思考题/参考文献 不属于一二级大纲
                     else:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
@@ -627,14 +657,25 @@ def adapt_mineru_output(
                         heading_level = inferred_level
                         if heading_level == 1:
                             stack_touched = True
-                            # 一级标题：只更新第 0 层，保留二级（第 1 层）
+                            # 一级页眉：只更新第 0 层，保留二级（同章跨页不清 1.3）；
+                            # 但章号变了要清掉旧章二级（10 渗流 不再挂 9.1）。
                             if not section_stack:
                                 section_stack = [key]
                             else:
-                                section_stack[0] = key
+                                old_chapter = section_stack[0].split()[0] if section_stack[0] else ""
+                                new_chapter = key.split()[0] if key else ""
+                                if old_chapter and new_chapter and old_chapter != new_chapter:
+                                    section_stack = [key]
+                                else:
+                                    section_stack[0] = key
                         elif heading_level == 2:
                             stack_touched = True
-                            # 二级标题：更新第 1 层（若存在），保留一级
+                            # 二级页眉：更新第 1 层，保留一级；章号不符时用 TOC 校正一级
+                            new_chapter = key.split(".")[0] if "." in key else key.split()[0]
+                            if len(section_stack) >= 1 and section_stack[0].split()[0] != new_chapter:
+                                # 二级页眉所属章与一级栈不符：从 TOC 校正一级
+                                if toc_map and new_chapter in toc_map:
+                                    section_stack[0] = f"{new_chapter} {toc_map[new_chapter][0]}"
                             if len(section_stack) < 1:
                                 section_stack = [key]
                             elif len(section_stack) < 2:

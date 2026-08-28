@@ -713,7 +713,18 @@ async def _hydrate(
         )
     ).all()
     by_id: dict[int, tuple[Chunk, Document]] = {}
+    # P1-2 单元1（纵深防御）：只认 active 版本的 chunk 为证据。
+    # 索引（Chroma/BM25）只该含 active，但历史 bug（如 BM25 预热灌全量）会把 retired
+    # 版本的 chunk_id 顶进 ranked。此处按 doc.active_version_id 兜底拦截——旧版本内容
+    # 绝不作为答案依据，防止「重灌后问答仍命中旧垃圾切片/空公式」这类问题再犯。
+    active_version_ids = {
+        doc.id: doc.active_version_id
+        for chunk, doc in rows
+        if doc.active_version_id is not None
+    }
     for chunk, doc in rows:
+        if chunk.document_version_id != active_version_ids.get(doc.id):
+            continue
         by_id[chunk.id] = (chunk, doc)
 
     order = {cid: i for i, cid in enumerate(ids)}

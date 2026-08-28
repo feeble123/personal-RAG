@@ -50,15 +50,21 @@ async def _warmup_bm25() -> None:
     try:
         from sqlalchemy import select
 
-        from app.db.models import Chunk
+        from app.db.models import Chunk, Document
         from app.services import bm25
         # jieba 默认 DEBUG 级并自带无格式 stderr handler，启动时刷屏「分词词典加载」日志；
         # 提到 WARNING 让启动日志干净。注意必须在 import 之后设置（jieba import 时强制回 DEBUG）。
         logging.getLogger("jieba").setLevel(logging.WARNING)
 
         async with async_session_factory() as db:
+            # P1-2 修复：只保留 active 版本的切片。文档重灌后旧版本标记 retired，
+            # 但 chunk 行仍留在 DB（回滚保险）；BM25 若把它们也灌进内存，检索会把
+            # 旧版本的垃圾 section / 空公式顶进数据源（用户实测公式(9.95)命中 retired 旧块）。
             rows = await db.execute(
-                select(Chunk.kb_id, Chunk.id, Chunk.content).order_by(Chunk.id)
+                select(Chunk.kb_id, Chunk.id, Chunk.content)
+                .join(Document, Chunk.doc_id == Document.id)
+                .where(Chunk.document_version_id == Document.active_version_id)
+                .order_by(Chunk.id)
             )
             grouped: dict[int, list[tuple[int, str]]] = {}
             for kb_id, cid, content in rows:

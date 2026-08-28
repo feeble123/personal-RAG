@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 import { App, Avatar, Button, Space, Tag, Tooltip, Typography } from 'antd'
 import {
   CopyOutlined,
@@ -44,6 +44,15 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   const anyStreaming = useChatStore((s) => s.streaming)
   const { message: appMsg } = App.useApp()
 
+  // 公式定界符兜底：LLM 偶发输出 LaTeX 标准写法 \(...\) / \[...\]，而 remark-math
+  // 只认 $...$ / $$...$$。渲染前把前者归一化为后者，避免公式被当普通文字原样显示。
+  const markdown = useMemo(
+    () =>
+      msg.content.replace(/\\\[([\s\S]*?)\\\]/g, (_m, body) => `$$${body}$$`)
+        .replace(/\\\(([\s\S]*?)\\\)/g, (_m, body) => `$${body}$`),
+    [msg.content],
+  )
+
   const onCopy = async () => {
     try {
       await navigator.clipboard.writeText(msg.content)
@@ -86,7 +95,7 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
             <Typography.Text style={{ color: '#fff', whiteSpace: 'pre-wrap' }}>{msg.content}</Typography.Text>
           ) : msg.content ? (
             <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-              {msg.content}
+              {markdown}
             </ReactMarkdown>
           ) : streaming ? (
             <span className="think-dots" aria-label="正在思考">

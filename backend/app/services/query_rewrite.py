@@ -19,6 +19,16 @@ _REFERENCE = re.compile(
 )
 # 短句阈值：超过该长度视为自带主题的独立问题，不强行合并
 _SHORT_LEN = 24
+# 明确主题锚点：问句点名文档结构级编号（例题/习题/公式/章节号），自带可检索主题，
+# 不是需借上一轮主题的追问。
+# 例「例5.6为我详细讲解一下这道题」——「详细」虽命中追问触发词，但「例5.6」已点明主题，
+#   合并上一轮（如「公式(9.95)」）会把旧主题带进检索，例5.6 反而找不到。
+# 注意**不含条款号（第X条）**：条款是清单子项，常是「那第X条呢」式指代追问，不能误伤。
+_EXPLICIT_ANCHOR = re.compile(
+    r"(?:例题|习题|例)\s*\d"
+    r"|公式\s*[（(]?\s*\d"
+    r"|第\s*[0-9一二三四五六七八九十]+\s*[章节篇]"
+)
 # 纯问候/社交语：不做改写（避免跟在追问后误合并）
 _SOCIAL = re.compile(r"^(你好|您好|嗨|哈喽|在吗|谢谢|感谢|再见|拜拜|打扰了|早上好|下午好|晚上好)$")
 
@@ -30,6 +40,8 @@ def needs_followup_rewrite(query: str) -> bool:
         return False
     if _SOCIAL.match(q):
         return False  # 纯问候不改写
+    if _EXPLICIT_ANCHOR.search(q):
+        return False  # 点名例题/习题/公式/章节号 → 自带主题的独立问题，不改写
     if len(q) <= 4:
         return True  # 过短（如「还有呢」「那」）
     if len(q) <= _SHORT_LEN and _REFERENCE.search(q):

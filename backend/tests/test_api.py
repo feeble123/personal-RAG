@@ -1080,6 +1080,16 @@ def test_followup_rewrite():
     # 独立问题 → 不改写
     assert needs_followup_rewrite("水库汛期调度运用计划包含哪些内容？") is False
     assert rewrite_followup_query("水库汛期调度运用计划包含哪些内容？", prev) == "水库汛期调度运用计划包含哪些内容？"
+    # 明确主题锚点（例题/习题/公式/章节号）→ 自带主题，即使含「详细」等触发词也不改写
+    # 回归背景：P1-2 单元3「例5.6 找不到」——「详细」误触发追问改写，
+    # 把上一轮「公式(9.95)」旧主题拼进检索查询，带偏了例5.6 的切片。
+    assert needs_followup_rewrite("例5.6为我详细讲解一下这道题") is False
+    assert rewrite_followup_query("例5.6为我详细讲解一下这道题", "书中这个公式(9.95)是啥？我想看看公式") == "例5.6为我详细讲解一下这道题"
+    assert needs_followup_rewrite("公式9.95是什么") is False
+    assert needs_followup_rewrite("第3章讲了什么") is False
+    assert needs_followup_rewrite("习题3.2怎么做") is False
+    # 条款号（第X条）不是锚点，仍是「那第X条呢」式指代追问 → 仍需改写
+    assert needs_followup_rewrite("那第5条呢") is True
     # 纯问候 → 不改写
     assert needs_followup_rewrite("你好") is False
     assert needs_followup_rewrite("谢谢") is False

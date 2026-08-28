@@ -175,11 +175,18 @@ async def main(sample: int, kb_filter: str | None) -> int:
         golds = golds[:sample]
 
     async with async_session_factory() as db:
-        # 评测前重建 BM25（可复现）
+        # 评测前重建 BM25（可复现）。P1-2 单元2：只索引 active 版本，
+        # retired 旧切片不灌入，保证评测指标与生产真实配置一致。
         from app.services import bm25
-        from app.db.models import Chunk
+        from app.db.models import Chunk, Document
 
-        rows = (await db.execute(select(Chunk.kb_id, Chunk.id, Chunk.content))).all()
+        rows = (
+            await db.execute(
+                select(Chunk.kb_id, Chunk.id, Chunk.content)
+                .join(Document, Chunk.doc_id == Document.id)
+                .where(Chunk.document_version_id == Document.active_version_id)
+            )
+        ).all()
         grouped: dict[int, list[tuple[int, str]]] = {}
         for kid, cid, content in rows:
             grouped.setdefault(kid, []).append((cid, content))
