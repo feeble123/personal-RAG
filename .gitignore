@@ -19,6 +19,7 @@ backend/evaluation/report.json
 node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
 
 # IDE
 .idea/

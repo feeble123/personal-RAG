@@ -58,6 +58,18 @@ interface ChatState {
 }
 
 let msgSeq = 0
+// 流式会话身份证：每次 send/optimize 递增，旧流的回调据此识别「自己已过期」。
+// 切会话/新建/删除时会 abort 旧流，但 abort 生效是异步的——在生效前旧流可能仍触发
+// 回调，靠这个号把过期回调挡掉，杜绝 A 会话答案污染 B 会话。
+let streamSeq = 0
+
+// 作废进行中的流：abort + 领号作废。切会话/新建/删除/登出时调用——
+// abort 让 fetch 尽快停，streamSeq++ 让旧流尚未送达的 catch/finally 回调识别「已过期」
+// 而直接丢弃（否则旧流收尾可能污染新会话的 messages / streaming 状态）。
+const invalidateStream = (get: () => ChatState) => {
+  get().abortCtrl?.abort()
+  streamSeq++
+}
 
 export const useChatStore = create<ChatState>()((set, get) => ({
   conversations: [],
@@ -75,7 +87,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   currentId: null,
-  setCurrent: (id) => set({ currentId: id, history: [], historyLoaded: false, historyHasMore: false, messages: [] }),
+  setCurrent: (id) => {
+    invalidateStream(get) // 切会话先停掉旧流，避免 A 会话答案污染 B 会话
+    set({ currentId: id, history: [], historyLoaded: false, historyHasMore: false, messages: [], streaming: false, abortCtrl: null })
+  },
 
   history: [],
   historyLoaded: false,
@@ -97,9 +112,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   abortCtrl: null,
 
   newConversation: async () => {
+    invalidateStream(get) // 新建会话前停掉旧流
     const conv = await convApi.create()
     await get().refreshConversations()
-    set({ currentId: conv.id, history: [], historyLoaded: true, historyHasMore: false, messages: [] })
+    set({ currentId: conv.id, history: [], historyLoaded: true, historyHasMore: false, messages: [], streaming: false, abortCtrl: null })
     return conv.id
   },
 
@@ -109,10 +125,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
   },
 
   deleteConversation: async (id) => {
-    await convApi.remove(id)
     const { currentId } = get()
+    if (currentId === id) invalidateStream(get) // 删除当前会话先停旧流
+    await convApi.remove(id)
     await get().refreshConversations()
-    if (currentId === id) set({ currentId: null, history: [], messages: [] })
+    if (currentId === id) set({ currentId: null, history: [], messages: [], streaming: false, abortCtrl: null })
   },
 
   send: async (content, kbId, style) => {
@@ -121,6 +138,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (!convId || state.streaming || !content.trim()) return
 
     const abortCtrl = new AbortController()
+    const seq = ++streamSeq // 领号：作废任何还在跑的旧流回调
     set((s) => ({
       streaming: true,
       abortCtrl,
@@ -140,6 +158,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         style,
         signal: abortCtrl.signal,
         onEvent: (ev) => {
+          if (seq !== streamSeq) return // 过期流回调，丢弃（切会话后新流已领号）
           if (ev.event === 'citations') {
             citations = ev.data as Citation[]
             set((s) => {
@@ -215,6 +234,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         },
       })
     } catch (e) {
+      if (seq !== streamSeq) return // 过期流：收尾也丢弃，不污染新会话
       const aborted = abortCtrl.signal.aborted
       set((s) => {
         const msgs = [...s.messages]
@@ -229,6 +249,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         return { messages: msgs }
       })
     } finally {
+      if (seq !== streamSeq) return // 过期流：不覆盖新流的 streaming/abortCtrl 状态
       set({ streaming: false, abortCtrl: null })
       // 刷新会话侧栏（标题自动生成 + last_message_at 排序）
       await get().refreshConversations()
@@ -241,6 +262,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (!convId || state.streaming || !messageId) return
 
     const abortCtrl = new AbortController()
+    const seq = ++streamSeq // 领号：作废旧流回调
     set((s) => ({
       streaming: true,
       abortCtrl,
@@ -265,6 +287,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         messageId,
         signal: abortCtrl.signal,
         onEvent: (ev) => {
+          if (seq !== streamSeq) return // 过期流回调，丢弃
           if (ev.event === 'citations') {
             const citations = ev.data as Citation[]
             set((s) => {
@@ -337,6 +360,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         },
       })
     } catch (e) {
+      if (seq !== streamSeq) return // 过期流：收尾也丢弃
       const aborted = abortCtrl.signal.aborted
       set((s) => {
         const msgs = [...s.messages]
@@ -351,13 +375,19 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         return { messages: msgs }
       })
     } finally {
+      if (seq !== streamSeq) return // 过期流：不覆盖新流状态
       set({ streaming: false, abortCtrl: null })
       await get().refreshConversations()
     }
   },
 
   stop: () => {
-    get().abortCtrl?.abort()
+    const { abortCtrl } = get()
+    if (!abortCtrl) return
+    abortCtrl.abort()
+    // 同步复位：UI 立即切回「发送」按钮。旧流的 finally 会验号（seq 不变则仍等于
+    // streamSeq），其 set(streaming:false) 为幂等；若用户已发新流，seq 已过期被丢弃。
+    set({ streaming: false, abortCtrl: null })
   },
 
   giveFeedback: async (messageId, feedback) => {
@@ -375,8 +405,10 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     }
   },
 
-  reset: () =>
-    set({ conversations: [], total: 0, currentId: null, history: [], messages: [], streaming: false, abortCtrl: null }),
+  reset: () => {
+    invalidateStream(get) // 登出/重置先停旧流
+    set({ conversations: [], total: 0, currentId: null, history: [], messages: [], streaming: false, abortCtrl: null })
+  },
 }))
 
 // 登录态变化时重置
