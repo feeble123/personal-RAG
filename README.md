@@ -25,8 +25,8 @@
 | LLM | **DeepSeek**（`deepseek-chat`）| `langchain_deepseek.ChatDeepSeek`，流式输出 |
 | Embedding | **OpenAI 兼容 API**（硅基流动免费 `BAAI/bge-m3`）| 零嵌入成本；`EMBEDDING_*` 配置可切换任何厂商 |
 | 向量库 | **Chroma** 嵌入式 | 持久化到本地，HNSW 参数调优，metadata 过滤 |
-| 关系数据库 | **SQLite**（WAL + 连接池）| SQLAlchemy 2.0 async；可迁移 MySQL/PostgreSQL |
-| 文档解析 | PyMuPDF + pdfplumber + RapidOCR | PDF 分层解析（文字层 / 扫描 OCR）；docx / xlsx / md / txt |
+| 关系数据库 | **PostgreSQL 17**（WAL）| SQLAlchemy 2.0 async；可迁移 MySQL / SQLite |
+| 文档解析 | **MinerU**（结构化）+ PyMuPDF + pdfplumber + RapidOCR | PDF 分层解析（标题层级 / 公式 / 表格 / 扫描 OCR）；docx / xlsx / md / txt |
 | 前端 | **React 18 + Ant Design 5 + Vite** | zustand（UI/流式）+ react-query（服务端缓存） |
 | 认证 | JWT + bcrypt | 按用户/IP 限流（slowapi） |
 
@@ -90,7 +90,7 @@ npm run build
 ## 🔍 系统架构
 
 ```
-浏览器 (React + AntD) ──JWT──▶ FastAPI (async) ──▶ SQLite(WAL) · Chroma(.chroma/)
+浏览器 (React + AntD) ──JWT──▶ FastAPI (async) ──▶ PostgreSQL · Chroma(.chroma/)
       │ 登录/注册/问答/会话        modules: auth/users/conversations/knowledge/qa/ingestion
       │ 上传文档/知识库管理        services: parser→chunker→embedding→vector_store→rag→chat
       ▼ SSE 流式 (POST+ReadableStream)   ──▶ DeepSeek API / OpenAI兼容Embedding API
@@ -137,7 +137,7 @@ npm run build
 3. **Embedding 缓存**：内容哈希去重 + DB 向量缓存 + 查询 LRU，重入库秒回、省 API 调用
 4. **HNSW 调优**：cosine / ef_construction=200 / max_neighbors=32 / ef_search=100
 5. **混合检索 + 重排**：向量 top50 + BM25 top50 加权融合 → **bge-reranker-v2-m3 交叉编码重排**（纠正向量模型对部分查询的区分度不足，检索质量关键）
-6. **SQLite WAL + 连接池 + PRAGMA**：多读并发、写锁规避
+6. **PostgreSQL WAL + 连接池**：多读并发、写锁规避
 7. **消息游标分页**：历史懒加载
 8. **语义缓存**：相似提问（余弦>0.92）直接回缓存答案+引用
 9. **限流**：认证按 IP、问答按用户（slowapi）
@@ -152,7 +152,7 @@ npm run build
 | LLM | DeepSeek | OpenAI / Qwen / 本地 | `LLM_PROVIDER` + `.env`，代码零改动 |
 | Embedding | 硅基流动 bge-m3 | 任意 OpenAI 兼容 / 本地模型 | `EMBEDDING_*` 配置 |
 | 向量库 | Chroma | Milvus / Qdrant / pgvector | 替换 `services/vector_store.py` |
-| 关系库 | SQLite | MySQL / PostgreSQL | 改 `DATABASE_URL` 连接串 |
+| 关系库 | PostgreSQL 17 | MySQL / SQLite | 改 `DATABASE_URL` 连接串 |
 | RAG 编排 | LCEL | LangGraph | `services/pipeline/` 阶段函数直接映射图节点 |
 | OCR | RapidOCR | PaddleOCR PP-Structure | `OCR_ENGINE=paddle` |
 | 部署 | 单机 | Docker / Nginx / 服务器 | `deploy/` 已提供示例 |
@@ -162,8 +162,8 @@ npm run build
 ```bash
 cd backend
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q
-# 全量 ~291 个测试：认证 / 权限 / 知识库 / 入库 / 检索 / 会话隔离 / SSE 问答 / 引用还原 /
-# 语义缓存 / 统计 / 版本化入库 / 检索契约 / 出处元数据 等（离线 FAKE 模式，无需真实 API Key）
+# 全量 ~504 个测试：认证 / 权限 / 知识库 / 入库 / 检索 / 会话隔离 / SSE 问答 / 引用还原 /
+# 语义缓存 / 统计 / 版本化入库 / 检索契约 / 出处元数据 / 追问改写 / MinerU 清洗 等（离线 FAKE 模式，无需真实 API Key）
 ```
 
 ## 📚 常见问题
