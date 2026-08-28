@@ -53,13 +53,15 @@ class TestReparseFailureKeepsOld:
         old_chunks = await _count_chunks(doc_id)
         assert old_ver is not None and old_chunks >= 1
 
-        # 注入：chunk_blocks 抛异常（模拟解析后分块阶段失败）
+        # 注入：build_parent_child 抛异常（模拟解析后分块阶段失败）。
+        # P1-4 起正文分块走 build_parent_child；chunk_blocks 仅在无 parent-child
+        # 产出时回退调用，注入它打不到真实分块路径（会漏测失败保护）。
         import app.modules.ingestion.manager as mgr
 
-        def _boom(blocks):
+        def _boom(*args, **kwargs):
             raise RuntimeError("注入: 分块失败")
 
-        monkeypatch.setattr(mgr, "chunk_blocks", _boom)
+        monkeypatch.setattr(mgr, "build_parent_child", _boom)
         r = await client.post(f"/api/admin/documents/{doc_id}/reparse", headers=admin_headers)
         assert r.status_code == 200, r.text
         item = await _wait_ready(client, admin_headers, kb_id, doc_id, expected=("failed",))
