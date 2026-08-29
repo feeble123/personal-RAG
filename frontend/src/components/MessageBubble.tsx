@@ -26,7 +26,6 @@ import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
 import CitationCard from './CitationCard'
 import { useChatStore } from '@/stores/chat'
-import type { Citation } from '@/api/types'
 import type { StreamMessage } from '@/stores/chat'
 
 interface Props {

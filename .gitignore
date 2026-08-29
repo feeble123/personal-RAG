@@ -20,6 +20,14 @@ node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
 frontend/tsconfig.node.tsbuildinfo
+# tsc 编译 vite.config.ts 的产物（composite 构建残留，源文件在 .ts）
+frontend/vite.config.js
+frontend/vite.config.d.ts
+
+# 前端测试产物（Playwright）
+frontend/test-results/
+frontend/playwright-report/
+frontend/test-report/
 
 # IDE
 .idea/

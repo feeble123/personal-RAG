@@ -74,11 +74,12 @@ export default function Chat() {
     if (currentId) loadHistory(currentId, true)
   }, [currentId, loadHistory])
 
-  // 自动滚到底部（新消息/流式）
+  // 自动滚到底部（新消息/流式）。最后一条消息内容提成变量，供 hooks 依赖静态检查。
+  const lastMsgContent = messages[messages.length - 1]?.content
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [history.length, messages.length, messages[messages.length - 1]?.content])
+  }, [history.length, messages.length, lastMsgContent])
 
   // 合并展示：历史（含引用/反馈/记忆来源）+ 本次流式消息
   const display = [

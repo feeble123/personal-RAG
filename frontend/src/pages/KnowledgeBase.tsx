@@ -68,8 +68,8 @@ interface UploadTask {
 }
 
 // P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
-export type DocType = 'textbook' | 'standard' | 'manual' | 'other'
-export const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
+type DocType = 'textbook' | 'standard' | 'manual' | 'other'
+const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
   { value: 'textbook', label: '教材' },
   { value: 'standard', label: '规范' },
   { value: 'manual', label: '手册' },
@@ -778,7 +778,7 @@ export default function KnowledgeBase() {
                         {searchQuery.data?.hits?.length ? (
                           <List
                             dataSource={searchQuery.data.hits}
-                            renderItem={(h, i) => (
+                            renderItem={(h) => (
                               <List.Item>
                                 <div style={{ width: '100%' }}>
                                   <Space wrap style={{ marginBottom: 4 }}>

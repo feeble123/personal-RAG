@@ -249,10 +249,12 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         return { messages: msgs }
       })
     } finally {
-      if (seq !== streamSeq) return // 过期流：不覆盖新流的 streaming/abortCtrl 状态
-      set({ streaming: false, abortCtrl: null })
-      // 刷新会话侧栏（标题自动生成 + last_message_at 排序）
-      await get().refreshConversations()
+      // 过期流：不覆盖新流的 streaming/abortCtrl 状态（finally 里不用 return，避免吞异常）
+      if (seq === streamSeq) {
+        set({ streaming: false, abortCtrl: null })
+        // 刷新会话侧栏（标题自动生成 + last_message_at 排序）
+        await get().refreshConversations()
+      }
     }
   },
 
@@ -375,9 +377,11 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         return { messages: msgs }
       })
     } finally {
-      if (seq !== streamSeq) return // 过期流：不覆盖新流状态
-      set({ streaming: false, abortCtrl: null })
-      await get().refreshConversations()
+      // 过期流：不覆盖新流状态（finally 里不用 return，避免吞异常）
+      if (seq === streamSeq) {
+        set({ streaming: false, abortCtrl: null })
+        await get().refreshConversations()
+      }
     }
   },
 
