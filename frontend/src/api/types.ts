@@ -53,6 +53,20 @@ export interface DocumentItem {
   parsed_at: string | null
   // 入库进度（解析中实时填充，如 OCR 页数）：{stage, done, total, percent}
   progress?: { stage?: string; done?: number; total?: number; percent?: number } | null
+  // P0-8 版本历史（重灌审计）：最近若干版本
+  versions?: DocumentVersionItem[]
+}
+
+// 文档版本（重灌审计）：展示版本状态/切片数/时间线
+export interface DocumentVersionItem {
+  id: number
+  status: string // building / validated / active / failed / retired
+  chunk_count: number
+  source_hash: string | null
+  error_message: string | null
+  created_at: string
+  activated_at: string | null
+  retired_at: string | null
 }
 
 export interface ChunkItem {

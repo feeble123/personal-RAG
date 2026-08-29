@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   App,
   Button,
@@ -18,7 +18,6 @@ import {
   Tag,
   Tooltip,
   Typography,
-  Upload,
 } from 'antd'
 import {
   DeleteOutlined,
@@ -30,10 +29,10 @@ import {
   UploadOutlined,
   FileOutlined,
 } from '@ant-design/icons'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import dayjs from 'dayjs'
 import { kbApi } from '@/api/modules'
-import type { ChunkItem, Citation, DocumentItem, KnowledgeBase } from '@/api/types'
+import type { ChunkItem, Citation, DocumentItem, DocumentVersionItem, KnowledgeBase } from '@/api/types'
 import { ANSWER_STYLE_OPTIONS } from '@/api/types'
 import { errMsg } from '@/api/client'
 import UserMenu from '@/components/UserMenu'
@@ -48,6 +47,24 @@ const STATUS_META: Record<string, { text: string; color: string }> = {
   embedding: { text: '向量化中', color: 'processing' },
   ready: { text: '已就绪', color: 'success' },
   failed: { text: '失败', color: 'error' },
+}
+
+// 文档版本状态（P0-8 重灌审计）：building→validated→active，被新版替换→retired，失败→failed
+const VERSION_STATUS_META: Record<string, { text: string; color: string }> = {
+  building: { text: '构建中', color: 'processing' },
+  validated: { text: '已校验', color: 'default' },
+  active: { text: '当前生效', color: 'success' },
+  failed: { text: '失败', color: 'error' },
+  retired: { text: '已退役', color: 'default' },
+}
+
+// 批量上传任务：每个文件一条独立进度（上传中/成功/失败），供进度面板展示
+interface UploadTask {
+  key: string
+  filename: string
+  pct: number // 0~100
+  status: 'uploading' | 'done' | 'error'
+  error?: string
 }
 
 // P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
@@ -151,26 +168,101 @@ function qualityItems(q: Record<string, unknown>): { label: string; value: strin
 
 function DocDetail({ doc }: { doc: DocumentItem }) {
   const quality = doc.quality
+  // 版本历史：按创建时间倒序（最新在前），active 高亮，chunk 数与上一版对比
+  const versions = [...(doc.versions ?? [])].sort(
+    (a, b) => +dayjs(b.created_at) - +dayjs(a.created_at),
+  )
   return (
-    <Descriptions column={1} size="small" bordered>
-      <Descriptions.Item label="文件名">{doc.filename}</Descriptions.Item>
-      <Descriptions.Item label="类型">{doc.file_type}</Descriptions.Item>
-      <Descriptions.Item label="大小">{formatBytes(doc.file_size)}</Descriptions.Item>
-      <Descriptions.Item label="状态">{STATUS_META[doc.status]?.text ?? doc.status}</Descriptions.Item>
-      <Descriptions.Item label="总页数">{doc.page_count ?? '—'}</Descriptions.Item>
-      <Descriptions.Item label="内容片段">{doc.chunk_count}</Descriptions.Item>
-      <Descriptions.Item label="入库时间">{dayjs(doc.created_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
-      {doc.parsed_at && (
-        <Descriptions.Item label="解析完成">{dayjs(doc.parsed_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+    <div>
+      <Descriptions column={1} size="small" bordered>
+        <Descriptions.Item label="文件名">{doc.filename}</Descriptions.Item>
+        <Descriptions.Item label="类型">{doc.file_type}</Descriptions.Item>
+        <Descriptions.Item label="大小">{formatBytes(doc.file_size)}</Descriptions.Item>
+        <Descriptions.Item label="状态">{STATUS_META[doc.status]?.text ?? doc.status}</Descriptions.Item>
+        <Descriptions.Item label="总页数">{doc.page_count ?? '—'}</Descriptions.Item>
+        <Descriptions.Item label="内容片段">{doc.chunk_count}</Descriptions.Item>
+        <Descriptions.Item label="入库时间">{dayjs(doc.created_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+        {doc.parsed_at && (
+          <Descriptions.Item label="解析完成">{dayjs(doc.parsed_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+        )}
+        {quality &&
+          qualityItems(quality).map((it) => (
+            <Descriptions.Item key={it.label} label={it.label}>
+              {it.value}
+            </Descriptions.Item>
+          ))}
+        {doc.error_message && <Descriptions.Item label="错误信息">{doc.error_message}</Descriptions.Item>}
+      </Descriptions>
+
+      {/* 版本历史（重灌审计）：chunk 数变化 + 状态时间线 */}
+      {versions.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
+            版本历史（{versions.length}）
+          </Typography.Text>
+          <Table
+            rowKey="id"
+            size="small"
+            pagination={false}
+            dataSource={versions}
+            columns={[
+              {
+                title: '状态',
+                dataIndex: 'status',
+                key: 'status',
+                width: 90,
+                render: (s: string) => {
+                  const m = VERSION_STATUS_META[s] || { text: s, color: 'default' }
+                  return <Tag color={m.color}>{m.text}</Tag>
+                },
+              },
+              {
+                title: '切片数',
+                dataIndex: 'chunk_count',
+                key: 'chunk_count',
+                width: 100,
+                render: (v: number, r: DocumentVersionItem, i: number) => {
+                  // 与下一版（更旧）对比切片数增减
+                  const prev = versions[i + 1]
+                  const delta = prev ? v - prev.chunk_count : null
+                  return (
+                    <Space size={4}>
+                      <span>{v}</span>
+                      {delta !== null && delta !== 0 && (
+                        <Typography.Text type={delta > 0 ? 'success' : 'danger'} style={{ fontSize: 11 }}>
+                          {delta > 0 ? '+' : ''}{delta}
+                        </Typography.Text>
+                      )}
+                    </Space>
+                  )
+                },
+              },
+              {
+                title: '创建时间',
+                dataIndex: 'created_at',
+                key: 'created_at',
+                width: 150,
+                render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
+              },
+              {
+                title: '生效时间',
+                dataIndex: 'activated_at',
+                key: 'activated_at',
+                width: 150,
+                render: (v: string | null) => (v ? dayjs(v).format('MM-DD HH:mm') : '—'),
+              },
+              {
+                title: '退役时间',
+                dataIndex: 'retired_at',
+                key: 'retired_at',
+                width: 150,
+                render: (v: string | null) => (v ? dayjs(v).format('MM-DD HH:mm') : '—'),
+              },
+            ]}
+          />
+        </div>
       )}
-      {quality &&
-        qualityItems(quality).map((it) => (
-          <Descriptions.Item key={it.label} label={it.label}>
-            {it.value}
-          </Descriptions.Item>
-        ))}
-      {doc.error_message && <Descriptions.Item label="错误信息">{doc.error_message}</Descriptions.Item>}
-    </Descriptions>
+    </div>
   )
 }
 
@@ -186,6 +278,10 @@ export default function KnowledgeBase() {
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
   const [kbForm, setKbForm] = useState({ name: '', description: '', answer_style: 'standard' })
   const [detailDoc, setDetailDoc] = useState<DocumentItem | null>(null)
+  // 批量上传任务列表（per-file 进度）
+  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([])
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // ---- 文档切片浏览 ----
   const [chunkDocId, setChunkDocId] = useState<number | undefined>(undefined)
@@ -200,27 +296,70 @@ export default function KnowledgeBase() {
   const { data: kbs = [] } = useQuery<KnowledgeBase[]>({ queryKey: ['admin-kbs'], queryFn: kbApi.list })
 
   // ---- 文档列表（active kb），有任务未完成时轮询 ----
+  const [docsPage, setDocsPage] = useState(1)
+  const DOCS_PAGE_SIZE = 20
   const hasActive = (docs: DocumentItem[]) =>
     docs.some((d) => ['pending', 'parsing', 'embedding'].includes(d.status))
   const docsQuery = useQuery<{ items: DocumentItem[]; total: number }>({
-    queryKey: ['kb-docs', activeKb],
-    queryFn: () => kbApi.documents(activeKb!, { page: 1, page_size: 100 }),
+    queryKey: ['kb-docs', activeKb, docsPage],
+    queryFn: () => kbApi.documents(activeKb!, { page: docsPage, page_size: DOCS_PAGE_SIZE }),
     enabled: !!activeKb,
     refetchInterval: (query) => (hasActive(query.state.data?.items ?? []) ? 2500 : false),
   })
   const docs = docsQuery.data?.items ?? []
+  const docsTotal = docsQuery.data?.total ?? 0
 
-  // ---- 上传 ----
-  const uploadMutation = useMutation({
-    mutationFn: ({ file, kbId, type }: { file: File; kbId: number; type: DocType }) =>
-      kbApi.upload(kbId, file, type, () => {}),
-    onSuccess: () => {
-      message.success('上传成功，正在后台入库')
-      queryClient.invalidateQueries({ queryKey: ['kb-docs'] })
-      queryClient.invalidateQueries({ queryKey: ['admin-kbs'] })
-    },
-    onError: (e) => message.error(errMsg(e)),
+  // 切片筛选下拉需要「该库全部文档名」而非当前页——独立拉一份（100 上限，与分页前一致）
+  const allDocsQuery = useQuery<{ items: DocumentItem[] }>({
+    queryKey: ['kb-all-docs', activeKb],
+    queryFn: () => kbApi.documents(activeKb!, { page: 1, page_size: 100 }),
+    enabled: !!activeKb,
   })
+  const allDocs = allDocsQuery.data?.items ?? []
+
+  // ---- 上传（批量，per-file 进度）----
+  const uploadFiles = async (files: File[]) => {
+    if (!activeKb || files.length === 0) return
+    const tasks: UploadTask[] = files.map((f) => ({
+      key: `${Date.now()}-${f.name}-${Math.random().toString(36).slice(2, 6)}`,
+      filename: f.name,
+      pct: 0,
+      status: 'uploading',
+    }))
+    setUploadTasks((prev) => [...prev, ...tasks])
+    setUploading(true)
+
+    let ok = 0
+    let fail = 0
+    // 逐个串行上传（大文件不并发打满带宽/内存），每个文件独立更新进度
+    for (let i = 0; i < files.length; i++) {
+      const task = tasks[i]
+      try {
+        await kbApi.upload(activeKb, files[i], docType, (pct) => {
+          setUploadTasks((prev) => prev.map((t) => (t.key === task.key ? { ...t, pct } : t)))
+        })
+        ok++
+        setUploadTasks((prev) =>
+          prev.map((t) => (t.key === task.key ? { ...t, pct: 100, status: 'done' } : t)),
+        )
+      } catch (e) {
+        fail++
+        setUploadTasks((prev) =>
+          prev.map((t) => (t.key === task.key ? { ...t, status: 'error', error: errMsg(e) } : t)),
+        )
+      }
+    }
+    setUploading(false)
+    queryClient.invalidateQueries({ queryKey: ['kb-docs'] })
+    queryClient.invalidateQueries({ queryKey: ['admin-kbs'] })
+    if (fail === 0) {
+      message.success(`${ok} 个文件上传成功，正在后台入库`)
+    } else if (ok > 0) {
+      message.warning(`${ok} 个成功，${fail} 个失败（详见上传进度）`)
+    } else {
+      message.error(`${fail} 个文件全部上传失败`)
+    }
+  }
 
   const deleteDoc = async (id: number) => {
     try {
@@ -510,23 +649,30 @@ export default function KnowledgeBase() {
                     options={DOC_TYPE_OPTIONS}
                     placeholder="文档类型"
                   />
-                  <Upload
-                    accept={ACCEPT}
-                    showUploadList={false}
+                  <Button type="primary" icon={<UploadOutlined />} loading={uploading} onClick={() => fileInputRef.current?.click()}>
+                    上传文档
+                  </Button>
+                  {/* 原生文件选择：一次拿到整批文件做串行上传（AntD Upload 的 multiple
+                      逐个 beforeUpload 拿不到完整批次，无法聚合整体进度与成败统计） */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
                     multiple
-                    beforeUpload={(file) => {
-                      if (file.size > 200 * 1024 * 1024) {
-                        message.error('文件超过 200MB 限制')
-                        return Upload.LIST_IGNORE
-                      }
-                      uploadMutation.mutate({ file, kbId: activeKb, type: docType })
-                      return false
+                    accept={ACCEPT}
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? [])
+                      const valid = files.filter((f) => {
+                        if (f.size > 200 * 1024 * 1024) {
+                          message.error(`文件「${f.name}」超过 200MB 限制，已跳过`)
+                          return false
+                        }
+                        return true
+                      })
+                      if (valid.length) uploadFiles(valid)
+                      e.target.value = '' // 清空，允许再次选择同一文件
                     }}
-                  >
-                    <Button type="primary" icon={<UploadOutlined />} loading={uploadMutation.isPending}>
-                      上传文档
-                    </Button>
-                  </Upload>
+                  />
                 </Space>
               ) : undefined
             }
@@ -538,16 +684,79 @@ export default function KnowledgeBase() {
                 items={[
                   {
                     key: 'docs',
-                    label: `文档 (${docs.length})`,
+                    label: `文档 (${docsTotal})`,
                     children: (
-                      <Table
-                        rowKey="id"
-                        columns={columns}
-                        dataSource={docs}
-                        size="small"
-                        pagination={false}
-                        loading={docsQuery.isFetching && docs.length === 0}
-                      />
+                      <div>
+                        {/* 批量上传进度面板：逐个文件进度 + 成败状态，全部完成可收起 */}
+                        {uploadTasks.length > 0 && (
+                          <Card
+                            size="small"
+                            title={
+                              <Space>
+                                <span>上传进度</span>
+                                {uploading ? <Tag color="processing">上传中</Tag> : <Tag>已完成</Tag>}
+                              </Space>
+                            }
+                            extra={
+                              !uploading && (
+                                <Button size="small" type="text" onClick={() => setUploadTasks([])}>
+                                  清空
+                                </Button>
+                              )
+                            }
+                            style={{ marginBottom: 12, background: 'rgba(10, 17, 34, 0.4)' }}
+                          >
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                              {uploadTasks.map((t) => (
+                                <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                  <div style={{ width: 220, minWidth: 0 }}>
+                                    <Typography.Text
+                                      ellipsis
+                                      style={{ display: 'block', fontSize: 13 }}
+                                      title={t.filename}
+                                    >
+                                      {t.filename}
+                                    </Typography.Text>
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    {t.status === 'error' ? (
+                                      <Typography.Text type="danger" style={{ fontSize: 12 }}>
+                                        {t.error || '上传失败'}
+                                      </Typography.Text>
+                                    ) : (
+                                      <Progress
+                                        percent={t.pct}
+                                        size="small"
+                                        status={t.status === 'done' ? 'success' : 'active'}
+                                      />
+                                    )}
+                                  </div>
+                                  {t.status === 'error' ? (
+                                    <Tag color="error">失败</Tag>
+                                  ) : t.status === 'done' ? (
+                                    <Tag color="success">完成</Tag>
+                                  ) : null}
+                                </div>
+                              ))}
+                            </div>
+                          </Card>
+                        )}
+                        <Table
+                          rowKey="id"
+                          columns={columns}
+                          dataSource={docs}
+                          size="small"
+                          pagination={{
+                            current: docsPage,
+                            pageSize: DOCS_PAGE_SIZE,
+                            total: docsTotal,
+                            showSizeChanger: false,
+                            showTotal: (t) => `共 ${t} 个文档`,
+                            onChange: (p) => setDocsPage(p),
+                          }}
+                          loading={docsQuery.isFetching && docs.length === 0}
+                        />
+                      </div>
                     ),
                   },
                   {
@@ -613,7 +822,7 @@ export default function KnowledgeBase() {
                               setChunkDocId(v)
                               setChunkPage(1)
                             }}
-                            options={docs.map((d) => ({ value: d.id, label: d.filename }))}
+                            options={allDocs.map((d) => ({ value: d.id, label: d.filename }))}
                           />
                           <Typography.Text type="secondary">
                             共 {chunkQuery.data?.total ?? 0} 个切片
