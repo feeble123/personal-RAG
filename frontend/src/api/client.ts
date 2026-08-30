@@ -33,7 +33,7 @@ async function tryRefresh(): Promise<boolean> {
 // refresh 返回结构与登录一致
 interface TokenOutLike {
   access_token: string
-  user: { id: number; username: string; role: 'admin' | 'user'; nickname: string | null; is_active: boolean }
+  user: { id: number; username: string; role: 'superadmin' | 'admin' | 'user'; nickname: string | null; is_active: boolean }
 }
 
 api.interceptors.request.use((config) => {

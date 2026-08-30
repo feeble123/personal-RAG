@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { RequireAdmin, RequireAuth } from '@/router'
+import { RequireAdmin, RequireAuth, RequireSuperAdmin } from '@/router'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
 import Chat from '@/pages/Chat'
@@ -21,7 +21,7 @@ export default function App() {
         if (res.ok) {
           const data = (await res.json()) as {
             access_token: string
-            user: { id: number; username: string; role: 'admin' | 'user'; nickname: string | null; is_active: boolean }
+            user: { id: number; username: string; role: 'superadmin' | 'admin' | 'user'; nickname: string | null; is_active: boolean }
           }
           if (!cancelled) useAuthStore.getState().setAuth(data.access_token, data.user)
         } else {
@@ -73,9 +73,9 @@ export default function App() {
         path="/users"
         element={
           <RequireAuth>
-            <RequireAdmin>
+            <RequireSuperAdmin>
               <UserManager />
-            </RequireAdmin>
+            </RequireSuperAdmin>
           </RequireAuth>
         }
       />

@@ -1,9 +1,20 @@
 // ===== 全局共享类型 =====
 
+// 三级角色（单元 I 补充）：superadmin 超管 / admin 库管 / user 普通
+export type Role = 'superadmin' | 'admin' | 'user'
+
+// 管理员 = 超管 + 库管（可进知识库/记忆库/审计/统计）；超管额外可进账号管理
+export function isAdminRole(role: string | undefined): boolean {
+  return role === 'admin' || role === 'superadmin'
+}
+export function isSuperadminRole(role: string | undefined): boolean {
+  return role === 'superadmin'
+}
+
 export interface User {
   id: number
   username: string
-  role: 'admin' | 'user'
+  role: Role
   nickname: string | null
   is_active: boolean
   created_at?: string // 账号管理列表补出

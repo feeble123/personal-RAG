@@ -5,8 +5,9 @@ import { Link } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { logoutAndRevoke, useAuthStore } from '@/stores/auth'
 import { errMsg } from '@/api/client'
+import { isAdminRole, isSuperadminRole } from '@/api/types'
 
-// 用户菜单：修改密码 / 知识库管理(admin) / 退出登录
+// 用户菜单：修改密码 / 知识库管理(管理员) / 账号管理(仅超管) / 退出登录
 export default function UserMenu() {
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
@@ -26,29 +27,32 @@ export default function UserMenu() {
     }
   }
 
+  const isAdmin = isAdminRole(user?.role)
+  const isSuper = isSuperadminRole(user?.role)
+
   const items = [
-    user?.role === 'admin'
+    isAdmin
       ? {
           key: 'kb',
           icon: <DatabaseOutlined />,
           label: <Link to="/knowledge">知识库管理</Link>,
         }
       : null,
-    user?.role === 'admin'
+    isAdmin
       ? {
           key: 'mem',
           icon: <BulbOutlined />,
           label: <Link to="/memories">记忆库管理</Link>,
         }
       : null,
-    user?.role === 'admin'
+    isSuper
       ? {
           key: 'users',
           icon: <TeamOutlined />,
           label: <Link to="/users">账号管理</Link>,
         }
       : null,
-    user?.role === 'admin'
+    isAdmin
       ? {
           key: 'audit',
           icon: <SafetyCertificateOutlined />,

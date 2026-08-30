@@ -4,6 +4,7 @@ import { UserOutlined, LockOutlined, ThunderboltOutlined } from '@ant-design/ico
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { useAuthStore } from '@/stores/auth'
+import { isAdminRole } from '@/api/types'
 import AuthBackground from '@/components/AuthBackground'
 
 export default function Login() {
@@ -21,9 +22,8 @@ export default function Login() {
       const res = await authApi.login(values)
       setAuth(res.access_token, res.user)
       message.success('登录成功')
-      navigate(res.user.role === 'admin' && from ? from : res.user.role === 'admin' ? '/knowledge' : '/chat', {
-        replace: true,
-      })
+      const isAdmin = isAdminRole(res.user.role)
+      navigate(isAdmin && from ? from : isAdmin ? '/knowledge' : '/chat', { replace: true })
     } finally {
       setLoading(false)
     }

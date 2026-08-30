@@ -3,6 +3,7 @@ import {
   App,
   Button,
   Card,
+  Dropdown,
   Form,
   Input,
   Layout,
@@ -29,14 +30,15 @@ import UserMenu from '@/components/UserMenu'
 import { usersApi } from '@/api/modules'
 import { useAuthStore } from '@/stores/auth'
 import type { User } from '@/api/types'
+import { ROLE_META, ROLE_OPTIONS } from '@/constants/roles'
 
 const { Header, Content } = Layout
 
-// 账号管理系统（仅管理员）：列表/搜索 + 创建 + 改角色 + 启停 + 重置密码 + 删除
+// 账号管理系统（仅超管）：列表/搜索 + 创建 + 改角色(三级) + 启停 + 重置密码 + 删除
 export default function UserManager() {
   const navigate = useNavigate()
   const qc = useQueryClient()
-  const { message } = App.useApp()
+  const { message, modal } = App.useApp()
   const currentUser = useAuthStore((s) => s.user)
 
   const [q, setQ] = useState('')
@@ -103,9 +105,10 @@ export default function UserManager() {
       title: '角色',
       dataIndex: 'role',
       width: 100,
-      render: (v: string) => (
-        <Tag color={v === 'admin' ? 'gold' : 'blue'}>{v === 'admin' ? '管理员' : '普通用户'}</Tag>
-      ),
+      render: (v: User['role']) => {
+        const meta = ROLE_META[v]
+        return <Tag color={meta.color}>{meta.label}</Tag>
+      },
     },
     {
       title: '状态',
@@ -139,14 +142,24 @@ export default function UserManager() {
             </Button>
             {!isSelf && (
               <>
-                <Popconfirm
-                  title={r.role === 'admin' ? '设为普通用户？' : '设为管理员？'}
-                  onConfirm={() => patchMut.mutate({ id: r.id, data: { role: r.role === 'admin' ? 'user' : 'admin' } })}
+                <Dropdown
+                  menu={{
+                    items: ROLE_OPTIONS.filter((o) => o.value !== r.role).map((o) => ({
+                      key: o.value,
+                      label: `设为${o.label}`,
+                      onClick: () =>
+                        modal.confirm({
+                          title: `将「${r.username}」设为${o.label}？`,
+                          content: r.role === 'superadmin' && o.value !== 'superadmin' ? '该账号当前是超管，降级后需重新登录生效。' : undefined,
+                          onOk: () => patchMut.mutate({ id: r.id, data: { role: o.value } }),
+                        }),
+                    })),
+                  }}
                 >
                   <Button size="small" type="link">
-                    {r.role === 'admin' ? '设为普通' : '设为管理员'}
+                    改角色
                   </Button>
-                </Popconfirm>
+                </Dropdown>
                 <Popconfirm
                   title={r.is_active ? '禁用该账号？' : '启用该账号？'}
                   onConfirm={() => patchMut.mutate({ id: r.id, data: { is_active: !r.is_active } })}
@@ -190,7 +203,7 @@ export default function UserManager() {
           </Button>
           <TeamOutlined style={{ color: '#00c6ff', fontSize: 18 }} />
           <Typography.Text strong>账号管理</Typography.Text>
-          <Tag color="red">管理员</Tag>
+          <Tag color="red">仅超管</Tag>
         </Space>
         <UserMenu />
       </Header>
@@ -277,12 +290,7 @@ export default function UserManager() {
             <Input placeholder="可选" />
           </Form.Item>
           <Form.Item name="role" label="角色" initialValue="user">
-            <Select
-              options={[
-                { value: 'user', label: '普通用户' },
-                { value: 'admin', label: '管理员' },
-              ]}
-            />
+            <Select options={ROLE_OPTIONS} />
           </Form.Item>
         </Form>
       </Modal>
