@@ -1,4 +1,8 @@
-"""用户管理（仅管理员）：列表 / 创建 / 改角色 / 启停用 / 删除 / 重置密码 + 系统统计。"""
+"""用户管理（仅超管）：列表 / 创建 / 改角色 / 启停用 / 删除 / 重置密码 + 系统统计。
+
+三级角色（单元 I 补充）：账号管理是「管人」的最高权限，仅 superadmin 可访问；
+库管(admin)只能管知识库内容，不能增删账号/改角色/重置密码。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +12,7 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select
 
-from app.core.deps import AdminUser, DbSession, get_client_ip
+from app.core.deps import AdminUser, DbSession, SuperAdminUser, get_client_ip
 from app.core.exceptions import BizError
 from app.core.security import hash_password
 from app.db.models import Chunk, Conversation, Document, KnowledgeBase, Message, QaMemory, User
@@ -37,7 +41,7 @@ class AdminUserOut(UserOut):
 
 
 class UserPatch(BaseModel):
-    role: str | None = None  # admin / user
+    role: str | None = None  # superadmin / admin / user
     is_active: bool | None = None
 
 
@@ -57,8 +61,8 @@ class UserCreateIn(BaseModel):
     @field_validator("role")
     @classmethod
     def check_role(cls, v: str) -> str:
-        if v not in ("admin", "user"):
-            raise ValueError("角色须为 admin 或 user")
+        if v not in ("superadmin", "admin", "user"):
+            raise ValueError("角色须为 superadmin / admin / user 之一")
         return v
 
 
@@ -74,7 +78,7 @@ class UserListOut(BaseModel):
 @router.get("", response_model=UserListOut)
 async def list_users(
     db: DbSession,
-    _admin: AdminUser,
+    _admin: SuperAdminUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     q: str | None = None,
@@ -92,7 +96,7 @@ async def list_users(
 
 @router.post("", response_model=AdminUserOut, status_code=201)
 async def create_user(
-    body: UserCreateIn, db: DbSession, admin: AdminUser, request: Request
+    body: UserCreateIn, db: DbSession, admin: SuperAdminUser, request: Request
 ) -> AdminUserOut:
     """管理员直接创建账号（可指定角色），无需用户自助注册。"""
     existing = await db.scalar(select(User).where(User.username == body.username))
@@ -126,7 +130,7 @@ async def patch_user(
     user_id: int,
     body: UserPatch,
     db: DbSession,
-    admin: AdminUser,
+    admin: SuperAdminUser,
     request: Request,
 ) -> UserOut:
     if user_id == admin.id:
@@ -136,7 +140,7 @@ async def patch_user(
         raise BizError("用户不存在", 404, "USER_NOT_FOUND")
     changed: list[str] = []
     if body.role is not None:
-        if body.role not in ("admin", "user"):
+        if body.role not in ("superadmin", "admin", "user"):
             raise BizError("非法角色", 400, "INVALID_ROLE")
         if user.role != body.role:
             changed.append(f"角色 {user.role}→{body.role}")
@@ -167,7 +171,7 @@ async def patch_user(
 
 @router.delete("/{user_id}", status_code=204)
 async def delete_user(
-    user_id: int, db: DbSession, admin: AdminUser, request: Request
+    user_id: int, db: DbSession, admin: SuperAdminUser, request: Request
 ) -> None:
     if user_id == admin.id:
         raise BizError("不能删除自己", 400, "SELF_DELETE")
@@ -196,7 +200,7 @@ async def reset_user_password(
     user_id: int,
     body: PasswordResetIn,
     db: DbSession,
-    admin: AdminUser,
+    admin: SuperAdminUser,
     request: Request,
 ) -> UserOut:
     """管理员重置用户密码（不校验旧密码；用户下次用新密码登录）。
