@@ -10,22 +10,31 @@ import json
 import logging
 from datetime import datetime, timezone
 
+from app.core.redact import redact
+
 _JSON_FORMAT = "%(asctime)s %(levelname)s %(name)s | %(message)s"
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
+class RedactingFormatter(logging.Formatter):
+    """纯文本 formatter 的脱敏包装：对最终格式化结果（含堆栈）整体脱敏。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
+
+
 class JsonFormatter(logging.Formatter):
-    """把日志记录格式化为单行 JSON（结构化）。"""
+    """把日志记录格式化为单行 JSON（结构化），并对 message / 堆栈脱敏。"""
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname,
             "logger": record.name,
-            "message": record.getMessage(),
+            "message": redact(record.getMessage()),
         }
         if record.exc_info:
-            payload["exc_info"] = self.formatException(record.exc_info)
+            payload["exc_info"] = redact(self.formatException(record.exc_info))
         return json.dumps(payload, ensure_ascii=False)
 
 
@@ -57,5 +66,5 @@ def setup_logging() -> None:
     if settings.log_json:
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter(_JSON_FORMAT))
+        handler.setFormatter(RedactingFormatter(_JSON_FORMAT))
     root.addHandler(handler)

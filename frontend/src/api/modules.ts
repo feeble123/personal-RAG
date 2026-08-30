@@ -1,6 +1,6 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
-import type { ChunkItem, Citation, Conversation, KnowledgeBase, MemoryItem, MemoryStats, Message, SystemStats, TokenOut, User } from './types'
+import type { AuditLog, ChunkItem, Citation, Conversation, KnowledgeBase, MemoryItem, MemoryStats, Message, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -90,6 +90,12 @@ export const usersApi = {
 // ===== 系统统计（管理员：检索证据质量分布等答辩数据）=====
 export const statsApi = {
   system: () => api.get<SystemStats>('/admin/stats').then((r) => r.data),
+}
+
+// ===== 审计日志（单元 I：管理员敏感操作留痕）=====
+export const auditApi = {
+  list: (params?: Record<string, unknown>) =>
+    api.get('/admin/audit-logs', { params }).then((r) => r.data as { items: AuditLog[]; total: number }),
 }
 
 // ===== 流式 SSE（fetch + ReadableStream）：解析 `data: {json}\n\n` 事件 =====

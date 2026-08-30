@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { App, Avatar, Dropdown, Form, Input, Modal, Space, Typography } from 'antd'
-import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, SafetyCertificateOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { logoutAndRevoke, useAuthStore } from '@/stores/auth'
@@ -46,6 +46,13 @@ export default function UserMenu() {
           key: 'users',
           icon: <TeamOutlined />,
           label: <Link to="/users">账号管理</Link>,
+        }
+      : null,
+    user?.role === 'admin'
+      ? {
+          key: 'audit',
+          icon: <SafetyCertificateOutlined />,
+          label: <Link to="/audit">审计日志</Link>,
         }
       : null,
     { key: 'pwd', icon: <KeyOutlined />, label: '修改密码', onClick: () => setPwdOpen(true) },

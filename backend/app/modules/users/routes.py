@@ -4,16 +4,16 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select
 
-from app.core.deps import AdminUser, DbSession
+from app.core.deps import AdminUser, DbSession, get_client_ip
 from app.core.exceptions import BizError
 from app.core.security import hash_password
 from app.db.models import Chunk, Conversation, Document, KnowledgeBase, Message, QaMemory, User
 from app.modules.auth.schemas import USERNAME_RE, UserOut
-from app.services import vector_store
+from app.services import audit, vector_store
 
 router = APIRouter(prefix="/admin/users", tags=["users"])
 stats_router = APIRouter(prefix="/admin", tags=["stats"])
@@ -91,7 +91,9 @@ async def list_users(
 
 
 @router.post("", response_model=AdminUserOut, status_code=201)
-async def create_user(body: UserCreateIn, db: DbSession, _admin: AdminUser) -> AdminUserOut:
+async def create_user(
+    body: UserCreateIn, db: DbSession, admin: AdminUser, request: Request
+) -> AdminUserOut:
     """管理员直接创建账号（可指定角色），无需用户自助注册。"""
     existing = await db.scalar(select(User).where(User.username == body.username))
     if existing:
@@ -106,6 +108,16 @@ async def create_user(body: UserCreateIn, db: DbSession, _admin: AdminUser) -> A
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    # P2-10：审计——新建账号（含角色）
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="user.create",
+        target_type="user",
+        target_id=str(user.id),
+        detail=f"创建账号 {body.username}（角色 {body.role}）",
+        client_ip=await get_client_ip(request),
+    )
     return AdminUserOut.model_validate(user)
 
 
@@ -115,43 +127,77 @@ async def patch_user(
     body: UserPatch,
     db: DbSession,
     admin: AdminUser,
+    request: Request,
 ) -> UserOut:
     if user_id == admin.id:
         raise BizError("不能修改自己的角色/状态", 400, "SELF_MODIFY")
     user = await db.get(User, user_id)
     if not user:
         raise BizError("用户不存在", 404, "USER_NOT_FOUND")
+    changed: list[str] = []
     if body.role is not None:
         if body.role not in ("admin", "user"):
             raise BizError("非法角色", 400, "INVALID_ROLE")
+        if user.role != body.role:
+            changed.append(f"角色 {user.role}→{body.role}")
         user.role = body.role
     if body.is_active is not None:
         # P0-1：禁用账号 → session_version +1 + 吊销全部会话 → 已发 token 立即失效
         if user.is_active and not body.is_active:
             user.session_version = (user.session_version or 0) + 1
             await _revoke_all_sessions(db, user.id)
+        if user.is_active != body.is_active:
+            changed.append("启用" if body.is_active else "禁用")
         user.is_active = body.is_active
     await db.commit()
     await db.refresh(user)
+    # P2-10：审计——改角色/启停账号
+    if changed:
+        await audit.record_audit(
+            actor_id=admin.id,
+            actor_name=admin.username,
+            action="user.update",
+            target_type="user",
+            target_id=str(user.id),
+            detail=f"修改账号 {user.username}：{', '.join(changed)}",
+            client_ip=await get_client_ip(request),
+        )
     return UserOut.model_validate(user)
 
 
 @router.delete("/{user_id}", status_code=204)
-async def delete_user(user_id: int, db: DbSession, admin: AdminUser) -> None:
+async def delete_user(
+    user_id: int, db: DbSession, admin: AdminUser, request: Request
+) -> None:
     if user_id == admin.id:
         raise BizError("不能删除自己", 400, "SELF_DELETE")
     user = await db.get(User, user_id)
     if not user:
         raise BizError("用户不存在", 404, "USER_NOT_FOUND")
+    username = user.username
     # QaMemory 无 FK 级联，需显式清理该用户沉淀的问答记忆
     await db.execute(delete(QaMemory).where(QaMemory.user_id == user_id))
     await db.delete(user)
     await db.commit()
+    # P2-10：审计——删除账号
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="user.delete",
+        target_type="user",
+        target_id=str(user_id),
+        detail=f"删除账号 {username}",
+        client_ip=await get_client_ip(request),
+    )
 
 
 @router.put("/{user_id}/password", response_model=UserOut)
 async def reset_user_password(
-    user_id: int, body: PasswordResetIn, db: DbSession, _admin: AdminUser
+    user_id: int,
+    body: PasswordResetIn,
+    db: DbSession,
+    admin: AdminUser,
+    request: Request,
 ) -> UserOut:
     """管理员重置用户密码（不校验旧密码；用户下次用新密码登录）。
 
@@ -165,7 +211,49 @@ async def reset_user_password(
     await _revoke_all_sessions(db, user.id)
     await db.commit()
     await db.refresh(user)
+    # P2-10：审计——重置密码
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="user.password_reset",
+        target_type="user",
+        target_id=str(user.id),
+        detail=f"重置账号 {user.username} 的密码",
+        client_ip=await get_client_ip(request),
+    )
     return UserOut.model_validate(user)
+
+
+# ---------------- 审计日志（P2-10 / 单元 I：管理员敏感操作留痕） ----------------
+class AuditLogOut(BaseModel):
+    id: int
+    actor_name: str
+    action: str
+    target_type: str
+    target_id: str | None = None
+    detail: str
+    client_ip: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AuditListOut(BaseModel):
+    items: list[AuditLogOut]
+    total: int
+
+
+@stats_router.get("/audit-logs", response_model=AuditListOut)
+async def list_audit_logs(
+    _admin: AdminUser,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    action: str | None = Query(None),
+    q: str | None = Query(None),
+) -> AuditListOut:
+    """审计日志列表（仅管理员）：分页 + 按操作类型过滤 + 按操作人/摘要模糊搜索。"""
+    rows, total = await audit.list_audit_logs(page=page, page_size=page_size, action=action, q=q)
+    return AuditListOut(items=[AuditLogOut.model_validate(r) for r in rows], total=total)
 
 
 # ---------------- 系统统计（答辩数据） ----------------

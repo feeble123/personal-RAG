@@ -7,6 +7,7 @@ import Chat from '@/pages/Chat'
 import KnowledgeBase from '@/pages/KnowledgeBase'
 import MemoryManager from '@/pages/MemoryManager'
 import UserManager from '@/pages/UserManager'
+import AuditLogs from '@/pages/AuditLogs'
 import NotFound from '@/pages/NotFound'
 import { useAuthStore } from '@/stores/auth'
 
@@ -74,6 +75,16 @@ export default function App() {
           <RequireAuth>
             <RequireAdmin>
               <UserManager />
+            </RequireAdmin>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/audit"
+        element={
+          <RequireAuth>
+            <RequireAdmin>
+              <AuditLogs />
             </RequireAdmin>
           </RequireAuth>
         }

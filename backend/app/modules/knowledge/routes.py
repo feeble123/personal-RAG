@@ -5,11 +5,11 @@ import logging
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from sqlalchemy import func, select
 
 from app.core.config import settings
-from app.core.deps import AdminUser, CurrentUser, DbSession
+from app.core.deps import AdminUser, CurrentUser, DbSession, get_client_ip
 from app.core.exceptions import BizError
 from app.db.models import Chunk, Document, KnowledgeBase
 from app.modules.ingestion import manager as ingestion
@@ -22,7 +22,7 @@ from app.modules.knowledge.schemas import (
     SearchResult,
     UploadResult,
 )
-from app.services import rag
+from app.services import audit, rag
 from app.services.parser.ocr_progress import get_progress
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,9 @@ async def list_kbs(db: DbSession, _admin: AdminUser) -> list[KnowledgeBase]:
 
 
 @router.post("/kbs", response_model=KBOut, status_code=201)
-async def create_kb(body: KBCreate, db: DbSession, admin: AdminUser) -> KnowledgeBase:
+async def create_kb(
+    body: KBCreate, db: DbSession, admin: AdminUser, request: Request
+) -> KnowledgeBase:
     exists = await db.scalar(select(KnowledgeBase).where(KnowledgeBase.name == body.name))
     if exists:
         raise BizError("知识库名称已存在", 409, "KB_EXISTS")
@@ -61,6 +63,16 @@ async def create_kb(body: KBCreate, db: DbSession, admin: AdminUser) -> Knowledg
     db.add(kb)
     await db.commit()
     await db.refresh(kb)
+    # P2-10：审计——创建知识库
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="kb.create",
+        target_type="kb",
+        target_id=str(kb.id),
+        detail=f"创建知识库 {kb.name}",
+        client_ip=await get_client_ip(request),
+    )
     return kb
 
 
@@ -84,8 +96,24 @@ async def update_kb(kb_id: int, body: KBUpdate, db: DbSession, _admin: AdminUser
 
 
 @router.delete("/kbs/{kb_id}", status_code=204)
-async def delete_kb(kb_id: int, _db: DbSession, _admin: AdminUser) -> None:
+async def delete_kb(
+    kb_id: int, _db: DbSession, admin: AdminUser, request: Request
+) -> None:
+    kb = await _db.get(KnowledgeBase, kb_id)
+    if not kb:
+        raise BizError("知识库不存在", 404, "KB_NOT_FOUND")
+    kb_name = kb.name
     await ingestion.delete_kb(kb_id)
+    # P2-10：审计——删除知识库
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="kb.delete",
+        target_type="kb",
+        target_id=str(kb_id),
+        detail=f"删除知识库 {kb_name}",
+        client_ip=await get_client_ip(request),
+    )
 
 
 # ---------------- 文档 ----------------
@@ -94,6 +122,7 @@ async def upload_document(
     kb_id: int,
     db: DbSession,
     _admin: AdminUser,
+    request: Request,
     file: UploadFile = File(...),
     chunk_strategy: str = Form(settings.chunk_strategy_default),
     doc_type: str = Form("other"),
@@ -165,6 +194,16 @@ async def upload_document(
 
     # 后台入库（P0-9：写 DB job，worker 轮询执行；不 create_task）
     await ingestion.enqueue_ingestion_async(doc.id, kind="ingest")
+    # P2-10：审计——上传文档
+    await audit.record_audit(
+        actor_id=_admin.id,
+        actor_name=_admin.username,
+        action="document.upload",
+        target_type="document",
+        target_id=str(doc.id),
+        detail=f"上传文档 {original}（{doc_type}）",
+        client_ip=await get_client_ip(request),
+    )
     return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type)
 
 
@@ -212,15 +251,30 @@ async def document_detail(doc_id: int, db: DbSession, _admin: AdminUser) -> Docu
 
 
 @router.delete("/documents/{doc_id}", status_code=204)
-async def delete_document(doc_id: int, db: DbSession, _admin: AdminUser) -> None:
+async def delete_document(
+    doc_id: int, db: DbSession, _admin: AdminUser, request: Request
+) -> None:
     doc = await db.get(Document, doc_id)
     if not doc:
         raise BizError("文档不存在", 404, "DOC_NOT_FOUND")
+    filename = doc.filename
     await ingestion.delete_document(doc_id)
+    # P2-10：审计——删除文档
+    await audit.record_audit(
+        actor_id=_admin.id,
+        actor_name=_admin.username,
+        action="document.delete",
+        target_type="document",
+        target_id=str(doc_id),
+        detail=f"删除文档 {filename}",
+        client_ip=await get_client_ip(request),
+    )
 
 
 @router.post("/documents/{doc_id}/reparse", response_model=DocumentOut)
-async def reparse_document(doc_id: int, db: DbSession, _admin: AdminUser) -> Document:
+async def reparse_document(
+    doc_id: int, db: DbSession, _admin: AdminUser, request: Request
+) -> Document:
     from sqlalchemy.orm import selectinload
 
     from app.db.models import DocumentVersion
@@ -243,6 +297,16 @@ async def reparse_document(doc_id: int, db: DbSession, _admin: AdminUser) -> Doc
     # P0-9：写 DB job（kind=reparse），worker 轮询执行
     await ingestion.enqueue_ingestion_async(doc_id, kind="reparse")
     await db.refresh(doc)
+    # P2-10：审计——重解析文档
+    await audit.record_audit(
+        actor_id=_admin.id,
+        actor_name=_admin.username,
+        action="document.reparse",
+        target_type="document",
+        target_id=str(doc_id),
+        detail=f"重解析文档 {doc.filename}",
+        client_ip=await get_client_ip(request),
+    )
     return doc
 
 

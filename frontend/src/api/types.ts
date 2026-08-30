@@ -178,3 +178,15 @@ export interface PageResult<T> {
   page: number
   page_size: number
 }
+
+// 审计日志（单元 I）：管理员敏感操作留痕
+export interface AuditLog {
+  id: number
+  actor_name: string
+  action: string
+  target_type: string
+  target_id: string | null
+  detail: string
+  client_ip: string | null
+  created_at: string
+}

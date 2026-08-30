@@ -452,3 +452,28 @@ class QaMemory(Base):
     )
 
     __table_args__ = (Index("ix_qa_memory_user_scope", "user_id", "kb_id", "updated_at"),)
+
+
+class AuditLog(Base):
+    """审计日志（P2-10 / 单元 I）：管理员敏感操作 append-only 留痕。
+
+    - 谁（actor）在何时（created_at）对什么目标（target_type/target_id）做了什么（action）
+    - detail 存操作摘要（如文档名/用户名，不含敏感值）；client_ip 记录来源
+    - 只增不删不改：无 UPDATE/DELETE 接口，无 onupdate 时间戳，杜绝篡改
+    """
+
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True
+    )  # 操作人（账号被删则置 NULL 保留日志）
+    actor_name: Mapped[str] = mapped_column(String(50), default="", nullable=False)  # 操作人用户名快照
+    action: Mapped[str] = mapped_column(String(50), index=True, nullable=False)  # 操作类型
+    target_type: Mapped[str] = mapped_column(String(30), nullable=False)  # user/kb/document
+    target_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 目标 id（字符串存，兼容未来）
+    detail: Mapped[str] = mapped_column(String(500), default="", nullable=False)  # 操作摘要
+    client_ip: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+
+    __table_args__ = (Index("ix_audit_logs_created", "created_at"),)
