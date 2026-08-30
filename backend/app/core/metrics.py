@@ -42,6 +42,10 @@ def build_metrics(registry: CollectorRegistry | None = None) -> dict[str, Any]:
                                    "问答请求数", ["result"], reg),
         "chat_duration_seconds": get(Histogram, "rag_chat_duration_seconds",
                                      "问答耗时（秒）", [], reg),
+        # P2-9（单元 H）：问答主链路分段耗时，定位慢在哪一环
+        # stage: retrieve(检索) / generate(生成) / persist(落库) / rerank(重排，由 rag 层埋)
+        "chat_stage_seconds": get(Histogram, "rag_chat_stage_seconds",
+                                  "问答主链路分段耗时（秒）", ["stage"], reg),
         # 入库
         "ingestion_jobs_total": get(Counter, "rag_ingestion_jobs_total",
                                     "入库任务数", ["stage"], reg),

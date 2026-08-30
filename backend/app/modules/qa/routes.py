@@ -235,6 +235,7 @@ async def chat(
                         logger.info("负面记忆命中 mem=%s，强制重新检索", mem.memory_id)
 
                 # 4) 检索（记忆未命中才执行）：用改写后的查询检索（追问合并主题，保证新问题自行检索）
+                _t_retrieve = perf_counter()
                 cites = await rag.retrieve(
                     sdb,
                     search_query,
@@ -242,6 +243,7 @@ async def chat(
                     doc_ids=doc_ids or None,
                     top_k=settings.top_k_final,
                 )
+                metrics["chat_stage_seconds"].labels("retrieve").observe(perf_counter() - _t_retrieve)
                 # U3 证据等级：按检索分数四级判级
                 scores = [c.score for c in cites if c.score is not None]
                 evidence_level = rag.judge_evidence_level(scores)
@@ -361,6 +363,7 @@ async def chat(
             buffer = ""
             usage_in = usage_out = None
             finish_reason = None
+            _t_generate = perf_counter()
             async for chunk in llm.astream(messages):
                 text = chunk.content
                 if isinstance(text, list):
@@ -376,6 +379,7 @@ async def chat(
                 if fr:
                     finish_reason = fr
                 yield _sse({"event": "delta", "data": text})
+            metrics["chat_stage_seconds"].labels("generate").observe(perf_counter() - _t_generate)
 
             # 5.5) 完备性校验（opt-in，默认关；用户不满意可点「🤖 LLM优化」触发 /optimize）。
             #      硬信号兜底：生成因超出 max_tokens 被截断（finish_reason=length）→ 诚实标记不完整。
@@ -414,6 +418,7 @@ async def chat(
                     answer_complete = True
 
             # 6) 落库助手消息 + 引用
+            _t_persist = perf_counter()
             async with async_session_factory() as sdb:
                 asst = Message(
                     conversation_id=conv.id,
@@ -453,6 +458,7 @@ async def chat(
                     conv2.last_message_at = _now()
                 await sdb.commit()
                 asst_id = asst.id
+            metrics["chat_stage_seconds"].labels("persist").observe(perf_counter() - _t_persist)
             # 7) 写入语义缓存（仅严谨风格；发散风格不缓存；被截断的坏答案不缓存，
             #    否则长对话里近似问法会秒回截断坏答案——「越问越笨」的根因之一）
             if cacheable and not truncated:

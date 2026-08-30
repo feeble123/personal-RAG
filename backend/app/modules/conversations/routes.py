@@ -5,10 +5,11 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.core.deps import CurrentUser, DbSession
 from app.core.exceptions import BizError
-from app.db.models import Citation, Conversation, Message
+from app.db.models import Conversation, Message
 from app.modules.conversations.schemas import (
     ConversationCreate,
     ConversationListOut,
@@ -111,6 +112,10 @@ async def list_messages(
     if cursor:
         q = q.where(Message.id < cursor)
     q = q.order_by(Message.id.desc()).limit(limit + 1)
+    # H-①：selectinload 一次性带出本批所有消息的引用，消除「每条消息单独查引用」的 N+1。
+    # Message.citations 关系本就 lazy="selectin"，但列表接口需按 rank 排序展示，
+    # selectinload 默认按主键序加载，故在 Python 侧按 rank 再排一次。
+    q = q.options(selectinload(Message.citations))
     rows = list((await db.execute(q)).scalars().all())
 
     has_more = len(rows) > limit
@@ -122,11 +127,7 @@ async def list_messages(
     for m in rows:
         out = MessageOut.model_validate(m)
         if m.role == "assistant":
-            cites = (
-                await db.execute(
-                    select(Citation).where(Citation.message_id == m.id).order_by(Citation.rank)
-                )
-            ).scalars().all()
+            cites = sorted(m.citations, key=lambda c: c.rank if c.rank is not None else 0)
             out.citations = [CitationOut.model_validate(c) for c in cites]
         items.append(out)
     return MessageListOut(items=items, has_more=has_more)

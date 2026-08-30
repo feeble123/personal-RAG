@@ -13,6 +13,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from time import perf_counter
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -650,7 +651,9 @@ async def retrieve(
             try:
                 # 用聚焦主题词重排：长查询会稀释关键项（BGE 局限），
                 # 聚焦「引用标准」后正确规则节 0.98+（原文案仅 0.81 被前言压过）
+                _t0 = perf_counter()
                 r_scores = await rerank(focus_rerank_query(query), docs)
+                metrics["chat_stage_seconds"].labels("rerank").observe(perf_counter() - _t0)
                 cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
                 rerank_ok = True
                 rerank_status = "ok"
