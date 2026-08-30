@@ -38,7 +38,7 @@ async def _seed_admin() -> None:
                     username=settings.admin_username,
                     password_hash=hash_password(settings.admin_password),
                     nickname="系统管理员",
-                    role="admin",
+                    role="superadmin",
                 )
             )
             await db.commit()

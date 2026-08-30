@@ -53,14 +53,29 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+# 三级角色（单元 I 补充）：superadmin 超管 / admin 库管 / user 普通。
+# 库管与超管都算「管理员」，可进知识库/记忆库/审计/统计等管理接口。
+ADMIN_ROLES = ("admin", "superadmin")
+
+
 async def require_admin(user: CurrentUser) -> User:
-    """仅管理员可访问的知识库管理接口。"""
-    if user.role != "admin":
+    """管理接口（知识库/记忆库/审计/统计）：库管(admin)与超管(superadmin)都可访问。"""
+    if user.role not in ADMIN_ROLES:
         raise BizError("无权限：仅管理员可访问", 403, "FORBIDDEN")
     return user
 
 
 AdminUser = Annotated[User, Depends(require_admin)]
+
+
+async def require_superadmin(user: CurrentUser) -> User:
+    """账号管理接口：仅超管(superadmin)可访问——管「人」的最高权限，库管无权。"""
+    if user.role != "superadmin":
+        raise BizError("无权限：仅超级管理员可访问", 403, "FORBIDDEN")
+    return user
+
+
+SuperAdminUser = Annotated[User, Depends(require_superadmin)]
 
 
 async def get_client_ip(request: Request) -> str:

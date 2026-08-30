@@ -35,7 +35,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)  # admin / user
+    role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)  # superadmin / admin / user
     nickname: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # P0-1：会话版本号。改密/禁用/重置密码时 +1 → 旧 access token（携带旧 sv）全部失效。
