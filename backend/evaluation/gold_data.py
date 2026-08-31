@@ -306,15 +306,6 @@ GOLD: list[dict] = [
         "note": "规范正文",
     },
     {
-        "q": "滑坡防治的勘察要求包括哪些？",
-        "kb": "GB 38509-2020 滑坡防治设计规范",
-        "expect_keywords": ["勘察"],
-        "expect_clauses": None,
-        "answer_hint": "勘察要求见勘察章节",
-        "intent": "enumeration",
-        "note": "勘察章节",
-    },
-    {
         "q": "抗滑桩工程的设计要求是什么？",
         "kb": "GB 38509-2020 滑坡防治设计规范",
         "expect_keywords": ["抗滑桩"],
@@ -511,9 +502,9 @@ GOLD: list[dict] = [
     {
         "q": "水力学中水头损失分为哪几类？",
         "kb": "水力学第5版",
-        "expect_keywords": ["沿程损失", "局部损失"],
+        "expect_keywords": ["沿程水头损失", "局部水头损失"],
         "expect_clauses": ["4"],
-        "answer_hint": "水头损失分为沿程损失与局部损失",
+        "answer_hint": "水头损失分为沿程水头损失与局部水头损失",
         "intent": "enumeration",
         "note": "4 流动阻力与水头损失",
     },

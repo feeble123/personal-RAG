@@ -14,6 +14,7 @@ PDF test/
 
 # 评测临时产物（baseline.json 保留进 git）
 backend/evaluation/report.json
+backend/evaluation/vague_report.json
 
 # Node
 node_modules/

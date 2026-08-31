@@ -28,6 +28,13 @@ class TestRelationWordSkip:
     def test_quantity_skipped(self):
         assert focus_rerank_query("动力配电箱的数量是多少？") == "动力配电箱"
 
+    def test_duty_skipped(self):
+        # 「X及职责」的「职责」是关系词，不能单独当聚焦词——
+        # 否则「应急组织机构及职责」只剩「职责」，rerank 被满篇「施工组织机构」块挤掉。
+        out = focus_rerank_query("高支模应急组织机构及职责是什么？")
+        assert out != "职责"
+        assert "应急组织机构" in out
+
 
 class TestNewQuestionForms:
     """此前未识别的问法现在能正确提取主题词。"""
