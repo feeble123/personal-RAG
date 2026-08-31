@@ -193,7 +193,9 @@ async def upload_document(
     await db.refresh(doc)
 
     # 后台入库（P0-9：写 DB job，worker 轮询执行；不 create_task）
-    await ingestion.enqueue_ingestion_async(doc.id, kind="ingest")
+    job_id = await ingestion.enqueue_ingestion_async(doc.id, kind="ingest")
+    # 单元 J 单元⑤：返回排队位置（前面还有几个 queued 任务），让等待可解释
+    queue_position = await ingestion.queued_ahead_count(job_id) if job_id else 0
     # P2-10：审计——上传文档
     await audit.record_audit(
         actor_id=_admin.id,
@@ -204,7 +206,7 @@ async def upload_document(
         detail=f"上传文档 {original}（{doc_type}）",
         client_ip=await get_client_ip(request),
     )
-    return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type)
+    return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type, queue_position=queue_position)
 
 
 @router.get("/kbs/{kb_id}/documents", response_model=DocumentListOut)

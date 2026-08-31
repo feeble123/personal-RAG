@@ -209,12 +209,12 @@ def create_app() -> FastAPI:
 
         from fastapi.responses import Response as FastAPIResponse
 
-        from app.core.metrics import generate_metrics_text, refresh_active_jobs
+        from app.core.metrics import generate_metrics_text, refresh_active_jobs, refresh_queue_metrics
         from app.db.models import IngestionJob
 
         @app.get("/metrics")
         async def metrics_endpoint() -> FastAPIResponse:
-            # 刷新活跃入库任务数（DB 挂则沿用旧值，不阻塞）
+            # 刷新活跃入库任务数 + 各阶段积压指标（DB 挂则沿用旧值，不阻塞）
             try:
                 async with async_session_factory() as db:
                     cnt = (
@@ -225,6 +225,10 @@ def create_app() -> FastAPI:
                         )
                     ).scalar_one()
                     refresh_active_jobs(int(cnt))
+                # 单元 J 单元⑤：各阶段在途数 + 最老等待时长（分层定位「哪一环堵了」）
+                from app.modules.ingestion.manager import queue_backlog_snapshot
+
+                refresh_queue_metrics(await queue_backlog_snapshot())
             except Exception:  # noqa: BLE001
                 pass
             return FastAPIResponse(generate_metrics_text(), media_type="text/plain")

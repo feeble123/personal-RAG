@@ -139,7 +139,57 @@ async def enqueue_ingestion_async(doc_id: int, kind: str = "ingest") -> int | No
         job = IngestionJob(document_id=doc_id, kind=kind, stage="queued")
         db.add(job)
         await db.commit()
-        return job.id
+        job_id = job.id
+    # 单元 J 单元③：Celery 模式投递任务（Redis 只当传话筒，真相仍在 DB）。
+    # send_task 是同步 Redis 发布，走 to_thread 不阻塞事件循环；投递失败抛异常由
+    # 上层处理，job 留在 queued（进程内 worker 兜底 / 重试仍可处理）。
+    if settings.use_celery:
+        from app.core.celery_app import celery_app
+
+        await asyncio.to_thread(
+            celery_app.send_task, "ingestion.process_job", args=[job_id], queue="indexing"
+        )
+    return job_id
+
+
+async def queued_ahead_count(job_id: int) -> int:
+    """某 job 前面还有多少个「排队等待」的任务（积压时给用户「前面还有 N 个」）。
+
+    只数 id 更小、仍在 queued 的 job（先到先得顺序）。已终态的不算。
+    """
+    async with async_session_factory() as db:
+        return (await db.scalar(
+            select(func.count()).select_from(IngestionJob).where(
+                IngestionJob.stage == "queued",
+                IngestionJob.id < job_id,
+            )
+        )) or 0
+
+
+async def queue_backlog_snapshot() -> list[tuple[str, int, float]]:
+    """聚合各阶段「在途任务数 + 最老任务等待时长」，供 /metrics 刷新积压指标。
+
+    返回 [(stage, count, oldest_wait_seconds), ...]，只含 count>0 的阶段。
+    最老等待时长 = now - created_at（秒）；无任务阶段不出现在结果里。
+    """
+    now = _now()
+    async with async_session_factory() as db:
+        rows = (await db.execute(
+            select(
+                IngestionJob.stage,
+                func.count(),
+                func.min(IngestionJob.created_at),
+            )
+            .where(IngestionJob.stage.in_(_ACTIVE_STAGES))
+            .group_by(IngestionJob.stage)
+        )).all()
+    out: list[tuple[str, int, float]] = []
+    for stage, cnt, oldest_created in rows:
+        if cnt == 0 or oldest_created is None:
+            continue
+        wait = max((now - oldest_created).total_seconds(), 0.0)
+        out.append((stage, int(cnt), wait))
+    return out
 
 
 def start_worker() -> None:
@@ -177,6 +227,11 @@ async def _worker_loop() -> None:
             await _reaper_pass()
         except Exception:
             logger.exception("reaper 回收失败（忽略，下轮重试）")
+        if settings.use_celery:
+            # Celery 模式：本进程只做 reaper（兜底回收 lease 过期的 job），领任务交给
+            # Celery worker。CAS 锁保证两者并存也不重复——但这里不领，避免与 Celery 抢活。
+            await asyncio.sleep(_claim_interval_s)
+            continue
         job_id = await _claim_next_job_async()
         if job_id is None:
             await asyncio.sleep(_claim_interval_s)
@@ -186,11 +241,48 @@ async def _worker_loop() -> None:
     _stop_requested = False
 
 
-async def _claim_next_job_async() -> int | None:
-    """异步 CAS 领任务：把最早的 queued job 原子改 parsing（UPDATE..WHERE id+stage='queued'）。
+async def _claim_job_by_id(job_id: int, owner: str = "worker") -> bool:
+    """CAS 领**指定** job：id + stage='queued' 原子改 parsing（幂等）。
 
-    并发安全：先选出最早的 queued job id，再用「id + stage=queued」条件 UPDATE；
-    只有命中行（rowcount==1）才真正领到。两个 worker 抢同一 job 时后到者 rowcount=0
+    返回是否抢到。抢不到说明：job 不存在 / 已终态（succeeded/failed/cancelled）/
+    已被人领走（parsing 等活跃 stage）——全部幂等跳过，绝不重复处理。
+    Celery 任务与进程内 worker 共用这把「锁」，谁抢到谁处理（双轨并存）。
+    """
+    now = _now()
+    async with async_session_factory() as db:
+        res = await db.execute(
+            update(IngestionJob)
+            .where(IngestionJob.id == job_id, IngestionJob.stage == "queued")
+            .values(
+                stage="parsing",
+                attempt=IngestionJob.attempt + 1,
+                lease_owner=owner,
+                lease_until=now + timedelta(seconds=_lease_seconds),
+                heartbeat_at=now,
+            )
+        )
+        await db.commit()
+        return res.rowcount == 1
+
+
+async def process_job_from_celery(job_id: int) -> None:
+    """Celery 任务入口：CAS 领指定 job → 执行（真相在 DB，重复投递不重复干）。
+
+    单元 J 单元③：Celery task 只接收 job_id，进来自行「抢锁」（_claim_job_by_id），
+    抢不到（已终态/已被人领/不存在）直接返回；抢到才走 _execute_job 完整处理。
+    与进程内 worker（_claim_next_job_async）同用一把 CAS 锁，互不重复。
+    """
+    claimed = await _claim_job_by_id(job_id, owner="celery")
+    if not claimed:
+        return
+    await _execute_job(job_id)
+
+
+async def _claim_next_job_async() -> int | None:
+    """异步 CAS 领任务（进程内 worker 路径）：把最早的 queued job 原子改 parsing。
+
+    并发安全：先选出最早的 queued job id，再用 _claim_job_by_id 原子 UPDATE；
+    只有命中（rowcount==1）才真正领到。两个 worker 抢同一 job 时后到者抢不到
     → 返回 None，下轮再抢别的，不会重复处理同一 job。
     """
     async with async_session_factory() as db:
@@ -200,24 +292,10 @@ async def _claim_next_job_async() -> int | None:
             .order_by(IngestionJob.id)
             .limit(1)
         )
-        if target is None:
-            return None
-        now = _now()
-        res = await db.execute(
-            update(IngestionJob)
-            .where(IngestionJob.id == target, IngestionJob.stage == "queued")
-            .values(
-                stage="parsing",
-                attempt=IngestionJob.attempt + 1,
-                lease_owner="worker",
-                lease_until=now + timedelta(seconds=_lease_seconds),
-                heartbeat_at=now,
-            )
-        )
-        if res.rowcount == 0:
-            return None  # 已被并发 worker 领走
-        await db.commit()
-        return target
+    if target is None:
+        return None
+    claimed = await _claim_job_by_id(target, owner="worker")
+    return target if claimed else None
 
 
 async def _execute_job(job_id: int) -> None:

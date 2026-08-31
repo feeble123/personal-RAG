@@ -14,6 +14,11 @@ alembic>=1.13
 asyncpg>=0.29
 # P2 单元3：Prometheus 指标端点（/metrics，Grafana 拉取）
 prometheus-client>=0.20
+# 单元 J：Celery 多队列 worker 分层（Redis 仅作 broker 调度，任务真相仍在 PG）
+celery>=5.4
+# redis-py 锁 5.x：本机 Redis 3.0.504 只支持 RESP2，8.x 默认发 HELLO 协商 RESP3 会断连
+# （上线换 Linux Redis 7.x 后可放开上限）
+redis>=5.0,<6
 # P2 单元4：SQLite→PG 数据迁移脚本用（scripts/migrate_sqlite_to_pg.py 同步引擎）
 psycopg2-binary>=2.9
 
@@ -44,6 +49,9 @@ pypdf>=4.2
 python-docx>=1.1
 pandas>=2.2
 openpyxl>=3.1
+# OCR（默认引擎 rapid，扫描件 PDF 必需）：之前装在 .venv 里但漏登记，单元 K 补上
+# 让 Docker 镜像按本清单构建即具备扫描件 OCR 能力（onnxruntime 由它传递依赖引入）
+rapidocr-onnxruntime>=1.4
 
 # ===== 网络 / 重试 =====
 httpx>=0.27

@@ -51,6 +51,14 @@ def build_metrics(registry: CollectorRegistry | None = None) -> dict[str, Any]:
                                     "入库任务数", ["stage"], reg),
         "ingestion_jobs_active": get(Gauge, "rag_ingestion_jobs_active",
                                      "当前活跃入库任务数", [], reg),
+        # P2-10（单元 J 单元⑤）：队列积压监控
+        # stage: queued / parsing / chunking / embedding / indexing / publishing / verifying
+        # 积压 = queued 等领的任务数 + 各活跃阶段在途数，按阶段分层可见哪一环堵了
+        "ingestion_queue_length": get(Gauge, "rag_ingestion_queue_length",
+                                      "各阶段在途/积压任务数", ["stage"], reg),
+        # 各阶段最老任务的等待时长（秒）：queued 阶段即「排队等了多久」，活跃阶段即「卡了多久」
+        "ingestion_oldest_wait_seconds": get(Gauge, "rag_ingestion_oldest_wait_seconds",
+                                             "各阶段最老任务等待时长（秒）", ["stage"], reg),
         # 检索链路
         "embedding_requests_total": get(Counter, "rag_embedding_requests_total",
                                         "embedding 调用数", [], reg),
@@ -96,3 +104,17 @@ def generate_metrics_text(registry: CollectorRegistry | None = None) -> bytes:
 def refresh_active_jobs(count: int) -> None:
     """刷新 rag_ingestion_jobs_active（/metrics 拉取时调用，DB 挂则沿用旧值）。"""
     metrics["ingestion_jobs_active"].set(count)
+
+
+def refresh_queue_metrics(rows: list[tuple[str, int, float]], registry: CollectorRegistry | None = None) -> None:
+    """刷新队列积压指标（/metrics 拉取时调用，DB 挂则沿用旧值）。
+
+    rows: [(stage, count, oldest_wait_seconds), ...]——由调用方从 DB 聚合出
+    各阶段「在途任务数」与「最老任务等待时长」。Gauge 只 set，不清除历史 label，
+    但每次按当前出现的 stage 覆盖，缩水/消失的阶段保留旧值（Grafana 层面可判过期）。
+    registry 参数供测试隔离（默认全局，与 build_metrics 对称）。
+    """
+    m = build_metrics(registry)
+    for stage, count, oldest_sec in rows:
+        m["ingestion_queue_length"].labels(stage).set(count)
+        m["ingestion_oldest_wait_seconds"].labels(stage).set(oldest_sec)

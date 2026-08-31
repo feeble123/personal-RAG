@@ -71,6 +71,19 @@ class Settings(BaseSettings):
         """当前是否 SQLite 方言（PG/MySQL 迁移路径判断用）。"""
         return self.database_url.startswith("sqlite")
 
+    # ---- Celery + Redis（单元 J：多队列 worker 分层）----
+    # Redis 只当「传话的」broker 调度器，任务真相仍在 PostgreSQL（DB job 表）。
+    # use_celery=false（默认）走进程内 worker；true 走 Celery worker（双轨并存，可随时切回）。
+    redis_url: str = "redis://localhost:6379/0"
+    use_celery: bool = False
+    # 各队列并发上限（防内存/显存爆：解析/GPU 重活低并发，打向量高并发）
+    celery_ingestion_concurrency: int = 1
+    celery_parser_concurrency: int = 1
+    celery_parser_gpu_concurrency: int = 1
+    celery_embedding_concurrency: int = 4
+    celery_indexing_concurrency: int = 2
+    celery_maintenance_concurrency: int = 1
+
     # ---- 上传 ----
     max_upload_size: int = 200 * 1024 * 1024  # 200MB
     upload_dir: str = str(BASE_DIR / "data" / "uploads")

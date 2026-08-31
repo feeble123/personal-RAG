@@ -86,6 +86,9 @@ class UploadResult(BaseModel):
     status: str = "pending"
     # P0-11 文档类型（上传时选择，落库回显）
     doc_type: str = "other"
+    # 单元 J 单元⑤：前面还有多少个排队等待的任务（0=立即开工）。
+    # 积压时前端可显示「排队中，前面还有 N 个」，让等待可解释。
+    queue_position: int = 0
 
 
 class SearchResult(BaseModel):
