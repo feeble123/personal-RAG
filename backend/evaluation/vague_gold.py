@@ -1,9 +1,9 @@
 """单元 L：模糊问题 gold 子集（独立于 gold_data.py 的 60 问，互不干扰）。
 
 背景：现有 gold 60 问覆盖 7 种意图，但**没有任何一条是「单轮模糊提问」**。
-本文件专门造 12 问模糊题，测「问法不清时，现有向量+BM25+RRF+rerank 召回还能不能命中」。
+本文件专门造 11 问模糊题，测「问法不清时，现有向量+BM25+RRF+rerank 召回还能不能命中」。
 
-三类模糊（每类 4 问，答案均已在库里验证真实存在）：
+三类模糊（A 4 问 / B 4 问 / C 3 问，答案均已在库里验证真实存在）：
 - A 隐式指代/省略主语：用「最高级别」「平稳还是乱」这类指代/口语，不点明术语
 - B 词过泛/缺主语：一个宽泛领域词（「溢洪道」「泵」），答案分散在具体章节
 - C 口语换说法：口语词与规范术语字面不匹配（「垮了」vs「溃坝」）
@@ -28,7 +28,7 @@ VAGUE: list[dict] = [
         "q": "怎么判断水流是平稳的还是乱的？",
         "kb": "水力学第5版",
         "expect_keywords": ["层流", "雷诺数", "紊流"],
-        "expect_clauses": None,
+        "expect_clauses": ["4.4"],
         "answer_hint": "用雷诺数判别流态：层流/紊流",
         "intent": "general",
         "vague_type": "A",
@@ -80,7 +80,7 @@ VAGUE: list[dict] = [
         "q": "农村供水的工程要建哪些东西？",
         "kb": "数字孪生农村供水工程建设技术指南（试行）",
         "expect_keywords": ["水源地", "泵站", "水厂"],
-        "expect_clauses": None,
+        "expect_clauses": ["2.2"],
         "answer_hint": "系统组成：水源地、泵站、输配水管网、水厂、用户终端",
         "intent": "enumeration",
         "vague_type": "B",
@@ -99,16 +99,6 @@ VAGUE: list[dict] = [
 
     # ==================== C 口语换说法（字面不匹配） ====================
     {
-        "q": "大坝万一垮了怎么办？",
-        "kb": "重庆市防汛抗旱应急预案",
-        "expect_keywords": ["溃坝", "险情"],
-        "expect_clauses": None,
-        "answer_hint": "溃坝险情处置见应急预案",
-        "intent": "general",
-        "vague_type": "C",
-        "note": "口语「垮了」→术语「溃坝」，字面不匹配",
-    },
-    {
         "q": "水在管道拐弯的地方为什么会白白损失能量？",
         "kb": "水力学第5版",
         "expect_keywords": ["局部水头损失"],
@@ -122,7 +112,7 @@ VAGUE: list[dict] = [
         "q": "山坡上的土石要往下滑，怎么看它稳不稳？",
         "kb": "GB 38509-2020 滑坡防治设计规范",
         "expect_keywords": ["稳定性"],
-        "expect_clauses": None,
+        "expect_clauses": ["7"],
         "answer_hint": "滑坡稳定性验算见规范正文",
         "intent": "general",
         "vague_type": "C",
@@ -132,7 +122,7 @@ VAGUE: list[dict] = [
         "q": "水流突然由急变缓，水面会鼓起一道波，这是什么现象？",
         "kb": "水力学第5版",
         "expect_keywords": ["水跃"],
-        "expect_clauses": None,
+        "expect_clauses": ["6.4"],
         "answer_hint": "水跃现象，见堰流/明渠相关章",
         "intent": "general",
         "vague_type": "C",

@@ -92,7 +92,7 @@ async def run_one(db, gold: dict, top_k: int = 10) -> dict:
 
 
 def _print_by_type(results: list[dict]) -> None:
-    """按模糊类型 A/B/C 分组报 Recall。"""
+    """按模糊类型 A/B/C 分组报 Recall（关键词宽松 + 严格条款两口径）。"""
     print("\n--- 分模糊类型 ---")
     for t in ("A", "B", "C"):
         rows = [r for r in results if r.get("vague_type") == t]
@@ -101,8 +101,11 @@ def _print_by_type(results: list[dict]) -> None:
         n = len(rows)
         r5 = sum(1 for r in rows if r["recall5"]) / n
         r10 = sum(1 for r in rows if r["recall10"]) / n
+        cl_rows = [r for r in rows if r.get("clause5") is not None]
+        cl5 = sum(1 for r in cl_rows if r["clause5"]) / len(cl_rows) if cl_rows else None
         name = {"A": "隐式指代/省略", "B": "词过泛/缺主语", "C": "口语换说法"}.get(t, t)
-        print(f"  {t} {name:14} n={n}  R@5={r5:.1%}  R@10={r10:.1%}")
+        cl_s = f"  严格条款@5={cl5:.1%}(n={len(cl_rows)})" if cl5 is not None else ""
+        print(f"  {t} {name:14} n={n}  关键词R@5={r5:.1%} R@10={r10:.1%}{cl_s}")
 
 
 async def main() -> int:
@@ -118,9 +121,12 @@ async def main() -> int:
             if r["skipped"]:
                 print(f"⏭  [{r.get('vague_type')}] {r['q']}  ({r.get('error', '库不存在')})")
                 continue
-            mark = "✅" if r["recall5"] else "❌"
-            cl = f" 严{r.get('clause5')}" if r.get("clause5") is not None else ""
-            print(f"{mark}[{r['vague_type']}] {r['q']}  hit={r['hit_keyword']}{cl}")
+            cl = f"{'✅' if r['clause5'] else '❌'}" if r.get("clause5") is not None else "无锚点"
+            kw = "✅" if r["recall5"] else "❌"
+            # 主标记：有锚点看严格条款，无锚点退回关键词口径
+            mark = (f"{'✅' if r['clause5'] else '❌'}" if r.get("clause5") is not None
+                    else kw)
+            print(f"{mark}[{r['vague_type']}] {r['q']}  词@5={kw} 章@5={cl}")
 
     active = [r for r in results if not r["skipped"]]
     if not active:
@@ -130,11 +136,13 @@ async def main() -> int:
     agg = aggregate(active)
     print("\n===== 模糊问题评测汇总 =====")
     print(f"有效问数: {agg['total']}")
-    print(f"Recall@5 : {agg['recall_at_5']:.1%}")
-    print(f"Recall@10: {agg['recall_at_10']:.1%}")
+    print("\n【可信数字·严格口径】正确章节进 top-k（不受高频词干扰）")
     if agg.get("clause_at_5") is not None:
-        print(f"严格条款@5 : {agg['clause_at_5']:.1%}")
-        print(f"严格条款@10: {agg['clause_at_10']:.1%}")
+        print(f"  严格条款 Recall@5 : {agg['clause_at_5']:.1%}")
+        print(f"  严格条款 Recall@10: {agg['clause_at_10']:.1%}")
+    print("\n【宽松参考·关键词口径】top-k 任一 chunk 命中任一关键词")
+    print(f"  关键词 Recall@5 : {agg['recall_at_5']:.1%}")
+    print(f"  关键词 Recall@10: {agg['recall_at_10']:.1%}")
     _print_by_type(active)
 
     report = {"aggregate": agg, "results": active}
