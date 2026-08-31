@@ -40,10 +40,14 @@ class TestNewQuestionForms:
     """此前未识别的问法现在能正确提取主题词。"""
 
     def test_fenwei_level(self):
-        assert focus_rerank_query("预警信息分为哪几个等级？") == "预警信息"
+        # 「分为哪几个等级」应保留「分级」量词信号——答案落在「XX分级」章节
+        # （单元 P 修「预警信息分为哪几个等级」检索失败：只留「预警信息」会丢量词，
+        #  reranker 排不到 3.4 预警分级块）
+        assert focus_rerank_query("预警信息分为哪几个等级？") == "预警信息 分级"
 
     def test_fenwei_ji_duo_level(self):
-        assert focus_rerank_query("应急预案中的应急响应分为几级？") == "应急响应"
+        # 「分为几级」同理：答案在 4.1 响应分级，须保留「分级」信号
+        assert focus_rerank_query("应急预案中的应急响应分为几级？") == "应急响应 分级"
 
     def test_fenwei_jilei(self):
         assert focus_rerank_query("水力学中水头损失分为哪几类？") == "水头损失"

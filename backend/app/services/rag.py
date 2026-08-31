@@ -67,13 +67,18 @@ _GENERIC_WORDS = {
 # 泛词前的修饰前缀：「具体要求」「主要规定」仍是泛词，须跳过（否则「组织指挥体系的具体要求」
 # 会取「具体要求」当主题词，rerank 全排成噪声；「引用标准」的「引用」不是修饰词，不受影响）
 _GENERIC_MODIFIERS = ("具体", "主要", "基本", "相关", "一般", "重要", "相应", "有关", "详细")
+# 动词前缀（「引用标准的编写要求」里「编写要求」是追问内容，主体是「引用标准」，
+# 不能取「编写要求」当主题词——否则 reranker 搜不到「3.2 引用标准」章节）。
+_GENERIC_VERB_PREFIX = ("编写", "编制")
 
 
 def _is_generic_part(part: str) -> bool:
-    """段是否为泛词：精确匹配，或「修饰词+泛词」（具体/主要/基本…要求/规定…）。"""
+    """段是否为泛词：精确匹配，或「修饰词/动词+泛词」（具体/主要/基本…要求/规定…，
+    编写/编制…要求/格式…）。「编写要求」是追问内容，应跳过取前面的主体词。"""
     if part in _GENERIC_WORDS:
         return True
-    base = re.sub(rf"^(?:{'|'.join(_GENERIC_MODIFIERS)})", "", part)
+    prefix = rf"^(?:{'|'.join(_GENERIC_MODIFIERS + _GENERIC_VERB_PREFIX)})"
+    base = re.sub(prefix, "", part)
     return base in _GENERIC_WORDS
 
 
@@ -105,6 +110,12 @@ def focus_rerank_query(query: str) -> str:
     # 提取的仍很长（含文档标题等）→ 保持原查询
     if len(subj) * 2 > len(query) and len(query) > 10:
         return query
+    # 等级量词信号：问「分几级/有几级」时，答案通常落在「XX分级」章节（如 4.1 响应分级、
+    # 3.4 预警分级）。focus 只留主体词会丢量词，reranker 排不到「分级」块，反被「响应措施」
+    # 等长块压过。subj 不含「级」时追加「分级」补回信号（只加词不改词）。
+    # 放在「太长回退」守卫之后，避免追加后变长误触发回退。
+    if re.search(r"分几级|有几级|分为几级|几级|分级|等级", s) and "级" not in subj:
+        subj = f"{subj} 分级"
     return subj
 
 
@@ -254,9 +265,16 @@ async def _expand_enumeration_sections(
     kb_cond = Chunk.kb_id == kb_id if kb_id is not None else None
     # P0-8 active 过滤：DB 同时存 active+retired 版本，扩展只拉 active 版本切片
     active_ids = await _active_version_ids(db, kb_id=kb_id)
-    # 取候选集：优先完整 fused 候选集（覆盖更全），否则 top-K
-    pool = candidates_full or dict(cand_sorted)
-    ranked_pool = sorted(pool.items(), key=lambda x: x[1], reverse=True)[:200]
+    # 取候选集：优先 rerank 排序后的候选（cand_sorted 已是 [(cid, rerank_score)] 降序）——
+    # rerank 认得正确答案，比融合分投票准。融合分对「数据底板/预警分级/技术保障」等词
+    # 区分度差，会把隔壁章（如「5 系统体系架构」「1 总则」）误选成 best_unit。
+    # 仅当主流程没产出 rerank 排序结果时才回退融合分（candidates_full）。
+    if cand_sorted:
+        ranked_pool = list(cand_sorted)[:200]
+    elif candidates_full:
+        ranked_pool = sorted(candidates_full.items(), key=lambda x: x[1], reverse=True)[:200]
+    else:
+        return None
     if not ranked_pool:
         return None
     # 补齐章节信息（候选可能超出 top-100 的 section_by_id 范围）
