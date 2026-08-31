@@ -1,17 +1,131 @@
-# 升级路径：Docker Compose 编排示例
-# 未来可在此扩展 MySQL / Milvus / Redis 等服务（当前 SQLite + Chroma 已内置数据卷）
-version: "3.8"
+# ============================================================
+# 单元 K · 单元②：Docker Compose 五服务编排（PG17 + Redis + 后端 + Celery worker + Nginx）
+#
+# 用法（在项目根目录）：
+#   docker compose -f deploy/docker-compose.yml up -d
+#
+# 服务拓扑：
+#   nginx(80) ──反代──> backend(uvicorn:8000) ──读写──> db(PG17)
+#                                   │                    │
+#   celery-worker ──共享 volume───> 上传/Chroma 数据       └─ redis(broker)
+#                                   └──队列调度──> redis
+#
+# 数据卷（真实数据不丢）：pgdata / uploads / chroma —— 挂在容器外，重启/升级不丢。
+# 密码：POSTGRES_PASSWORD 默认 rag_app_password，生产请用环境变量覆盖（见 .env）。
+#
+# 注意：
+# - backend 与 celery-worker 共享 uploads + chroma 卷：worker 解析/写向量，后端读，
+#   必须同一个卷，否则「worker 入库了、后端却看不到」。
+# - use_celery=true 时后端进程内 worker 只做 reaper（回收 lease 过期 job），
+#   领活交给 celery-worker；两者共用 DB 的 CAS 锁，不重复处理。
+# ============================================================
 
 services:
-  rag:
-    build: ..
-    container_name: rag-system
-    ports:
-      - "8000:8000"
+  # ---- 1. PostgreSQL 17（关系库，真相源）----
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: rag_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag_app_password}
+      POSTGRES_DB: rag
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_app -d rag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---- 2. Redis（仅 broker 调度器；容器内是新版 Redis 7，非本机 3.0）----
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---- 3. 后端 API（uvicorn 单进程；横向扩展可再加副本 + 前置负载均衡）----
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../backend/.env          # 密钥（JWT_SECRET / LLM / embedding key）从 .env 注入
+    environment:
+      APP_ENV: production         # 生产 fail-safe：缺密钥/弱密码直接拒绝启动
+      DATABASE_URL: postgresql+asyncpg://rag_app:${POSTGRES_PASSWORD:-rag_app_password}@db:5432/rag
+      REDIS_URL: redis://redis:6379/0
+      USE_CELERY: "true"          # 领活交给 celery-worker；本进程只做 reaper
+      UPLOAD_DIR: /app/data/uploads
+      CHROMA_DIR: /app/data/.chroma
+    volumes:
+      - uploads:/app/data/uploads
+      - chroma:/app/data/.chroma
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - "8000"                    # 仅内部暴露，对外走 nginx
+    entrypoint: ["/bin/sh", "/app/backend/scripts/docker_entrypoint.sh"]
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ---- 4. Celery worker（领 DB job 干活：解析/向量/写库）----
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
     env_file:
       - ../backend/.env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+asyncpg://rag_app:${POSTGRES_PASSWORD:-rag_app_password}@db:5432/rag
+      REDIS_URL: redis://redis:6379/0
+      USE_CELERY: "true"
+      UPLOAD_DIR: /app/data/uploads
+      CHROMA_DIR: /app/data/.chroma
     volumes:
-      - rag-data:/app/backend/data
+      - uploads:/app/data/uploads
+      - chroma:/app/data/.chroma
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/app/backend/scripts/docker_entrypoint.sh"]
+    # 并发=1（prefork 单子进程）：manager 的 _write_lock/_semaphore 是「每进程」锁，
+    # 多进程会丢失「查重+写入」跨进程串行，故首版单 worker 串行写，最安全；
+    # 多 worker 横向扩展需先给内容去重加 DB 级约束（见 docs/P2-DEPLOYMENT.md）。
+    # 监听全部 6 队列（当前仅 indexing 有任务路由，其余为将来重活分层预留）。
+    command: ["celery", "-A", "app.core.celery_app", "worker",
+              "--loglevel=info", "--concurrency=1",
+              "--queues=ingestion.control,parser.cpu,parser.gpu,embedding,indexing,maintenance"]
+
+  # ---- 5. Nginx 反向代理（对外唯一入口，SSE 关缓冲）----
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
 
 volumes:
-  rag-data:
+  pgdata:
+  uploads:
+  chroma:

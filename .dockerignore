@@ -1,0 +1,40 @@
+# ============================================================
+# Docker build context 排除清单（单元 K · 单元①）
+# 作用：build 时这些文件不发给 docker daemon，镜像更小、构建更快，
+#       且关键地防止密钥/数据/依赖被塞进镜像。
+# 注意：本文件必须放在 build context 根目录（本项目根）才生效。
+# ============================================================
+
+# ---- 版本控制 / 元信息 ----
+.git
+.gitignore
+.agents
+AGENTS.md
+
+# ---- 密钥与本地环境（运行时通过 env_file 注入，绝不进镜像）----
+.env
+backend/.env
+*.env
+!backend/.env.example
+
+# ---- 后端 ----
+backend/.venv
+backend/data
+**/__pycache__
+**/*.pyc
+backend/.pytest_cache
+backend/tests
+backend/evaluation
+backend/requirements-mineru.txt
+backend/*.log
+
+# ---- 前端 ----
+frontend/node_modules
+frontend/dist
+**/*.tsbuildinfo
+frontend/.vite
+
+# ---- 文档 / 计划（不进镜像）----
+docs
+.planning
+*.log
