@@ -24,6 +24,7 @@ from app.db.models import Chunk, Document
 from app.schemas import CitationOut
 from app.services import bm25, vector_store
 from app.services.embedding import embed_query
+from app.services.query_expand import expand_query
 
 logger = logging.getLogger(__name__)
 
@@ -535,11 +536,15 @@ async def retrieve(
     metrics["retrieval_requests_total"].labels("scoped" if doc_ids else "global").inc()
     top_k = top_k or settings.top_k_final
 
+    # 单元 N 口语→术语 查询扩展：口语/宽泛问法追加规范术语（只加词不删词），
+    # 仅作用于检索查询（向量/BM25/rerank），语义缓存/记忆库/用户可见提问仍用原 query。
+    rq = expand_query(query)
+
     # P1-1 评测门禁：收集各阶段分数供 trace
     trace_cands: dict[int, CandidateTrace] = {}
 
     # 1) 向量检索（真实余弦相似度）；doc_ids 限定 → Chroma metadata doc_id 过滤
-    qvec = await embed_query(query)
+    qvec = await embed_query(rq)
     doc_chunk_ids: set[int] = set()
     doc_kb_ids: set[int] = set()
     if doc_ids:
@@ -574,7 +579,7 @@ async def retrieve(
     for kid in kb_ids:
         if not bm25.has_kb(kid):
             continue
-        hits = await asyncio.to_thread(bm25.search, kid, query, bm25_k)
+        hits = await asyncio.to_thread(bm25.search, kid, rq, bm25_k)
         if doc_ids:
             hits = [(cid, s) for cid, s in hits if cid in doc_chunk_ids]
         if not hits:
@@ -652,7 +657,7 @@ async def retrieve(
                 # 用聚焦主题词重排：长查询会稀释关键项（BGE 局限），
                 # 聚焦「引用标准」后正确规则节 0.98+（原文案仅 0.81 被前言压过）
                 _t0 = perf_counter()
-                r_scores = await rerank(focus_rerank_query(query), docs)
+                r_scores = await rerank(focus_rerank_query(rq), docs)
                 metrics["chat_stage_seconds"].labels("rerank").observe(perf_counter() - _t0)
                 cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
                 rerank_ok = True
@@ -672,13 +677,13 @@ async def retrieve(
     ranked = cand_sorted[:top_k]
     expanded_type: str | None = None
     expanded = await _expand_chapter_sections(
-        db, query, cand_sorted, section_by_id, top_k, kb_id=kb_id
+        db, rq, cand_sorted, section_by_id, top_k, kb_id=kb_id
     )
     if expanded:
         expanded_type = "chapter"
     else:
         expanded = await _expand_enumeration_sections(
-            db, query, cand_sorted, section_by_id, top_k, kb_id=kb_id,
+            db, rq, cand_sorted, section_by_id, top_k, kb_id=kb_id,
             candidates_full=candidates,
         )
         if expanded:
