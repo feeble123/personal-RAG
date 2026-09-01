@@ -58,6 +58,7 @@ export interface DocumentItem {
   chunk_count: number
   quality: Record<string, unknown> | null
   chunk_strategy: string   // 后端保留字段，兼容旧数据
+  parse_mode: string       // 单元 S：解析模式 fast=快速 / high=高精度（旧数据默认 fast）
   // P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other
   doc_type: string
   created_at: string

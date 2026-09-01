@@ -65,6 +65,8 @@ class DocumentOut(ORMModel):
     quality: dict[str, Any] | None
     # 切片策略（上传时选择）：old=经典启发式 / new=目录+LLM断号补全
     chunk_strategy: str = "old"
+    # 单元 S 解析模式（上传时自选）：fast=快速（pipeline）/ high=高精度（hybrid-engine）
+    parse_mode: str = "fast"
     # P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other
     doc_type: str = "other"
     created_at: datetime
@@ -86,6 +88,8 @@ class UploadResult(BaseModel):
     status: str = "pending"
     # P0-11 文档类型（上传时选择，落库回显）
     doc_type: str = "other"
+    # 单元 S 解析模式（上传时自选，落库回显）
+    parse_mode: str = "fast"
     # 单元 J 单元⑤：前面还有多少个排队等待的任务（0=立即开工）。
     # 积压时前端可显示「排队中，前面还有 N 个」，让等待可解释。
     queue_position: int = 0

@@ -76,6 +76,14 @@ const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
   { value: 'other', label: '其他' },
 ]
 
+// 单元 S：解析模式（上传时用户自选）。fast=快速（pipeline 老后端，快）/
+// high=高精度（hybrid-engine 新后端，公式/数字/符号/标题更准，慢约 40%）
+type ParseMode = 'fast' | 'high'
+const PARSE_MODE_OPTIONS: { value: ParseMode; label: string }[] = [
+  { value: 'fast', label: '快速' },
+  { value: 'high', label: '高精度' },
+]
+
 // 解析阶段 → 进度百分比（阶段标记，非精确进度）
 const STAGE_PCT: Record<string, number> = {
   pending: 5,
@@ -177,6 +185,9 @@ function DocDetail({ doc }: { doc: DocumentItem }) {
       <Descriptions column={1} size="small" bordered>
         <Descriptions.Item label="文件名">{doc.filename}</Descriptions.Item>
         <Descriptions.Item label="类型">{doc.file_type}</Descriptions.Item>
+        <Descriptions.Item label="解析模式">
+          {doc.parse_mode === 'high' ? '高精度（hybrid-engine）' : '快速（pipeline）'}
+        </Descriptions.Item>
         <Descriptions.Item label="大小">{formatBytes(doc.file_size)}</Descriptions.Item>
         <Descriptions.Item label="状态">{STATUS_META[doc.status]?.text ?? doc.status}</Descriptions.Item>
         <Descriptions.Item label="总页数">{doc.page_count ?? '—'}</Descriptions.Item>
@@ -275,6 +286,7 @@ export default function KnowledgeBase() {
   const [activeKb, setActiveKb] = useState<number | null>(null)
   // P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
   const [docType, setDocType] = useState<DocType>('other')
+  const [parseMode, setParseMode] = useState<ParseMode>('fast')
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
   const [kbForm, setKbForm] = useState({ name: '', description: '', answer_style: 'standard' })
   const [detailDoc, setDetailDoc] = useState<DocumentItem | null>(null)
@@ -337,7 +349,7 @@ export default function KnowledgeBase() {
       try {
         await kbApi.upload(activeKb, files[i], docType, (pct) => {
           setUploadTasks((prev) => prev.map((t) => (t.key === task.key ? { ...t, pct } : t)))
-        })
+        }, parseMode)
         ok++
         setUploadTasks((prev) =>
           prev.map((t) => (t.key === task.key ? { ...t, pct: 100, status: 'done' } : t)),
@@ -490,6 +502,18 @@ export default function KnowledgeBase() {
           </Tooltip>
         ) : (
           v
+        ),
+    },
+    {
+      title: '解析模式',
+      dataIndex: 'parse_mode',
+      key: 'parse_mode',
+      width: 90,
+      render: (v: string) =>
+        v === 'high' ? (
+          <Tag color="purple">高精度</Tag>
+        ) : (
+          <Tag color="blue">快速</Tag>
         ),
     },
     {
@@ -649,6 +673,22 @@ export default function KnowledgeBase() {
                     options={DOC_TYPE_OPTIONS}
                     placeholder="文档类型"
                   />
+                  <Tooltip
+                    title={
+                      parseMode === 'fast'
+                        ? '快速：解析快，适合普通文档（纯文字、少量公式表格）。'
+                        : '高精度：公式、数字、符号、标题识别更准，适合公式/表格密集的文档；解析慢约 40%。'
+                    }
+                  >
+                    <Select
+                      size="small"
+                      value={parseMode}
+                      onChange={setParseMode}
+                      style={{ width: 100 }}
+                      options={PARSE_MODE_OPTIONS}
+                      placeholder="解析模式"
+                    />
+                  </Tooltip>
                   <Button type="primary" icon={<UploadOutlined />} loading={uploading} onClick={() => fileInputRef.current?.click()}>
                     上传文档
                   </Button>

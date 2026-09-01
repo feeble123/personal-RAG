@@ -126,6 +126,7 @@ async def upload_document(
     file: UploadFile = File(...),
     chunk_strategy: str = Form(settings.chunk_strategy_default),
     doc_type: str = Form("other"),
+    parse_mode: str = Form("fast"),
 ) -> UploadResult:
     kb = await db.get(KnowledgeBase, kb_id)
     if not kb:
@@ -138,6 +139,10 @@ async def upload_document(
     # P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other；非法值回退 other
     if doc_type not in ("textbook", "standard", "manual", "other"):
         doc_type = "other"
+
+    # 单元 S 解析模式：fast=快速（pipeline 老后端）/ high=高精度（hybrid-engine 新后端）；非法值回退 fast
+    if parse_mode not in ("fast", "high"):
+        parse_mode = "fast"
 
     original = file.filename or "untitled"
     ext = Path(original).suffix.lower().lstrip(".")
@@ -187,6 +192,7 @@ async def upload_document(
         status="pending",
         chunk_strategy=chunk_strategy,
         doc_type=doc_type,
+        parse_mode=parse_mode,
     )
     db.add(doc)
     await db.commit()
@@ -206,7 +212,7 @@ async def upload_document(
         detail=f"上传文档 {original}（{doc_type}）",
         client_ip=await get_client_ip(request),
     )
-    return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type, queue_position=queue_position)
+    return UploadResult(id=doc.id, filename=original, status="pending", doc_type=doc_type, queue_position=queue_position, parse_mode=parse_mode)
 
 
 @router.get("/kbs/{kb_id}/documents", response_model=DocumentListOut)

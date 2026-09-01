@@ -188,10 +188,12 @@ export const kbApi = {
     file: File,
     docType?: string,
     onProgress?: (pct: number) => void,
+    parseMode?: string,
   ) => {
     const form = new FormData()
     form.append('file', file)
     form.append('doc_type', docType ?? 'other')
+    form.append('parse_mode', parseMode ?? 'fast')
     return api
       .post(`/admin/kbs/${kbId}/documents/upload`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },

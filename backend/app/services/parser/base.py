@@ -92,10 +92,17 @@ class DocumentParser(ABC):
     extensions: tuple[str, ...] = ()
 
     @abstractmethod
-    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:  # noqa: ARG002
+    def parse(
+        self,
+        path: Path,
+        filename: str,
+        chunk_strategy: str = "old",
+        parse_mode: str = "fast",  # noqa: ARG002
+    ) -> ParsedDocument:  # noqa: ARG002
         """解析文件为块序列。filename 用于判断真实类型（如 doc 旧格式）。
 
         chunk_strategy：切片策略（old=经典启发式 / new=目录+LLM断号补全）。
         PDF 解析器据此决定是否启用目录页识别与大纲提取；其余解析器忽略。
+        parse_mode：单元 S 文档级后端选择（fast=快速 / high=高精度）；仅 PDF/MinerU 解析器消费。
         """
         raise NotImplementedError

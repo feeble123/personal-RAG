@@ -188,10 +188,18 @@ def _page_needs_ocr(page) -> bool:
 class PDFParser(DocumentParser):
     extensions = ("pdf",)
 
-    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
+    def parse(
+        self,
+        path: Path,
+        filename: str,
+        chunk_strategy: str = "old",
+        parse_mode: str = "fast",
+    ) -> ParsedDocument:
         """分层解析：并行 OCR（扫描版多页提速）。
 
         chunk_strategy：old=经典（目录页当正文，不做大纲）；new=识别目录页提取权威大纲。
+        parse_mode：单元 S 文档级后端选择（fast=快速 pipeline / high=高精度 hybrid-engine），
+        仅走 MinerU 路由时生效。
         流程：分类页 → 渲染 OCR 页为 PNG（主线程，快）→ 线程池并行识别
               → 按页序组装 blocks（保持章节推进顺序）。
 
@@ -236,7 +244,7 @@ class PDFParser(DocumentParser):
             logger.info("PDF 路由→MinerU: %s（%s）", path.name, "; ".join(route.reasons))
             from app.services.parser.mineru import MinerUPDFParser
 
-            return MinerUPDFParser().parse(path, filename, chunk_strategy)
+            return MinerUPDFParser().parse(path, filename, chunk_strategy, parse_mode)
 
         doc = fitz.open(str(path))
         page_count = doc.page_count

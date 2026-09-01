@@ -5,3 +5,5 @@
 
 mineru[pipeline]==3.4.4
 six==1.17.0
+# 单元 S：hybrid-engine 后端依赖（transformers GPU device_map 必需；vlm 模型单独下载）
+accelerate>=1.0

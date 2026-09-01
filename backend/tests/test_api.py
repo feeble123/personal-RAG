@@ -143,6 +143,41 @@ async def test_upload_chunk_strategy_recorded(client, admin_headers, sample_kb):
     assert item2["chunk_strategy"] == "old"
 
 
+async def test_upload_parse_mode_recorded(client, admin_headers, sample_kb):
+    """单元 S：上传时自选解析模式 → 落库 Document.parse_mode，列表可读。"""
+    kb_id, _ = sample_kb
+    md = "# 测试解析模式\n\n内容内容内容\n\n"
+    # 显式传 high → 落库 high
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("h.md", md.encode("utf-8"), "text/markdown")},
+        data={"parse_mode": "high"},
+    )
+    assert r.status_code == 201
+    assert r.json()["parse_mode"] == "high"
+    doc_id = r.json()["id"]
+    r = await client.get(f"/api/admin/kbs/{kb_id}/documents", headers=admin_headers)
+    item = next(d for d in r.json()["items"] if d["id"] == doc_id)
+    assert item["parse_mode"] == "high"
+    # 非法值 → 回退 fast
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("x.md", md.encode("utf-8"), "text/markdown")},
+        data={"parse_mode": "banana"},
+    )
+    assert r.status_code == 201
+    assert r.json()["parse_mode"] == "fast"
+    # 默认（不传）→ fast
+    r = await client.post(
+        f"/api/admin/kbs/{kb_id}/documents/upload",
+        headers=admin_headers,
+        files={"file": ("d.md", md.encode("utf-8"), "text/markdown")},
+    )
+    assert r.json()["parse_mode"] == "fast"
+
+
 # ================= 会话 + 问答 =================
 async def test_conversation_isolation(client, user_headers, sample_kb):
     kb_id, _ = sample_kb

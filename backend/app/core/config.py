@@ -218,6 +218,10 @@ class Settings(BaseSettings):
     mineru_timeout_sec: int = 1800        # 整文档解析超时（秒）
     mineru_page_timeout_sec: int = 300    # 单页解析超时（秒）
     mineru_device: str = "gpu"            # 设备：gpu（用户有 RTX 4070，加速 MinerU）；cpu 备选
+    # MinerU 后端：pipeline（老一代，仅版面+OCR）| hybrid-engine（新一代，pipeline+VLM 组合，更高精度）
+    mineru_backend: str = "pipeline"
+    # hybrid 后端 effort：medium（快，无图表分析）| high（高精度，含图表分析，慢）
+    mineru_effort: str = "medium"
 
     # ---- 解析路由（P1-2 单元D）：扫描 PDF 走哪个引擎 ----
     # rapid=RapidOCR（快）；mineru=MinerU（bake-off 证明扫描件快且准）；auto=按扫描占比自动

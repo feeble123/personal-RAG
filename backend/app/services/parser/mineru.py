@@ -26,13 +26,32 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 MINERU_CMD = "mineru"
-DEFAULT_ARGS = [
-    "--backend", "pipeline",
-    "--method", "ocr",
+# 后端无关的公共参数（pipeline 与 hybrid-engine 都用）
+_COMMON_ARGS = [
     "--lang", "ch",
     "--formula", "true",
     "--table", "true",
 ]
+
+
+def _build_mineru_args(backend: str | None = None) -> list[str]:
+    """按 settings 构建 MinerU CLI 参数。
+
+    - pipeline 后端：老一代版面+OCR，用 --method ocr（扫描件）/ txt（文字层）
+    - hybrid-engine：新一代 pipeline+VLM 组合，用 --effort medium/high
+
+    Args:
+        backend: 可选后端覆盖（单元 S：文档级 parse_mode 覆盖全局默认）。
+                 省略时读 settings.mineru_backend。
+    """
+    backend = backend or settings.mineru_backend
+    args: list[str] = []
+    if backend == "hybrid-engine":
+        args += ["--backend", "hybrid-engine", "--effort", settings.mineru_effort]
+    else:
+        # 默认 pipeline：扫描件用 ocr；method 由扫描占比决定（这里保守走 ocr）
+        args += ["--backend", "pipeline", "--method", "ocr"]
+    return args + _COMMON_ARGS
 
 # MinerU 工具的全局配置 JSON（models-dir 指向本项目模型快照）
 _TOOLS_CONFIG_NAME = "mineru-tools.json"
@@ -87,6 +106,31 @@ def _models_snapshot_dir() -> Path | None:
     return None
 
 
+def _vlm_snapshot_dir() -> Path | None:
+    """定位 VLM 模型快照目录（hybrid-engine 所需，MinerU2.5-Pro-2605-1.2B）。
+
+    模型经 modelscope 下载后落在 data/mineru_models/modelscope/models/OpenDataLab--MinerU2.5-Pro-2605-1.2B/snapshots/<hash>。
+    返回该目录（存在才返回，未下载则 None）。
+    """
+    base = settings.data_dir / "mineru_models" / "modelscope" / "models"
+    candidates = [
+        base / "OpenDataLab--MinerU2.5-Pro-2605-1.2B",
+        base / "OpenDataLab/MinerU2.5-Pro-2605-1.2B",
+    ]
+    for c in candidates:
+        if not c.exists():
+            continue
+        snapshots = c / "snapshots"
+        if snapshots.exists():
+            for snap in sorted(snapshots.iterdir(), reverse=True):
+                if snap.is_dir() and any(snap.glob("*.safetensors")) or any(snap.glob("*.json")):
+                    return snap
+        # 直接指向 model.safetensors 所在目录（modelscope 可能不带 snapshots 层）
+        if any(c.glob("*.safetensors")):
+            return c
+    return None
+
+
 def _ensure_tools_config() -> Path:
     """生成 MinerU 工具配置 JSON（models-dir 指向本项目模型快照），返回路径。"""
     import json
@@ -97,6 +141,7 @@ def _ensure_tools_config() -> Path:
             "未找到 MinerU 模型快照目录。请复制 Learn AI Agent/models/mineru 到 "
             "backend/data/mineru_models/，或设置 mineru_model_dir。"
         )
+    vlm_snapshot = _vlm_snapshot_dir()
     tools_dir = settings.data_dir / "mineru_tools"
     tools_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = tools_dir / _TOOLS_CONFIG_NAME
@@ -107,7 +152,7 @@ def _ensure_tools_config() -> Path:
         },
         "models-dir": {
             "pipeline": str(snapshot),
-            "vlm": "",
+            "vlm": str(vlm_snapshot) if vlm_snapshot else "",
         },
         "model-source": "local",
         "config_version": "1.3.2",
@@ -147,7 +192,12 @@ def output_paths(out_dir: Path) -> dict[str, Path | None]:
     """
     if not out_dir.exists():
         return {"content_list": None, "middle": None, "markdown": None}
-    content = next(out_dir.rglob("*_content_list.json"), None)
+    # 注意：hybrid 后端会同时产出 _content_list.json（扁平块列表）与
+    # _content_list_v2.json（按页嵌套）。adapter 消费扁平版，故排除 _v2 后缀。
+    content = next(
+        (p for p in out_dir.rglob("*_content_list.json") if "_v2" not in p.name),
+        None,
+    )
     middle = next(out_dir.rglob("*_middle.json"), None)
     md = next(out_dir.glob("*.md"), None)
     return {
@@ -157,11 +207,12 @@ def output_paths(out_dir: Path) -> dict[str, Path | None]:
     }
 
 
-def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None, force: bool = False) -> dict:
+def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None, force: bool = False, backend: str | None = None) -> dict:
     """调用 mineru CLI 解析一个 PDF/PNG，输出到 out_dir。返回产物路径字典。
 
     force=False（默认）：out_dir 已有 _content_list.json 则跳过重跑（bake-off 续跑用）。
     force=True：删除旧产物，强制 MinerU 重新解析（入库重灌必须用，保证真正重跑）。
+    backend：可选后端覆盖（单元 S：文档级 parse_mode 覆盖全局默认）。
     """
     timeout = timeout_sec or settings.mineru_timeout_sec
     out_dir = out_dir.resolve()
@@ -186,7 +237,7 @@ def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None, for
             "MinerU 未安装。请先 `pip install -r requirements-mineru.txt`（见 docs）。"
         )
 
-    cmd = [str(cli), "--path", str(path), "--output", str(out_dir), *DEFAULT_ARGS]
+    cmd = [str(cli), "--path", str(path), "--output", str(out_dir), *_build_mineru_args(backend)]
     logger.info("运行 MinerU: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
@@ -256,19 +307,32 @@ def _extract_toc_map(content_list: list[dict]) -> dict[str, tuple[str, int]]:
         line = line.strip()
         if not line:
             continue
+        # 章标题行「第N章标题………页码」→ 一级章条目（纯数字章号 → 标题）
+        # 两种形态：带省略号「第2章水资源评价……12」、无省略号「第3 章水资源开发利用…68」
+        ch = re.match(r"^第\s*(\d+)\s*章\s*(.*?)\s*[\.·…]{2,}\s*\d+\s*$", line)
+        if not ch:
+            ch = re.match(r"^第\s*(\d+)\s*章\s*([一-鿿][一-鿿\s]{1,30}?)\s*(\d+)\s*$", line)
+        if ch:
+            num = ch.group(1)
+            title = re.sub(r"\s+", "", ch.group(2)).strip()
+            if num and title:
+                toc_map[num] = (title, 1)
+                continue
         # 清洗编号：`1. 4 标题` → `1.4 标题`（点号后空格合并）
         line = re.sub(r"(\d)\s*\.\s*(?=\d)", r"\1.", line)
-        # 两类行：
+        # 行解析分三类：
         # A) 带省略号：编号 + 标题 + …页码（1.1 水力学的任务…………………1）
-        # B) 章标题无省略号：编号 + 空格 + 中文标题 + 页码（1 绪论1、2水静力学……19）
-        # 省略号数量 OCR 不稳定（2个～6个点），用 {2,} 而非 {3,} 兜住「……28」这类两点的行
-        m = re.match(r"^(\d+(?:\.\d+)*)\s*(.*?)\s*[\.·…]{2,}\s*\d+\s*$", line)
+        #    省略号数量 OCR 不稳定（1个～6个点），用 {1,} 兜住「…52」这类单点的行。
+        # B) 编号无省略号（编号 + 标题 + 末尾页码粘连）：「2.5 水资源综合评价62」、
+        #    「4.1 水库特性96」——章和二级都有此形态，一并兜住。
+        # 先试 A（带省略号，最可靠），失败再试 B（无省略号）。
+        m = re.match(r"^(\d+(?:\.\d+)*)\s*(.*?)\s*[\.·…]{1,}\s*\d+\s*$", line)
         if m:
             num = m.group(1).strip()
             title = m.group(2).strip()
         else:
-            # 章标题无省略号：单数字编号 + 中文标题 + 末尾数字页码
-            m2 = re.match(r"^(\d+)\s+([一-鿿][一-鿿\s]{1,30}?)\s*(\d+)\s*$", line)
+            # 无省略号：编号 + 空格 + 中文标题 + 末尾数字页码
+            m2 = re.match(r"^(\d+(?:\.\d+)*)\s+([一-鿿][一-鿿\s]{1,30}?)\s*(\d+)\s*$", line)
             if not m2:
                 continue
             num = m2.group(1)
@@ -303,6 +367,9 @@ def _guess_heading_level(text: str) -> int | None:
     # 日期守卫：数字后跟「年/月/日」（如 1979年2月、1982年7月10日）不是标题
     if re.match(r"^\d{3,4}年", t):
         return None
+    # 章标题「第N章」→ 1
+    if _parse_chapter_heading(t):
+        return 1
     m = re.match(r"^(\d+)\s*([一-鿿])", t)  # 「6 避洪…」或「1绪论」(无空格)
     if m:
         return 1
@@ -328,6 +395,31 @@ def _normalize_section_title(text: str) -> str:
     return t
 
 
+def _parse_chapter_heading(text: str) -> tuple[str, str] | None:
+    """识别「第N章 标题」格式的章标题，返回 (章号, 标题) 或 None。
+
+    MinerU 对章标题的 OCR 形态多样，标题内部常被拆空格：
+    - 「第1章 绪 论」「第2章水资源评价」「第 5章防洪减灾」
+    统一规范化：取数字章号，标题内部空格压缩掉。
+    """
+    import re
+
+    t = text.strip()
+    if len(t) > 40:
+        return None
+    m = re.match(r"^第\s*(\d+)\s*章\s*(.+)$", t)
+    if not m:
+        return None
+    num = m.group(1)
+    title = re.sub(r"\s+", "", m.group(2)).strip()
+    if not title:
+        return None
+    # 标题守卫：须含中文或字母（排除「第1章 1」这类纯编号残留）
+    if not re.search(r"[一-鿿A-Za-z]", title):
+        return None
+    return num, title
+
+
 def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
     """统一解析编号标题，返回 (编号, 层级) 或 None。
 
@@ -343,6 +435,10 @@ def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
     # 日期守卫：数字后跟「年/月/日」（如 1979年2月）不是标题
     if re.match(r"^\d{3,4}年", t):
         return None
+    # 章标题「第N章」→ 一级（纯数字章号）
+    ch = _parse_chapter_heading(t)
+    if ch:
+        return ch[0], 1
     m = re.match(r"^(\d+(?:\.\d+)*)\s*([一-鿿])", t)
     if not m:
         return None
@@ -592,8 +688,11 @@ def adapt_mineru_output(
                     if num_level >= 3:
                         etype = ElementType.PARAGRAPH
                         heading_level = None
-                        # 锚定前缀（1.3.4 → 1.3），让三级标题下跨页正文保持二级 section
-                        anchor_prefix = ".".join(num.split(".")[:-1])
+                        # 锚定前缀取前两段（1.3.4 → 1.3；1.3.4.5 → 1.3），
+                        # 让三级/四级标题下跨页正文保持二级 section。
+                        # 此前用 [:-1]（去最后一段）会把四级 1.3.4.5 锚到三级 1.3.4，
+                        # 而 TOC 无三级条目 → 兜底把三级编号塞成二级 section（泄漏）。
+                        anchor_prefix = ".".join(num.split(".")[:2])
                         if stack_touched:
                             if anchor_prefix in toc_map and toc_map[anchor_prefix][1] == 2:
                                 section_stack = section_stack[:1]
@@ -667,6 +766,14 @@ def adapt_mineru_output(
                         else:
                             inferred_level = None
                 if inferred_level:
+                    # 「第N章」header → 规范化为「N 标题」（与 toc_map 章条目格式一致），
+                    # 使一级 section 显示「1 绪论」而非「第1章 绪 论」，且章号能对齐。
+                    ch = _parse_chapter_heading(text)
+                    if ch:
+                        ch_num, ch_title = ch
+                        if toc_map and ch_num in toc_map:
+                            ch_title = toc_map[ch_num][0]
+                        text = f"{ch_num} {ch_title}"
                     key = _normalize_section_title(text.split("\n")[0].strip())
                     # P1-2 单元1：header 页眉只更新「自己那一层」，不清更深层。
                     # header 是每页重复的章标记（如「1 绪论」），但也是章标题——
@@ -800,18 +907,21 @@ class MinerUPDFParser:
 
     extensions: tuple[str, ...] = ("pdf",)
 
-    def parse(self, path: Path, filename: str, chunk_strategy: str = "old"):
+    def parse(self, path: Path, filename: str, chunk_strategy: str = "old", parse_mode: str = "fast"):
         """运行 MinerU → 组装 ParsedDocument（blocks + elements + quality）。
 
         force=True：每次入库都删除旧产物、强制 MinerU 真正重新解析（保证重灌真实重跑，
         不弄虚作假）。
+        parse_mode：单元 S 文档级后端选择。fast=快速（pipeline 老后端）/
+        high=高精度（hybrid-engine 新后端）。
         """
         import json
 
         from app.services.parser.base import ParsedDocument
 
+        backend = "hybrid-engine" if parse_mode == "high" else "pipeline"
         out_dir = settings.data_dir / "mineru_output" / path.stem
-        result = run_mineru(path, out_dir, force=True)
+        result = run_mineru(path, out_dir, force=True, backend=backend)
         if result["content_list"] is None:
             raise RuntimeError("MinerU 未产出 content_list.json")
 

@@ -1,0 +1,196 @@
+[
+  {
+    "backend": "pipeline",
+    "elapsed_s": 63.2,
+    "per_page": {
+      "47": {
+        "backend": "pipeline",
+        "text_chars": 2,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 1,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      },
+      "48": {
+        "backend": "pipeline",
+        "text_chars": 2,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 1,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      }
+    },
+    "doc_id": 3,
+    "file": "055515223577_数字孪生水利工程建设技术导则（试行）.pdf",
+    "note": "横置末页（旋转页靶点）"
+  },
+  {
+    "backend": "hybrid-engine",
+    "elapsed_s": 98.1,
+    "per_page": {
+      "47": {
+        "backend": "hybrid-engine",
+        "text_chars": 2,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 1,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      },
+      "48": {
+        "backend": "hybrid-engine",
+        "text_chars": 2,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 1,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      }
+    },
+    "doc_id": 3,
+    "file": "055515223577_数字孪生水利工程建设技术导则（试行）.pdf",
+    "note": "横置末页（旋转页靶点）"
+  },
+  {
+    "backend": "pipeline",
+    "elapsed_s": 61.86,
+    "per_page": {
+      "24": {
+        "backend": "pipeline",
+        "text_chars": 660,
+        "garble_ratio": 0.0,
+        "equations": 1,
+        "equation_symbols": 0,
+        "tables": 1,
+        "table_structured": 0,
+        "headings": 1,
+        "heading_levels": [
+          2
+        ]
+      },
+      "25": {
+        "backend": "pipeline",
+        "text_chars": 1298,
+        "garble_ratio": 0.0,
+        "equations": 4,
+        "equation_symbols": 0,
+        "tables": 0,
+        "table_structured": 0,
+        "headings": 1,
+        "heading_levels": [
+          2
+        ]
+      }
+    },
+    "doc_id": 13,
+    "file": "47f26ee1649b41498ab1295f59f7c98b.pdf",
+    "note": "水力学公式密集页（公式靶点）"
+  },
+  {
+    "backend": "hybrid-engine",
+    "elapsed_s": 84.92,
+    "per_page": {
+      "24": {
+        "backend": "hybrid-engine",
+        "text_chars": 645,
+        "garble_ratio": 0.0,
+        "equations": 1,
+        "equation_symbols": 0,
+        "tables": 1,
+        "table_structured": 0,
+        "headings": 1,
+        "heading_levels": [
+          2
+        ]
+      },
+      "25": {
+        "backend": "hybrid-engine",
+        "text_chars": 1097,
+        "garble_ratio": 0.0,
+        "equations": 4,
+        "equation_symbols": 0,
+        "tables": 0,
+        "table_structured": 0,
+        "headings": 1,
+        "heading_levels": [
+          2
+        ]
+      }
+    },
+    "doc_id": 13,
+    "file": "47f26ee1649b41498ab1295f59f7c98b.pdf",
+    "note": "水力学公式密集页（公式靶点）"
+  },
+  {
+    "backend": "pipeline",
+    "elapsed_s": 59.36,
+    "per_page": {
+      "10": {
+        "backend": "pipeline",
+        "text_chars": 349,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 0,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      },
+      "11": {
+        "backend": "pipeline",
+        "text_chars": 123,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 0,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      }
+    },
+    "doc_id": 5,
+    "file": "1f8012b2948a4556af3bae852d206e67.pdf",
+    "note": "编写规定（表格靶点）"
+  },
+  {
+    "backend": "hybrid-engine",
+    "elapsed_s": 72.19,
+    "per_page": {
+      "10": {
+        "backend": "hybrid-engine",
+        "text_chars": 354,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 0,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      },
+      "11": {
+        "backend": "hybrid-engine",
+        "text_chars": 135,
+        "garble_ratio": 0.0,
+        "equations": 0,
+        "equation_symbols": 0,
+        "tables": 0,
+        "table_structured": 0,
+        "headings": 0,
+        "heading_levels": []
+      }
+    },
+    "doc_id": 5,
+    "file": "1f8012b2948a4556af3bae852d206e67.pdf",
+    "note": "编写规定（表格靶点）"
+  }
+]

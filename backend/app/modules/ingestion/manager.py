@@ -601,7 +601,11 @@ async def _process_document(doc_id: int) -> None:
         parser = get_parser(doc.filename)
         # 切片策略（上传时选择）：old=经典启发式 / new=目录+LLM断号补全
         chunk_strategy = doc.chunk_strategy or settings.chunk_strategy_default
-        parsed = await asyncio.to_thread(parser.parse, path, doc.filename, chunk_strategy)
+        # 解析模式（单元 S，上传时自选）：fast=快速 / high=高精度（MinerU hybrid 后端）
+        parse_mode = getattr(doc, "parse_mode", None) or "fast"
+        parsed = await asyncio.to_thread(
+            parser.parse, path, doc.filename, chunk_strategy, parse_mode
+        )
 
         # P0-9：解析完成 → job 推进到 chunking；批次间协作式取消检查
         await _update_job_stage(db, doc.id, "chunking")

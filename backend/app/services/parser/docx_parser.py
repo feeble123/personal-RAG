@@ -50,7 +50,9 @@ def _docx_heading_level(block: ParsedBlock) -> int | None:
 class DocxParser(DocumentParser):
     extensions = ("docx",)
 
-    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
+    def parse(
+        self, path: Path, filename: str, chunk_strategy: str = "old", parse_mode: str = "fast"
+    ) -> ParsedDocument:
         doc = Document(str(path))
         blocks: list[ParsedBlock] = []
         section_stack: list[str] = []

@@ -20,7 +20,9 @@ def _read_text(path: Path) -> str:
 class MarkdownParser(DocumentParser):
     extensions = ("md", "markdown")
 
-    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
+    def parse(
+        self, path: Path, filename: str, chunk_strategy: str = "old", parse_mode: str = "fast"
+    ) -> ParsedDocument:
         content = _read_text(path)
         quality: dict = {"parser": "markdown", "headings": 0, "paragraphs": 0}
         blocks: list[ParsedBlock] = []
@@ -74,7 +76,9 @@ def _text_heading_level(block: ParsedBlock) -> int | None:
 class TextParser(DocumentParser):
     extensions = ("txt",)
 
-    def parse(self, path: Path, filename: str, chunk_strategy: str = "old") -> ParsedDocument:
+    def parse(
+        self, path: Path, filename: str, chunk_strategy: str = "old", parse_mode: str = "fast"
+    ) -> ParsedDocument:
         content = _read_text(path)
         quality: dict = {"parser": "text", "paragraphs": 0}
         blocks: list[ParsedBlock] = []

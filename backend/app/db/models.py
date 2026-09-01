@@ -191,6 +191,9 @@ class Document(Base):
     # P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
     # 上传时手动选择，随检索结果返回。旧数据默认 other。
     doc_type: Mapped[str] = mapped_column(String(20), default="other", nullable=False)
+    # 单元 S：解析模式（上传时用户自选）。fast=快速（pipeline 老后端，快）/
+    # high=高精度（hybrid-engine 新后端，公式/数字/符号/标题更准，慢 ~40%）。旧数据默认 fast。
+    parse_mode: Mapped[str] = mapped_column(String(10), default="fast", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     parsed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # P0-8：当前可查询的文档版本指针（原子发布切点）；NULL 表示尚无可用版本。
