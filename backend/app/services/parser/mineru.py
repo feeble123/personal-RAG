@@ -710,13 +710,16 @@ def adapt_mineru_output(
             etype = ElementType.TABLE
             table = _parse_table_html(raw.get("table_body") or "")
             heading_level = None
-            # 表格文本：优先表题（table_caption），空则用解析出的行拼接（避免空文本）
-            if not text:
-                caption = _norm_mineru_text(raw.get("table_caption") or "")
-                if caption:
-                    text = caption
-                elif table and table["rows"]:
-                    text = " | ".join(" | ".join(row) for row in table["rows"][:5])
+            # 表格文本 = 表题（caption）+ 表格行内容，两者都进检索（单元 E 修复）。
+            # 旧逻辑二选一：有 caption 只进表题、丢行内容（45/62 张表中招）；
+            # 且 rows[:5] 截断使长表（65/31/22/20 行）内容丢失。改为全量拼接。
+            caption = _norm_mineru_text(raw.get("table_caption") or "")
+            rows_text = (
+                "\n".join(" | ".join(row) for row in table["rows"])
+                if table and table["rows"]
+                else ""
+            )
+            text = "\n".join(p for p in (text, caption, rows_text) if p and p.strip())
             # P1-2 单元5补充：表格单元格含行内公式时也清理 LaTeX（如表头 $h/m$）
             if text and ("$" in text or "\\" in text):
                 text = _clean_latex(text)

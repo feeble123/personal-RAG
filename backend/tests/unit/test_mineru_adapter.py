@@ -114,6 +114,23 @@ class TestAdapt:
         # 整体过 validator（表格行列一致）
         assert validate_elements(elements) == []
 
+    def test_table_text_keeps_caption_and_rows(self, content_list, middle):
+        """单元 E 回归：表格 text 同时含表题 + 行内容（不能二选一丢行）。
+
+        回归背景：旧逻辑 `if caption: text=caption` 二选一，有表题的表格
+        行内容全丢（只进表题）——水力学 45/62 张表中招，检索时看不到表格数据。
+        且旧 rows[:5] 截断使长表内容丢失。
+        """
+        elements = adapt_mineru_output(content_list, middle)
+        tables = [e for e in elements if e.type == ElementType.TABLE]
+        assert tables
+        t = tables[0]
+        # 表题进 text
+        assert "表1 参数一览" in t.text
+        # 行内容也进 text（不能只剩表题）
+        assert "糙率" in t.text and "0.025" in t.text
+        assert "流速" in t.text and "2.5m/s" in t.text
+
     def test_reading_order(self, content_list, middle):
         """elements 顺序 = content_list 顺序（reading_order == index）。"""
         elements = adapt_mineru_output(content_list, middle)
