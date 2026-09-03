@@ -76,6 +76,46 @@ class TestBuildParentChild:
         first = result[0]
         assert all(row.split("|")[0].strip() in first.parent_content for row in rows)
 
+    def test_mixed_table_text_not_contaminated(self):
+        """单元 D：正文与表格同小节，正文子块不得被连坐标成 table。
+
+        回归背景：旧逻辑 `block_type="table" if any(a["type"]=="table" for a in group)`
+        使「小节里只要有一个表格，整节正文子块全被标 table」——水力学 324 个 table、
+        前100页 180 个 table 中大量是正文段落被误标。
+        """
+        blocks = _mk_blocks(
+            [
+                ("这是表格前的正文段落，介绍水力学基本概念，内容较长以占据一个子块。", "paragraph"),
+                ("表格行一 | 数值一 | 单位", "table"),
+                ("表格行二 | 数值二 | 单位", "table"),
+                ("这是表格后的另一段正文，说明表格中参数的含义。", "paragraph"),
+            ]
+        )
+        result = build_parent_child([], blocks=blocks)
+        assert result
+        # 表格子块（含表格行）标 table；正文子块（不含表格行）标 text，不能被连坐成 table
+        seen_table = False
+        for pc in result:
+            body = pc.content.split("\n", 1)[-1]
+            if "表格行" in body:
+                seen_table = True
+                assert pc.block_type == "table", (
+                    f"表格子块被误标为 {pc.block_type}：{body[:40]!r}"
+                )
+            else:
+                assert pc.block_type == "text", (
+                    f"正文子块被误标为 {pc.block_type}：{body[:40]!r}"
+                )
+        assert seen_table, "应有表格子块被单独切出"
+
+    def test_pure_table_block_is_table(self):
+        """单元 D：纯表格子块仍标 table。"""
+        rows = [f"名称{i} | 数值{i} | 单位" for i in range(5)]
+        blocks = _mk_blocks([(r, "table") for r in rows])
+        result = build_parent_child([], blocks=blocks)
+        assert result
+        assert all(pc.block_type == "table" for pc in result), "纯表格块应标 table"
+
 
 class TestWriteChunksParentChild:
     pytestmark = pytest.mark.asyncio

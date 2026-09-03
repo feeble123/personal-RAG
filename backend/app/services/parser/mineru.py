@@ -181,6 +181,11 @@ def _get_mineru_env() -> dict[str, str]:
         "MINERU_TASK_RESULT_TIMEOUT_SECONDS": str(settings.mineru_timeout_sec),
         "OMP_NUM_THREADS": "2",
         "MKL_NUM_THREADS": "2",
+        # 单元 E 修复：Windows 下 MinerU 子进程输出 UTF-8 中文，
+        # 父进程若按 locale（GBK）解码会抛 UnicodeDecodeError（线程内报错，干扰日志）。
+        # 这里让子进程强制 UTF-8 输出，配合 run_mineru 里 encoding="utf-8" 双保险。
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONUTF8": "1",
     })
     return env
 
@@ -245,6 +250,11 @@ def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None, for
             env=_get_mineru_env(),
             capture_output=True,
             text=True,
+            # 单元 E 修复：显式 UTF-8 解码 + errors="replace" 容错。
+            # Windows 默认按 locale（GBK）解码子进程 stdout/stderr，MinerU 输出的
+            # UTF-8 中文会触发 UnicodeDecodeError（_readerthread 线程内报错）。
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -274,109 +284,205 @@ _EXCLUDED_MINERU_TYPES = frozenset({"footer", "page_number"})
 _HEADING_GUESS = re.compile(r"^(?:(?:附录)?[A-Z])|(?:(\d+(?:\.\d+)*)\s+\S)")
 
 
+# ============ 大纲编号通用解析（单元 A） ============
+# 统一识别多种大纲编号体系，输出规范阿拉伯数字点分编号。新老 MinerU
+# （pipeline / hybrid-engine）共用此解析，不再拿「水力学」的阿拉伯点分当唯一标准。
+# 支持体系（用户列出的常见形态，可扩展）：
+#   一级：`1` / `一` / `第1章` / `第一章`
+#   二级：`1.1` / `（一）` / `第1节` / `第一节`
+#   三级：`1.1.1`（阿拉伯点分；`1）` 属列表项，不认作大纲）
+# 相对节号（`第N节`/`第一节`/`（一）`）的章号用占位符 `C` 表示，由调用方
+# 结合当前章上下文替换为真实章号。
+
+_CN_DIGITS = {
+    "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def _cn_to_int(s: str) -> int | None:
+    """中文数字 → 阿拉伯（支持 一~九十九）。非中文数字返回 None。"""
+    s = s.strip()
+    if not s:
+        return None
+    if s in _CN_DIGITS:
+        return _CN_DIGITS[s]
+    if "十" not in s:
+        return None
+    parts = s.split("十")
+    if len(parts) > 2:
+        return None  # 百位及以上不支持（水利文档章节号不会到百）
+    tens = _CN_DIGITS.get(parts[0], 1) if parts[0] else 1  # 「十」无前缀=10
+    ones = _CN_DIGITS.get(parts[1], 0) if parts[1] else 0
+    return tens * 10 + ones
+
+
+def _parse_outline_number(text: str) -> tuple[str, int, str] | None:
+    """通用大纲编号解析：标题行 → (规范阿拉伯编号, 层级, 标题) 或 None。
+
+    通用化（单元 A）：支持多种大纲编号体系，统一转成阿拉伯数字点分编号。
+    相对节号（`第N节`/`第一节`/`（一）`）的章号用占位符 ``C`` 表示，由调用方
+    结合当前章上下文替换为真实章号。标题为编号之后到行尾的原始剩余，
+    目录场景由 _extract_toc_map 再剥页码，正文场景由 _normalize_section_title 清洗。
+    """
+    import re
+
+    t = text.strip()
+    if not t or len(t) > 40:
+        return None
+    # 公式/日期守卫：含数学符号或「NNNN年」不是标题
+    if any(c in t for c in "φ√αβγμρΣ∫→=+∂∇∮"):
+        return None
+    if re.match(r"^\d{3,4}年", t):
+        return None
+    # 清洗点号后空格：`1. 4` → `1.4`（编号粘连）
+    t = re.sub(r"(\d)\s*\.\s*(?=\d)", r"\1.", t)
+
+    # 1) 章节式：第N章 / 第一章 → 一级
+    m = re.match(r"^第\s*(\d{1,2})\s*章\s*([一-鿿A-Za-z].*)$", t)
+    if m:
+        return m.group(1), 1, m.group(2).strip()
+    m = re.match(r"^第\s*([零一二两三四五六七八九十]+)\s*章\s*([一-鿿A-Za-z].*)$", t)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n:
+            return str(n), 1, m.group(2).strip()
+    # 2) 章节式：第N节 / 第一节 → 二级（章号占位 C）
+    m = re.match(r"^第\s*(\d{1,2})\s*节\s*([一-鿿A-Za-z].*)$", t)
+    if m:
+        return f"C.{m.group(1)}", 2, m.group(2).strip()
+    m = re.match(r"^第\s*([零一二两三四五六七八九十]+)\s*节\s*([一-鿿A-Za-z].*)$", t)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n:
+            return f"C.{n}", 2, m.group(2).strip()
+    # 3) 中文括号：（）/（一） → 二级（章号占位 C）
+    m = re.match(r"^[（(]\s*([零一二两三四五六七八九十]+)\s*[)）]\s*([一-鿿A-Za-z].*)$", t)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n:
+            return f"C.{n}", 2, m.group(2).strip()
+    # 4) 阿拉伯点分：1.1 / 1.1.1 → 层级 = 点数 + 1
+    m = re.match(r"^(\d{1,2}(?:\.\d+)+)\s*([一-鿿].*)$", t)
+    if m:
+        num = m.group(1)
+        return num, num.count(".") + 1, m.group(2).strip()
+    # 5) 阿拉伯单数字：1 + 中文 → 一级（排除「1. 列表项」）
+    m = re.match(r"^(\d{1,2})\s*([一-鿿].*)$", t)
+    if m:
+        after_num = t[m.end(1):]
+        if re.match(r"^\s*\.", after_num):
+            return None  # 「1. 总压力」是列表项，非章标题
+        return m.group(1), 1, m.group(2).strip()
+    # 6a) 中文数字 + 顿号/点：一、xxx / 一.xxx → 一级（最可靠）
+    m = re.match(r"^([零一二两三四五六七八九十]+)\s*[、.．]\s*([一-鿿].*)$", t)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n:
+            return str(n), 1, m.group(2).strip()
+    # 6b) 中文数字 + 空格 + 短标题：一 xxx（标题 ≤ 12 字，防「一般来说」误判）
+    m = re.match(r"^([零一二两三四五六七八九十]{1,2})\s+([一-鿿][^。！？；\n]{0,11})$", t)
+    if m:
+        n = _cn_to_int(m.group(1))
+        if n:
+            return str(n), 1, m.group(2).strip()
+    return None
+
+
+def _strip_toc_page_number(line: str) -> str:
+    """剥离目录行末尾的省略号+页码 / 粘连页码，返回「编号+标题」部分。
+
+    形态：`1.1 水力学的任务…………………1` / `2.5 水资源综合评价62` / `第2章水资源评价……12`。
+    """
+    import re
+
+    line = line.strip()
+    # 带省略号：…页码
+    m = re.match(r"^(.*?)\s*[.·…]{1,}\s*\d{1,4}\s*$", line)
+    if m:
+        return m.group(1).strip()
+    # 无省略号：末尾「中文/括号 + 数字页码」粘连
+    m = re.match(r"^(.*[一-鿿）)])\s*\d{1,4}\s*$", line)
+    if m:
+        return m.group(1).strip()
+    return line
+
+
 def _extract_toc_map(content_list: list[dict]) -> dict[str, tuple[str, int]]:
     """从 MinerU 的 content_list 提取目录权威骨架：{编号 → (标题, level)}。
 
-    MinerU 把目录页输出成完整文本块，每行格式：`编号(可选) 标题 ……页码`。
-    MinerU 的编号有 OCR 瑕疵（1. 4、2水静力学、2.5作用），需专门清洗：
-    - `1. 4` → `1.4`（点号后空格合并）
-    - `2水静力学` → `2 水静力学`（章编号粘连）
-    - `2.5作用` → `2.5 作用`（二级编号粘连）
+    通用化（单元 A）：用 _parse_outline_number 识别多种大纲编号体系
+    （`1`/`一`/`第1章`/`第一章` 一级；`1.1`/`（一）`/`第N节`/`第一节` 二级），
+    不再只认阿拉伯点分。相对节号（`第N节`/`（一）`）的章号由当前章上下文补全。
 
     只收一二级编号（level ≤ 2），构建 {编号 → (标题, level)} 权威映射。
     """
     import re
 
-    # 定位目录文本块：含多个「X.Y 标题」编号行的多行文本（最长者）
+    # 定位目录文本块：含多个「可剥页码 + 可解析大纲编号」行的多行文本。
+    # 单元 B 修复：目录常跨多页、被 MinerU 拆成多个文本块（如 p10 第1~4章、
+    # p11 4.5~第9章），此前用 max() 只取数字最多的一块 → 前面的章整段丢失。
+    # 改为：按出现顺序合并所有目录块，完整覆盖全书大纲。
+    # 判定收紧为「剥页码后有变化 且 能解析大纲」——正文列表页（无页码）不会误入。
     toc_blocks: list[str] = []
     for item in content_list:
         txt = (item.get("text") or "")
         if not isinstance(txt, str) or not txt.strip():
             continue
-        numbered = re.findall(r"(?:^|\n)\s*\d+(?:\.\d+)*\s*\S", txt)
-        if len(numbered) >= 5:  # 目录块：至少 5 个编号行
+        numbered = 0
+        for line in txt.split("\n"):
+            body = _strip_toc_page_number(line)
+            if body != line.strip() and _parse_outline_number(body) is not None:
+                numbered += 1
+        if numbered >= 5:  # 目录块：至少 5 个「带页码的目录行」
             toc_blocks.append(txt)
 
     if not toc_blocks:
         return {}
 
-    toc_text = max(toc_blocks, key=lambda t: len(re.findall(r"\d", t)))
+    toc_text = "\n".join(toc_blocks)
 
     toc_map: dict[str, tuple[str, int]] = {}
+    current_chapter: str | None = None  # 当前章号（阿拉伯），用于补全相对节号 C.N
     for line in toc_text.split("\n"):
-        line = line.strip()
-        if not line:
+        body = _strip_toc_page_number(line)
+        parsed = _parse_outline_number(body)
+        if parsed is None:
             continue
-        # 章标题行「第N章标题………页码」→ 一级章条目（纯数字章号 → 标题）
-        # 两种形态：带省略号「第2章水资源评价……12」、无省略号「第3 章水资源开发利用…68」
-        ch = re.match(r"^第\s*(\d+)\s*章\s*(.*?)\s*[\.·…]{2,}\s*\d+\s*$", line)
-        if not ch:
-            ch = re.match(r"^第\s*(\d+)\s*章\s*([一-鿿][一-鿿\s]{1,30}?)\s*(\d+)\s*$", line)
-        if ch:
-            num = ch.group(1)
-            title = re.sub(r"\s+", "", ch.group(2)).strip()
-            if num and title:
-                toc_map[num] = (title, 1)
-                continue
-        # 清洗编号：`1. 4 标题` → `1.4 标题`（点号后空格合并）
-        line = re.sub(r"(\d)\s*\.\s*(?=\d)", r"\1.", line)
-        # 行解析分三类：
-        # A) 带省略号：编号 + 标题 + …页码（1.1 水力学的任务…………………1）
-        #    省略号数量 OCR 不稳定（1个～6个点），用 {1,} 兜住「…52」这类单点的行。
-        # B) 编号无省略号（编号 + 标题 + 末尾页码粘连）：「2.5 水资源综合评价62」、
-        #    「4.1 水库特性96」——章和二级都有此形态，一并兜住。
-        # 先试 A（带省略号，最可靠），失败再试 B（无省略号）。
-        m = re.match(r"^(\d+(?:\.\d+)*)\s*(.*?)\s*[\.·…]{1,}\s*\d+\s*$", line)
-        if m:
-            num = m.group(1).strip()
-            title = m.group(2).strip()
-        else:
-            # 无省略号：编号 + 空格 + 中文标题 + 末尾数字页码
-            m2 = re.match(r"^(\d+(?:\.\d+)*)\s+([一-鿿][一-鿿\s]{1,30}?)\s*(\d+)\s*$", line)
-            if not m2:
-                continue
-            num = m2.group(1)
-            title = m2.group(2).strip()
-        # 只收一二级（0 或 1 个点）
-        if num.count(".") > 1:
+        num, level, title = parsed
+        if level > 2:
+            continue  # 只收一二级
+        title = re.sub(r"\s+", "", title).strip()
+        if not title:
             continue
+        # 相对节号（第N节/（一））→ 用当前章补全
+        if num.startswith("C."):
+            if current_chapter is None:
+                continue
+            num = f"{current_chapter}.{num[2:]}"
+        elif level == 1:
+            current_chapter = num  # 更新当前章号
         if not num or not title:
             continue
-        level = num.count(".") + 1
         toc_map[num] = (title, level)
     return toc_map
 
 
 def _guess_heading_level(text: str) -> int | None:
-    """MinerU 未标 text_level 时，用正则推断标题层级。
+    """MinerU 未标 text_level 时，用通用解析器推断标题层级。
 
     只推断 1/2 级：「6 避洪转移分析」→ 1；「7.4 地图版面布局」→ 2。
     三级及以上（「4.6.16」）不推断——保留为正文，放在切片 body 里。
+    单元 A：改用 _parse_outline_number，同时支持中文数字/章节式编号体系。
     """
-    import re
-
     t = text.strip()
     if len(t) <= 2:
         return None
-    # 长度守卫：标题 ≤ 40 字（过滤「1883年雷诺…」这种长正文误判）
-    if len(t) > 40:
+    parsed = _parse_outline_number(t)
+    if parsed is None:
         return None
-    # 公式守卫：含数学符号的文本不是标题
-    if any(c in t for c in "φ√αβγμρΣ∫→=+∂∇∮"):
-        return None
-    # 日期守卫：数字后跟「年/月/日」（如 1979年2月、1982年7月10日）不是标题
-    if re.match(r"^\d{3,4}年", t):
-        return None
-    # 章标题「第N章」→ 1
-    if _parse_chapter_heading(t):
-        return 1
-    m = re.match(r"^(\d+)\s*([一-鿿])", t)  # 「6 避洪…」或「1绪论」(无空格)
-    if m:
-        return 1
-    m = re.match(r"^(\d+\.\d+)(?:\s+)([一-鿿])", t)  # 「7.4 地图…」
-    if m:
-        return 2
-    return None
+    _num, level, _title = parsed
+    return level if level in (1, 2) else None
 
 
 def _normalize_section_title(text: str) -> str:
@@ -384,11 +490,20 @@ def _normalize_section_title(text: str) -> str:
 
     「1绪论」→「1 绪论」；「6明渠流动」→「6 明渠流动」；「2.5作用」→「2.5 作用」。
     消除 MinerU OCR 的空格不一致，让同一章节的 section 文本统一。
+    单元 A：中文数字编号（一、/（一））也转阿拉伯点分，保证 section 跨体系统一。
     """
     import re
 
     t = text.strip()
-    # 编号 + 标题粘连（无空格）→ 加空格
+    parsed = _parse_outline_number(t)
+    if parsed is not None:
+        num, _level, title = parsed
+        # 相对节号（第N节/（一））保留占位形式，由调用方上下文补全
+        clean = re.sub(r"\s+", "", title)
+        if num.startswith("C."):
+            return f"{num[2:]} {clean}".rstrip() if clean else t
+        return f"{num} {clean}".rstrip() if clean else t
+    # 兜底：编号 + 标题粘连（无空格）→ 加空格
     m = re.match(r"^(\d+(?:\.\d+)*)([一-鿿])", t)
     if m:
         return f"{m.group(1)} {m.group(2)}{t[m.end():]}".rstrip()
@@ -398,61 +513,29 @@ def _normalize_section_title(text: str) -> str:
 def _parse_chapter_heading(text: str) -> tuple[str, str] | None:
     """识别「第N章 标题」格式的章标题，返回 (章号, 标题) 或 None。
 
-    MinerU 对章标题的 OCR 形态多样，标题内部常被拆空格：
-    - 「第1章 绪 论」「第2章水资源评价」「第 5章防洪减灾」
-    统一规范化：取数字章号，标题内部空格压缩掉。
+    单元 A：章号支持阿拉伯（第1章）与中文数字（第一章）；标题内部空格压缩。
     """
-    import re
-
-    t = text.strip()
-    if len(t) > 40:
+    parsed = _parse_outline_number(text)
+    if parsed is None:
         return None
-    m = re.match(r"^第\s*(\d+)\s*章\s*(.+)$", t)
-    if not m:
+    num, level, title = parsed
+    if level != 1:
         return None
-    num = m.group(1)
-    title = re.sub(r"\s+", "", m.group(2)).strip()
-    if not title:
-        return None
-    # 标题守卫：须含中文或字母（排除「第1章 1」这类纯编号残留）
-    if not re.search(r"[一-鿿A-Za-z]", title):
-        return None
+    if "章" not in text:
+        return None  # 仅章节式（第N章/第一章）算章标题，阿拉伯「1 xx」由调用方处理
     return num, title
 
 
 def _parse_numbered_heading(text: str) -> tuple[str, int] | None:
     """统一解析编号标题，返回 (编号, 层级) 或 None。
 
-    编号 → 层级：`1`→1、`1.3`→2、`1.3.4`→3（层级 = 点号数 + 1）。
-    只认「数字(点数字)*」开头的标题，编号后必须是中文。
-    过滤：公式（1 -mu²）、列表项（1. 总压力）、日期（1979年2月）。
+    单元 A：改用通用 _parse_outline_number，支持阿拉伯点分 + 中文数字 + 章节式。
+    相对节号（第N节/（一））返回占位章号（C.N），由调用方按当前章上下文补全。
     """
-    import re
-
-    t = text.strip()
-    if len(t) > 40:
+    parsed = _parse_outline_number(text)
+    if parsed is None:
         return None
-    # 日期守卫：数字后跟「年/月/日」（如 1979年2月）不是标题
-    if re.match(r"^\d{3,4}年", t):
-        return None
-    # 章标题「第N章」→ 一级（纯数字章号）
-    ch = _parse_chapter_heading(t)
-    if ch:
-        return ch[0], 1
-    m = re.match(r"^(\d+(?:\.\d+)*)\s*([一-鿿])", t)
-    if not m:
-        return None
-    num = m.group(1)
-    # 列表项守卫：单数字编号后紧跟点号（如「1. 总压力的大小」）→ 列表项，非章标题
-    if num.count(".") == 0:
-        after_num = t[m.end(1):]
-        if re.match(r"^\s*\.", after_num):
-            return None
-    # 公式守卫：编号后的标题文本含数学符号则不是标题
-    title_part = t[m.end(1):]
-    if any(c in title_part for c in "φ√αβγμρΣ∫→=+∂∇∮"):
-        return None
-    level = num.count(".") + 1
+    num, level, _title = parsed
     return num, level
 
 

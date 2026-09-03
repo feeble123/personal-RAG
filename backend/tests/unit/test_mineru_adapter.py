@@ -19,6 +19,9 @@ from app.services.parser.mineru import (
     _clean_latex,
     _extract_toc_map,
     _parse_numbered_heading,
+    _parse_chapter_heading,
+    _guess_heading_level,
+    _parse_outline_number,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "evaluation" / "fixtures"
@@ -275,3 +278,162 @@ class TestParseNumberedHeading:
     def test_date_rejected(self):
         """「1979年2月」不是标题。"""
         assert _parse_numbered_heading("1979年2月") is None
+
+
+class TestOutlineNumberGeneric:
+    """单元 A：大纲编号识别通用化——支持多种编号体系，新老 MinerU 共用。"""
+
+    def test_arabic_level1(self):
+        assert _parse_outline_number("1 绪论") == ("1", 1, "绪论")
+        assert _parse_outline_number("12 防洪减灾") == ("12", 1, "防洪减灾")
+
+    def test_arabic_dotted_level2_3(self):
+        assert _parse_outline_number("1.1 水力学的任务") == ("1.1", 2, "水力学的任务")
+        assert _parse_outline_number("1.1.1 子节") == ("1.1.1", 3, "子节")
+
+    def test_arabic_list_item_rejected(self):
+        assert _parse_outline_number("1. 总压力的大小") is None
+
+    def test_chapter_arabic(self):
+        assert _parse_outline_number("第1章 绪论") == ("1", 1, "绪论")
+        assert _parse_outline_number("第 5章 防洪减灾") == ("5", 1, "防洪减灾")
+
+    def test_chapter_cn_digit(self):
+        assert _parse_outline_number("第一章 绪论") == ("1", 1, "绪论")
+        assert _parse_outline_number("第十二章 渗流") == ("12", 1, "渗流")
+
+    def test_section_cn_digit(self):
+        assert _parse_outline_number("第一节 概述") == ("C.1", 2, "概述")
+        assert _parse_outline_number("第三节 计算方法") == ("C.3", 2, "计算方法")
+
+    def test_section_paren_cn_digit(self):
+        assert _parse_outline_number("（一）概述") == ("C.1", 2, "概述")
+        assert _parse_outline_number("(三) 计算方法") == ("C.3", 2, "计算方法")
+
+    def test_cn_digit_dun_level1(self):
+        assert _parse_outline_number("一、绪论") == ("1", 1, "绪论")
+        assert _parse_outline_number("二 水静力学") == ("2", 1, "水静力学")
+
+    def test_date_rejected(self):
+        assert _parse_outline_number("1979年2月") is None
+
+    def test_formula_rejected(self):
+        assert _parse_outline_number("1 φ=ρg") is None
+
+
+class TestGuessHeadingGeneric:
+    """单元 A：_guess_heading_level 通用化。"""
+
+    def test_chinese_chapter(self):
+        assert _guess_heading_level("第一章 绪论") == 1
+
+    def test_chinese_dun(self):
+        assert _guess_heading_level("二、水静力学") == 1
+
+    def test_arabic_dotted(self):
+        assert _guess_heading_level("7.4 地图版面布局") == 2
+
+    def test_arabic_level1(self):
+        assert _guess_heading_level("6 避洪转移分析") == 1
+
+    def test_section_cn(self):
+        assert _guess_heading_level("第一节 概述") == 2
+
+
+class TestExtractTocGeneric:
+    """单元 A：目录提取支持多种大纲体系，统一成阿拉伯点分。"""
+
+    def test_cn_chapter_and_dun(self):
+        content = [{
+            "type": "text",
+            "text": (
+                "第一章 绪论……1\n"
+                "第一节 任务……1\n"
+                "第二节 发展史……2\n"
+                "第二章 水静力学……19\n"
+                "第一节 静水压强……19\n"
+                "第二节 微分方程……23\n"
+            ),
+        }]
+        toc = _extract_toc_map(content)
+        # 中文章号转阿拉伯；相对节号由当前章补全
+        assert toc["1"] == ("绪论", 1)
+        assert toc["1.1"] == ("任务", 2)
+        assert toc["1.2"] == ("发展史", 2)
+        assert toc["2"] == ("水静力学", 1)
+        assert toc["2.1"] == ("静水压强", 2)
+        assert toc["2.2"] == ("微分方程", 2)
+
+    def test_paren_cn_digit(self):
+        content = [{
+            "type": "text",
+            "text": (
+                "一、绪论1\n"
+                "（一）任务……1\n"
+                "（二）发展史……2\n"
+                "二、水静力学……19\n"
+                "（一）静水压强……19\n"
+            ),
+        }]
+        toc = _extract_toc_map(content)
+        assert toc["1"] == ("绪论", 1)
+        assert toc["1.1"] == ("任务", 2)
+        assert toc["1.2"] == ("发展史", 2)
+        assert toc["2"] == ("水静力学", 1)
+        assert toc["2.1"] == ("静水压强", 2)
+
+    def test_mixed_arabic_still_works(self):
+        """原有阿拉伯点分体系不受通用化影响。"""
+        content = [{
+            "type": "text",
+            "text": (
+                "1 绪论1\n"
+                "1.1 任务……1\n"
+                "1.2 历史……2\n"
+                "2 水静力学……19\n"
+                "2.1 静水压强……19\n"
+            ),
+        }]
+        toc = _extract_toc_map(content)
+        assert toc["1"] == ("绪论", 1)
+        assert toc["1.1"] == ("任务", 2)
+        assert toc["2"] == ("水静力学", 1)
+        assert toc["2.1"] == ("静水压强", 2)
+
+    def test_toc_split_across_blocks_merged(self):
+        """单元 B：目录跨多个文本块（hybrid 拆页）必须合并，不能只取一块。
+
+        回归背景：hybrid 后端把目录拆成 p10（第1~4章）+ p11（4.5~第9章）两块，
+        旧实现用 max() 只挑数字最多的一块 → 前 4 章整段丢失，二级标题全部降级。
+        """
+        content = [
+            {
+                "type": "text",
+                "text": (
+                    "第1章 绪论……1\n"
+                    "1.1 任务……1\n"
+                    "1.2 历史……2\n"
+                    "第2章 水静力学……19\n"
+                    "2.1 静水压强……19\n"
+                ),
+            },
+            {
+                "type": "text",
+                "text": (
+                    "第3章 液体运动……39\n"
+                    "3.1 描述方法……39\n"
+                    "3.2 基本概念……41\n"
+                    "3.3 连续性方程……45\n"
+                    "3.4 能量方程……50\n"
+                ),
+            },
+        ]
+        toc = _extract_toc_map(content)
+        # 两块都要合并进来，前 4 章不能丢
+        assert "1" in toc and toc["1"] == ("绪论", 1)
+        assert "1.1" in toc
+        assert "2" in toc and toc["2"] == ("水静力学", 1)
+        assert "2.1" in toc
+        assert "3" in toc and toc["3"] == ("液体运动", 1)
+        assert "3.1" in toc
+        assert "3.4" in toc

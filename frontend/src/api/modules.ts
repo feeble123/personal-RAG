@@ -210,8 +210,19 @@ export const kbApi = {
     api.post(`/admin/documents/${docId}/reparse`).then((r) => r.data),
   search: (params: { q: string; kb_id?: number; top_k?: number }) =>
     api.get('/admin/search', { params }).then((r) => r.data),
-  chunks: (kbId: number, params?: { page?: number; page_size?: number; doc_id?: number }) =>
+  chunks: (
+    kbId: number,
+    params?: { page?: number; page_size?: number; doc_id?: number; kind?: 'child' | 'parent' | 'all' },
+  ) =>
     api
       .get(`/admin/kbs/${kbId}/chunks`, { params })
-      .then((r) => r.data as { total: number; items: ChunkItem[] }),
+      .then(
+        (r) =>
+          r.data as {
+            total: number
+            parent_total: number
+            child_total: number
+            items: ChunkItem[]
+          },
+      ),
 }

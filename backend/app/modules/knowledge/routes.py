@@ -359,11 +359,18 @@ async def list_kb_chunks(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     doc_id: int | None = Query(None, description="按文档筛选切片"),
+    kind: str | None = Query(None, description="块类型筛选：child=子块 / parent=父块 / 不传=全部"),
 ):
     # P0-8 active 过滤：切片列表只显示当前可查版本（retired 不进列表，避免与已发布内容混淆）
     where = [Chunk.kb_id == kb_id]
     if doc_id is not None:
         where.append(Chunk.doc_id == doc_id)
+    # P1-4 父子块分家：kind=child 只看子块（block_type != 'parent'），
+    # kind=parent 只看父块（block_type == 'parent'）；不传则全部（兼容旧行为）。
+    if kind == "parent":
+        where.append(Chunk.block_type == "parent")
+    elif kind == "child":
+        where.append(Chunk.block_type != "parent")
     active_ids = (
         await db.scalars(
             select(Document.active_version_id).where(
@@ -374,6 +381,18 @@ async def list_kb_chunks(
     if active_ids:
         where.append(Chunk.document_version_id.in_(active_ids))
     total = (await db.scalar(select(func.count()).select_from(Chunk).where(*where))) or 0
+    # 父块/子块计数（不带 kind 过滤，供前端展示「N 父块 + M 子块」）
+    base = where[:]  # 复制一份，避免被计数查询污染
+    parent_total = (
+        await db.scalar(
+            select(func.count()).select_from(Chunk).where(*base, Chunk.block_type == "parent")
+        )
+    ) or 0
+    child_total = (
+        await db.scalar(
+            select(func.count()).select_from(Chunk).where(*base, Chunk.block_type != "parent")
+        )
+    ) or 0
     rows = await db.execute(
         select(Chunk)
         .where(*where)
@@ -383,6 +402,8 @@ async def list_kb_chunks(
     )
     return {
         "total": total,
+        "parent_total": parent_total,
+        "child_total": child_total,
         "items": [
             {
                 "id": c.id,
@@ -391,6 +412,10 @@ async def list_kb_chunks(
                 "page": c.page,
                 "section": c.section,
                 "content": c.content,
+                # P1-4 parent-child：暴露块类型，前端据此区分父块（粗粒度）与子块（细粒度），
+                # 消除「父子块平铺显示」造成的「重复切」假象。
+                "block_type": c.block_type,
+                "parent_chunk_id": c.parent_chunk_id,
             }
             for c in rows.scalars().all()
         ],

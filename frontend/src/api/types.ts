@@ -88,6 +88,8 @@ export interface ChunkItem {
   page: number | null
   section: string | null
   content: string
+  block_type?: string | null
+  parent_chunk_id?: number | null
 }
 
 export interface Conversation {

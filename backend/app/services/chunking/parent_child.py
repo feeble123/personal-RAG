@@ -231,31 +231,59 @@ def _is_noise_chunk(chunk: "ParentChildChunk") -> bool:
     return False
 
 
+def _child_block_type(types: list[str]) -> str:
+    """按子块内原子类型判定 block_type（单元 D）。
+
+    - 所有原子都是 table → table（纯表格块）
+    - 否则 → text（正文为主；混合正文+表格归 text，避免正文被当表格渲染）
+    """
+    if types and all(t == "table" for t in types):
+        return "table"
+    return "text"
+
+
 def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | None) -> list[ParentChildChunk]:
     """一组原子的子块 + 父块。
 
     page 修复（P1-2 单元1）：每个子块用「它包含的 atoms 的实际 page」，
     不再统一用 group 首页——跨页 section 的中间页不再被标成首页。
     """
-    # 子块：贪心合并到 ≤ CHILD_MAX，同时记录每个子块包含的 atom 的 page
-    children: list[dict[str, Any]] = []  # {text, page}
+    # 子块：贪心合并到 ≤ CHILD_MAX，同时记录每个子块包含的 atom 的 page 与 type。
+    # type 用于每个子块单独判定 block_type（避免「小节里有一个表格，整节正文被连坐标 table」）。
+    # 单元 D：表格与正文不混块——遇 table ↔ 非 table 切换先切块，表格自成一纯表格子块
+    # （真表格标 table），正文子块保持 text。否则表格行与正文段落合并进同一子块，
+    # 纯表格判空失效，真表格也被误标 text。
+    children: list[dict[str, Any]] = []  # {text, page, types}
     cur: list[str] = []
+    cur_types: list[str] = []
     cur_page: int | None = None
     cur_tokens = 0
+
+    def _flush() -> None:
+        nonlocal cur, cur_types, cur_page, cur_tokens
+        if cur:
+            children.append({"text": "\n".join(cur), "page": cur_page, "types": list(cur_types)})
+        cur = []
+        cur_types = []
+        cur_page = None
+        cur_tokens = 0
+
     for atom in group:
         text = atom["text"]
         tokens = _count_tokens(text)
+        atom_type = atom.get("type") or "paragraph"
+        # 表格/正文类型切换 → 先切块（表格不跟正文段落合并在同一子块）
+        if cur and (cur_types[0] == "table") != (atom_type == "table"):
+            _flush()
+        # token 超限 → 切块（已满一个最小子块才切，避免碎片）
         if cur and cur_tokens + tokens > CHILD_MAX_TOKENS and cur_tokens >= CHILD_MIN_TOKENS:
-            children.append({"text": "\n".join(cur), "page": cur_page})
-            cur = []
-            cur_page = None
-            cur_tokens = 0
+            _flush()
         cur.append(text)
+        cur_types.append(atom_type)
         if cur_page is None:
             cur_page = atom.get("page")
         cur_tokens += tokens
-    if cur:
-        children.append({"text": "\n".join(cur), "page": cur_page})
+    _flush()
 
     # 父块：整组作为父（≤ PARENT_MAX），超限按子块拆
     group_text = "\n".join(a["text"] for a in group)
@@ -300,7 +328,9 @@ def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | N
                 page=child["page"],
                 child_hash=_norm_hash(child_text),
                 parent_hash=_norm_hash(parent_text),
-                block_type="table" if any(a["type"] == "table" for a in group) else "text",
+                # 单元 D：每个子块单独判定 block_type——仅当子块内所有原子都是表格
+                # 才标 table，否则归 text。修复「小节含一个表格 → 整节正文连坐标 table」。
+                block_type=_child_block_type(child.get("types") or []),
             )
         )
     return results
