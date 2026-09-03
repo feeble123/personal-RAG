@@ -405,8 +405,9 @@ async def _execute_job(job_id: int) -> None:
 async def _heartbeat_job(db, job_id: int) -> None:
     """worker 心跳：续租（lease_until 顺延）+ 更新 heartbeat_at。
 
-    复用调用方会话 db（与 _update_job_stage 同理，避免 SQLite 写锁竞争）。
-    心跳只刷新租约，不动 stage。
+    心跳协程每次新开独立会话（见 _execute_job 的 _heartbeat_loop），因此必须显式
+    commit——否则 async with 退出时自动 rollback，续租改动丢失，reaper 误判 worker
+    死亡回收任务（单元 S bug：LEASE_EXPIRED）。心跳只刷新租约，不动 stage。
     """
     job = await db.get(IngestionJob, job_id)
     if job is None or job.stage not in _ACTIVE_STAGES:
@@ -414,6 +415,7 @@ async def _heartbeat_job(db, job_id: int) -> None:
     now = _now()
     job.lease_until = now + timedelta(seconds=_lease_seconds)
     job.heartbeat_at = now
+    await db.commit()
 
 
 async def _reaper_pass() -> None:

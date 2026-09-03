@@ -95,6 +95,36 @@ class TestHeartbeat:
         finally:
             manager.start_worker()
 
+    async def test_heartbeat_persists_without_caller_commit(self, client):
+        """心跳自己必须 commit 持久化——不依赖调用方手动 commit（单元 S bug：LEASE_EXPIRED）。
+
+        回归背景：心跳协程每次新开独立会话，若不显式 commit，async with 退出时
+        rollback，续租丢失 → reaper 误判 worker 死亡。此测试不复用手动 commit，
+        直接从新会话读数据库，验证 lease_until 已被真正持久化。
+        """
+        await _pause_worker()
+        try:
+            kb_id, doc_id = await _mk_doc()
+            job_id = await _mk_active_job(doc_id, lease_until=None)
+
+            # 模拟心跳协程：新开独立会话调 _heartbeat_job（内部应自 commit）
+            async with async_session_factory() as db:
+                await manager._heartbeat_job(db, job_id)
+                # 关键：不手动 commit，退出时若未提交即 rollback
+            # 用全新的会话从数据库读，验证续租已真正落库
+            async with async_session_factory() as db2:
+                j = await db2.get(IngestionJob, job_id)
+                assert j is not None, "心跳后 job 应存在"
+                assert j.lease_until is not None, (
+                    "心跳续租必须已 commit 持久化（单元 S bug 回归："
+                    "未 commit 会 rollback，导致 lease 过期被 reaper 回收）"
+                )
+                assert j.heartbeat_at is not None, "心跳时间戳也应持久化"
+                assert j.stage == "parsing", "心跳不动 stage"
+            await _cleanup(kb_id)
+        finally:
+            manager.start_worker()
+
     async def test_heartbeat_skips_finished_job(self, client):
         """心跳：已终态（succeeded）的 job 不续租（worker 已完成，不误续）。"""
         await _pause_worker()
