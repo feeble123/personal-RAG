@@ -21,6 +21,7 @@ from app.services.chunking.parent_child import (
     build_parent_child,
 )
 from app.services.parser.base import ParsedBlock
+from app.services.parser.ir import DocumentElement, ElementType
 
 _cnt = {"n": 0}
 
@@ -117,6 +118,63 @@ class TestBuildParentChild:
         assert all(pc.block_type == "table" for pc in result), "纯表格块应标 table"
 
 
+class TestTableDataPenetration:
+    """单元二 2-2：表格结构化数据穿透切片（element.table → ParentChildChunk.table_data）。"""
+
+    def _table_elements(self):
+        """构造两个 TABLE element（结构完整），夹一个正文段落。"""
+        return [
+            DocumentElement(
+                element_id="mineru-0",
+                type=ElementType.TABLE,
+                text="表1 参数\n参数 | 取值\n糙率 | 0.025\n流速 | 2.5m/s",
+                reading_order=0,
+                table={
+                    "rows": [
+                        ["参数", "取值"],
+                        ["糙率", "0.025"],
+                        ["流速", "2.5m/s"],
+                    ],
+                    "header_path": ["参数", "取值"],
+                },
+            ),
+            DocumentElement(
+                element_id="mineru-1",
+                type=ElementType.PARAGRAPH,
+                text="这是表格后的正文说明。",
+                reading_order=1,
+            ),
+        ]
+
+    def test_table_element_produces_table_data(self):
+        """纯表格 element → 子块 table_data 带列名 + 数据行（不含表头）+ table_id。"""
+        elements = self._table_elements()
+        pc = build_parent_child(elements, blocks=[])
+        table_chunks = [c for c in pc if c.block_type == "table"]
+        assert table_chunks, "应有纯表格子块"
+        for tc in table_chunks:
+            assert tc.table_data is not None, "表格子块应携带 table_data"
+            assert tc.table_data["table_id"] == "mineru-0"
+            assert tc.table_data["columns"] == ["参数", "取值"]
+            assert tc.table_data["rows"] == [["糙率", "0.025"], ["流速", "2.5m/s"]]
+            assert tc.table_data["row_index"] == 0
+
+    def test_non_table_chunk_has_no_table_data(self):
+        """正文子块 table_data = None（不被连坐）。"""
+        elements = self._table_elements()
+        pc = build_parent_child(elements, blocks=[])
+        text_chunks = [c for c in pc if c.block_type == "text"]
+        assert text_chunks, "应有正文子块"
+        assert all(c.table_data is None for c in text_chunks), "正文子块不得携带 table_data"
+
+    def test_no_table_data_from_blocks_compat(self):
+        """blocks 兼容层（无 table 结构）→ 所有子块 table_data=None，不崩。"""
+        blocks = _mk_blocks([("名称 | 数值", "table"), ("甲 | 1", "table")])
+        result = build_parent_child([], blocks=blocks)
+        assert result
+        assert all(c.table_data is None for c in result)
+
+
 class TestWriteChunksParentChild:
     pytestmark = pytest.mark.asyncio
 
@@ -178,6 +236,63 @@ class TestWriteChunksParentChild:
                 # 父块 parent_chunk_id 为空
                 for parent in parents:
                     assert parent.parent_chunk_id is None
+        finally:
+            async with async_session_factory() as db:
+                await db.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))
+                await db.commit()
+
+
+    async def test_write_chunks_persists_table_data(self, client):
+        """单元二 2-2：落库时子块 table_data 正确写入，父块不携带（避免重复计数）。"""
+        _cnt["n"] += 1
+        n = _cnt["n"]
+        kb_id, doc_id = None, None
+        async with async_session_factory() as db:
+            kb = KnowledgeBase(name=f"表库{n}", status="ready")
+            db.add(kb)
+            await db.flush()
+            doc = Document(
+                kb_id=kb.id, filename=f"tab{n}.xlsx", stored_path=f"tab{n}.xlsx",
+                file_type="xlsx", status="pending",
+            )
+            db.add(doc)
+            await db.commit()
+            kb_id, doc_id = kb.id, doc.id
+
+        table_data = {
+            "table_id": "excel-0",
+            "columns": ["序号", "方案名称", "完成时间"],
+            "rows": [["1", "质量保证体系", "2025-09-15"]],
+            "row_index": 0,
+        }
+        pc_list = [
+            ParentChildChunk(
+                content="## 台账\n序号 | 方案名称 | 完成时间\n1 | 质量保证体系 | 2025-09-15",
+                parent_content="## 台账\n序号 | 方案名称 | 完成时间\n1 | 质量保证体系 | 2025-09-15",
+                section="台账", page=None,
+                child_hash="t" * 64, parent_hash="u" * 64,
+                block_type="table", table_data=table_data,
+            ),
+        ]
+        try:
+            from app.db.models import DocumentVersion
+
+            async with async_session_factory() as db:
+                doc = await db.get(Document, doc_id)
+                ver = DocumentVersion(document_id=doc_id, status="building")
+                db.add(ver)
+                await db.commit()
+                await manager._write_chunks(db, doc, ver, pc_list)
+                await db.commit()
+
+                chunks = (await db.scalars(
+                    select(Chunk).where(Chunk.document_version_id == ver.id)
+                )).all()
+                children = [c for c in chunks if c.block_type == "table"]
+                parents = [c for c in chunks if c.block_type == "parent"]
+                assert len(children) == 1, f"应 1 表格子块, 实得 {len(children)}"
+                assert children[0].table_data == table_data, "子块 table_data 应正确落库"
+                assert all(p.table_data is None for p in parents), "父块不携带 table_data"
         finally:
             async with async_session_factory() as db:
                 await db.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb_id))

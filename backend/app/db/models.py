@@ -240,6 +240,10 @@ class Chunk(Base):
         ForeignKey("chunks.id", ondelete="SET NULL"), nullable=True
     )
     parent_context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 单元二 2-2：表格结构化数据（{table_id, columns, rows, row_index}）。
+    # 仅表格子块携带；非表格块 NULL。table_id 标记同一张表（跨块聚合），
+    # columns=列名、rows=数据行（不含表头）、row_index=本块在整表中的起始行。
+    table_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     doc: Mapped[Document] = relationship(back_populates="chunks")
     version: Mapped["DocumentVersion"] = relationship(back_populates="chunks")

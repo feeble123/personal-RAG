@@ -36,6 +36,9 @@ class ParentChildChunk:
     child_hash: str              # 子块正文规范化哈希
     parent_hash: str             # 父块哈希
     block_type: str = "text"     # text / table / formula
+    # 单元二 2-2：表格结构化数据（{table_id, columns, rows, row_index}）。
+    # 非表格块为 None。table_id 标记同一张表，跨块聚合用；父块不携带（避免重复计数）。
+    table_data: dict | None = None
 
 
 # ---- token 计数 ----
@@ -100,6 +103,10 @@ def _atoms_from_elements(elements) -> list[dict[str, Any]]:
                 "page": page,
                 "type": type_name,
                 "level": None,
+                # 单元二 2-2：表格结构随原子穿透（table 字段 + 稳定 table_id=element_id）。
+                # 落库时 _write_chunks 再前缀 doc.id 命名空间，保证跨文档唯一。
+                "table": getattr(el, "table", None),
+                "table_id": getattr(el, "element_id", None),
             }
         )
     return atoms
@@ -242,6 +249,33 @@ def _child_block_type(types: list[str]) -> str:
     return "text"
 
 
+def _build_table_data(
+    types: list[str], table_ids: list[str | None], tables: list[dict | None]
+) -> dict | None:
+    """纯表格子块 → 结构化 table_data；非纯表格或跨多张表 → None。
+
+    单张表在当前切片里就是一个子块（atom 不按行拆），rows 取整表数据行、
+    row_index=0。table_id 用于跨块聚合（未来大表拆块时按 row_index 拼回完整表）。
+    """
+    if not types or not all(t == "table" for t in types):
+        return None
+    distinct = {tid for tid in table_ids if tid}
+    if len(distinct) != 1:
+        return None  # 一张子块混进多张表 → 不产出结构化数据（避免串列）
+    table = next((t for t in tables if t), None)
+    if not table:
+        return None
+    header = table.get("header_path") or []
+    rows = table.get("rows") or []
+    data_rows = rows[1:] if header and rows and rows[0] == header else rows
+    return {
+        "table_id": next(iter(distinct)),
+        "columns": header,
+        "rows": data_rows,
+        "row_index": 0,
+    }
+
+
 def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | None) -> list[ParentChildChunk]:
     """一组原子的子块 + 父块。
 
@@ -253,18 +287,30 @@ def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | N
     # 单元 D：表格与正文不混块——遇 table ↔ 非 table 切换先切块，表格自成一纯表格子块
     # （真表格标 table），正文子块保持 text。否则表格行与正文段落合并进同一子块，
     # 纯表格判空失效，真表格也被误标 text。
-    children: list[dict[str, Any]] = []  # {text, page, types}
+    # 单元二 2-2：额外追踪每个 atom 的 table/table_id，落库时产出 table_data。
+    children: list[dict[str, Any]] = []  # {text, page, types, table_data}
     cur: list[str] = []
     cur_types: list[str] = []
+    cur_table_ids: list[str | None] = []
+    cur_tables: list[dict | None] = []
     cur_page: int | None = None
     cur_tokens = 0
 
     def _flush() -> None:
-        nonlocal cur, cur_types, cur_page, cur_tokens
+        nonlocal cur, cur_types, cur_table_ids, cur_tables, cur_page, cur_tokens
         if cur:
-            children.append({"text": "\n".join(cur), "page": cur_page, "types": list(cur_types)})
+            children.append(
+                {
+                    "text": "\n".join(cur),
+                    "page": cur_page,
+                    "types": list(cur_types),
+                    "table_data": _build_table_data(cur_types, cur_table_ids, cur_tables),
+                }
+            )
         cur = []
         cur_types = []
+        cur_table_ids = []
+        cur_tables = []
         cur_page = None
         cur_tokens = 0
 
@@ -280,6 +326,8 @@ def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | N
             _flush()
         cur.append(text)
         cur_types.append(atom_type)
+        cur_table_ids.append(atom.get("table_id") if atom_type == "table" else None)
+        cur_tables.append(atom.get("table") if atom_type == "table" else None)
         if cur_page is None:
             cur_page = atom.get("page")
         cur_tokens += tokens
@@ -331,6 +379,7 @@ def _chunk_group(group: list[dict[str, Any]], section: str | None, page: int | N
                 # 单元 D：每个子块单独判定 block_type——仅当子块内所有原子都是表格
                 # 才标 table，否则归 text。修复「小节含一个表格 → 整节正文连坐标 table」。
                 block_type=_child_block_type(child.get("types") or []),
+                table_data=child.get("table_data"),
             )
         )
     return results

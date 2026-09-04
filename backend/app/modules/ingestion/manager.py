@@ -839,6 +839,7 @@ async def _write_chunks(
                     formula_no=_extract_formula_no(c.content),
                     parent_chunk_id=parent.id,
                     parent_context=c.parent_content,
+                    table_data=getattr(c, "table_data", None),
                 )
                 db.add(child)
                 next_idx += 1
@@ -861,6 +862,7 @@ async def _write_chunks(
                     block_type=getattr(c, "block_type", "text") or "text",
                     clause_no=_extract_clause_no(c.section),
                     formula_no=_extract_formula_no(c.content),
+                    table_data=getattr(c, "table_data", None),
                 )
             )
         target.chunk_count = len(chunks)
