@@ -15,7 +15,9 @@ from app.services.table_query import (
     TableView,
     _answer_count,
     _answer_enum,
+    _answer_total,
     _content_words,
+    _question_core,
     _table_score,
     query_table,
 )
@@ -142,6 +144,87 @@ class TestPreciseChannel:
         ans = _answer_enum(tv, "有哪些方案？", ["方案"])
         assert ans is not None
         assert "质量保证体系" in ans.answer_text
+
+
+def _ledger_views() -> tuple[TableView, TableView]:
+    """一份台账两个 sheet：制度体系(4 行) + 备案版方案台账(36 行)，同 doc_id。"""
+    small = TableView(
+        table_id="doc10:excel-0", columns=["序号", "方案名称"],
+        rows=[["1", f"制度方案{i}"] for i in range(4)],
+        section="已报送方案台账.xlsx / 制度体系",
+        source="已报送方案台账.xlsx", doc_id=10,
+    )
+    big = TableView(
+        table_id="doc10:excel-1", columns=["序号", "方案名称"],
+        rows=[["1", f"备案方案{i}"] for i in range(36)],
+        section="已报送方案台账.xlsx / 备案版方案台账",
+        source="已报送方案台账.xlsx", doc_id=10,
+    )
+    return small, big
+
+
+class TestTotalCount:
+    """单元二 2-4 修复：「一共多少 X」求总数（区分于点名实体计数）。"""
+
+    def test_question_core_drops_output_meta(self):
+        """「请以表格输出」「不用把交底时间输出」是输出格式，不是问句本体。"""
+        q = "这份台账中一共有多少方案？请以表格的形式输出给我。不用把交底的时间输出给我，我不关心交底时间。"
+        core = _question_core(q)
+        assert "一共" in core and "多少" in core and "方案" in core
+        assert "交底" not in core and "时间" not in core and "表格" not in core
+
+    def test_content_words_after_core_drop_meta_instruction(self):
+        """问句本体清洗后，「交底/时间」这类领域词不混进内容词（不再虚高分带偏表选择）。"""
+        q = "这份台账中一共有多少方案？请以表格的形式输出给我。不用把交底的时间输出给我"
+        words = _content_words(_question_core(q))
+        assert "方案" in words
+        assert "交底" not in words
+        assert "时间" not in words
+
+    def test_total_sums_across_sheets(self):
+        """整份台账（未点名 sheet）→ 两个 sheet 行数求和 = 40。"""
+        small, big = _ledger_views()
+        words = _content_words(_question_core("这份台账中一共有多少方案？"))
+        ans = _answer_total([small, big], "这份台账中一共有多少方案？", words)
+        assert ans is not None
+        assert ans.kind == "count"
+        assert "40" in ans.answer_text
+
+    def test_total_scoped_to_named_sheet(self):
+        """点名 sheet（制度体系）→ 只数那张表 = 4。"""
+        small, big = _ledger_views()
+        words = _content_words(_question_core("制度体系一共有多少方案？"))
+        ans = _answer_total([small, big], "制度体系一共有多少方案？", words)
+        assert ans is not None
+        assert "4" in ans.answer_text and "40" not in ans.answer_text
+
+    def test_container_word_does_not_scope_sheet(self):
+        """容器词「台账」指整份文件，不能当「备案版方案台账」的 sheet 定位 → 仍是 40。"""
+        small, big = _ledger_views()
+        words = _content_words(_question_core("这份台账中一共有多少方案？"))
+        ans = _answer_total([small, big], "这份台账中一共有多少方案？", words)
+        assert ans is not None
+        assert "40" in ans.answer_text
+
+    def test_unit_word_not_treated_as_subject(self):
+        """「方案」是单位不是实体：_answer_count 不能把「方案」当主体去锁「临建方案」。"""
+        tv = TableView(
+            table_id="t", columns=["序号", "方案名称"],
+            rows=[["1", "临建方案"], ["2", "施工组织设计"]],
+        )
+        # 只有「方案」一词（无具体实体）→ _answer_count 应拒绝（返回 None），走求总数
+        ans = _answer_count(tv, "一共有多少方案？", ["方案"])
+        assert ans is None
+
+    def test_column_name_hit_not_repeated(self):
+        """一个词命中再多列也只 +3 一次（「时间」命中 5 个「××时间」列不虚高）。"""
+        tv = TableView(
+            table_id="t",
+            columns=["审批时间", "报送时间", "交底时间", "完成时间", "归档时间"],
+            rows=[["2025-09-01", "2025-09-07", "2025-09-23", "", ""]],
+        )
+        # 「时间」命中 5 个列名，去重后应只 +3（不是 15）
+        assert _table_score(["时间"], tv) == 3.0
 
 
 class TestQueryTableGate:

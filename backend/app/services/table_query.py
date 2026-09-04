@@ -224,13 +224,30 @@ _GENERIC_FILTER_WORDS = {
     "方案", "项目", "工程", "措施", "内容", "设备", "材料", "名称", "制度", "台账",
     "管理", "施工", "体系", "预案", "清单", "一览表", "汇总",
 }
-# 问句框架词/量词/语气词：jieba 分词后剔除，剩下的才是实体/主题词
+# 「要数的单位」泛词：问「一共多少 X」时，X 是计量单位，不是要查找的具体实体。
+# 这类词**永不**当作 _find_subject_value 的查找对象，也不参与实体落点门禁——
+# 否则「一共多少方案」会把「方案」当成具体名去匹配第一个方案名（如「临建方案」）。
+# 只放「可数的东西」（方案/设备/项目…）；容器词（台账/文档/文件）另见 _CONTAINER_WORDS。
+_GENERIC_UNIT_WORDS = {
+    "方案", "设备", "项目", "工程", "措施", "材料", "内容",
+}
+# 容器/文档词：指代整份文件（「这份台账」）而非某张表，**不作** sheet 定位信号——
+# 否则「这份台账中一共多少方案」里的「台账」会子串命中「备案版方案台账」sheet 名，
+# 被误判成「点名了备案版那张表」，只数 36 而非整份 40。
+_CONTAINER_WORDS = {"台账", "文档", "文件"}
+# 问句框架词/量词/语气词：jieba 分词后剔除，剩下的才是实体/主题词。
+# 单元二 2-4 补：输出格式/元指令词（请以/表格/形式/输出/不用/关心…）是「怎么答」，
+# 不是「问什么」——混进内容词会污染表匹配分。真正的否定对象（交底/时间这类领域词）
+# 由 _question_clauses 在更上层按「只保留问句」丢弃，不在这里黑名单化（否则误伤正经列名）。
 _QUERY_STOPWORDS = {
     "数量", "多少", "几个", "几台", "几套", "几座", "几处", "个数", "台数", "套数", "共计", "合计",
     "有哪些", "哪些", "列出", "清单", "一览", "名单", "所有", "全部", "都有", "都包含",
     "包含", "包括", "什么", "请问", "请", "的", "是", "吗", "呢", "如何", "怎么", "怎样",
     "有", "几", "个", "台", "套", "座", "中", "里", "内", "哪些", "谁", "哪里", "哪",
     "您好", "你好", "帮我", "查", "查询",
+    # 元指令/输出格式词（「请以表格输出」「不用…」「我不关心…」）
+    "一共", "总共", "这份", "请以", "表格", "形式", "输出", "给我", "不用", "不要",
+    "关心", "麻烦", "需要", "别", "这", "那",
 }
 
 
@@ -269,18 +286,49 @@ def _content_words(query: str) -> list[str]:
     return words
 
 
+# 问句信号（多少/有哪些/数量…）：用来判断一个子句是不是「问句本体」。
+_QUESTION_SIGNAL_RE = re.compile(
+    r"多少|几台|几套|几座|几个|几处|数量|个数|台数|套数|共计|合计|"
+    r"有哪些|哪些|列出|清单|一览|名单|所有|全部|都有|都包含|几级|几种|几类"
+)
+# 句末标点（切分子句用）
+_CLAUSE_SPLIT_RE = re.compile(r"[。！？!；;\n]")
+
+
+def _question_core(query: str) -> str:
+    """只留「问句本体」，丢弃输出格式/否定约束等元子句。
+
+    用户常在问句后追加「请以表格输出」「不用把××输出」「我不关心××」这类元指令——
+    这些是「怎么回答」不是「问什么」，混进内容词会污染表匹配（如「交底/时间」虚高分）。
+    按句末标点切分，只保留含问句信号（多少/有哪些/数量…）的子句。
+    """
+    q = (query or "").strip()
+    clauses = [c.strip() for c in _CLAUSE_SPLIT_RE.split(q) if c.strip()]
+    if not clauses:
+        return q
+    core = [c for c in clauses if _QUESTION_SIGNAL_RE.search(c)]
+    return "，".join(core) if core else q
+
+
 def _find_subject_value(tv: TableView, words: list[str]) -> tuple[int | None, str | None]:
     """在表里找「问句点名的实体值」（计数/查值的主题）。
 
     优先在名称列里找（设备名/方案名等实体通常落在名称列），找不到再全表扫。
     双向匹配：单元格值 ⊇ 内容词（「动力配电箱」精确命中）或 内容词 ⊇ 单元格值。
     返回 (列下标, 命中的单元格值)；找不到返回 (None, None)。
+
+    单元二 2-4 修复：跳过「泛词/单位词」（方案/设备/项目/制度/体系…）——它们是
+    「要数的单位」或「分类」，不是具体实体。否则「一共多少方案」会把「方案」当主体，
+    子串命中第一个方案名（「临建方案」）只数出 1。
     """
     name_col = _find_column(tv, _is_name_column)
     order = ([name_col] if name_col is not None else []) + [
         i for i in range(len(tv.columns)) if i != name_col
     ]
+    skip = _GENERIC_FILTER_WORDS | _GENERIC_UNIT_WORDS
     for w in words:
+        if w in skip:
+            continue
         for col_idx in order:
             for row in tv.rows:
                 v = _norm_cell(row[col_idx])
@@ -313,7 +361,8 @@ def _table_score(words: list[str], tv: TableView) -> float:
     权重设计（按「用户意图的明确程度」排）：
     - sheet 名 / section 命中 +8：用户点名 sheet（如「制度体系」）是最强信号，必须压过行数
     - 文件名命中 +3
-    - 列名命中 +3
+    - 列名命中 +3（**去重**：一个词命中再多的列也只 +3 一次——否则「时间」命中 5 个
+      「××完成时间」列 +15，把无关表顶成最优，如「不用把交底时间输出」带偏表选择）
     - 单元格值命中 +2（**去重**，每个词最多 +2，不按行数累加——否则 36 行的「备案版」大表
       靠「方案」一词碾压 4 行的「制度体系」小表，把用户点名的 sheet 挤掉）
     分数为 0 说明表与问题毫无交集，不可能是答案表。
@@ -330,9 +379,8 @@ def _table_score(words: list[str], tv: TableView) -> float:
                 score += 8.0
         if src_stem and w in src_stem:
             score += 3.0
-        for cn in col_norms:
-            if cn and (w in cn or cn in w):
-                score += 3.0
+        if any(cn and (w in cn or cn in w) for cn in col_norms):
+            score += 3.0
         if any(
             len(_norm_cell(cell)) >= 2 and (w in _norm_cell(cell) or _norm_cell(cell) in w)
             for row in tv.rows for cell in row
@@ -385,6 +433,65 @@ def _answer_count(tv: TableView, query: str, words: list[str]) -> TableAnswer | 
         columns=tuple(tv.columns), rows=tuple(tuple(r) for r in matching),
         table_id=tv.table_id, source=tv.source or "", section=tv.section,
         chunk_ids=tv.chunk_ids, doc_id=tv.doc_id, kb_id=tv.kb_id,
+    )
+
+
+def _sheet_name(tv: TableView) -> str:
+    """取 section 的 sheet 名（最后一段）：「已报送方案台账.xlsx / 制度体系」→「制度体系」。"""
+    parts = [p.strip() for p in re.split(r"[/\\]", tv.section or "") if p.strip()]
+    return parts[-1] if parts else ""
+
+
+def _answer_total(views: list[TableView], query: str, words: list[str]) -> TableAnswer | None:
+    """「一共多少 X」求总数（无具体实体的计数，单元二 2-4 修复新增）。
+
+    与 `_answer_count`（点名实体计数，如「动力配电箱有几台」）区分：
+    - 找「单位词」X（方案/设备/项目…，命中某表的列名/sheet/文件名）
+    - 点名具体 sheet → 只数那张表；否则同一文档的 X 表行数求和（一份台账多 sheet）
+    - 找不到单位词 / 范围不明确 → None（回退向量，绝不猜）
+    """
+    # 1) 单位词：泛词里，哪个在任一表里有落点（列名「方案名称」/sheet「设备表」/文件名）
+    unit = next(
+        (
+            w
+            for w in words
+            if w in _GENERIC_UNIT_WORDS and any(_word_present(w, v) for v in views)
+        ),
+        None,
+    )
+    if unit is None:
+        return None
+    eligible = [v for v in views if _word_present(unit, v)]
+    if not eligible:
+        return None
+    # 2) 点名 sheet：除单位词/容器词外的内容词，恰好命中一张表的 sheet 名 → 只数那张表。
+    # 容器词（台账/文档/文件）指整份文件，不是 sheet 定位信号（「这份台账」≠「备案版方案台账」）。
+    scope: TableView | None = None
+    for w in words:
+        if w == unit or w in _CONTAINER_WORDS:
+            continue
+        sheet_hits = [v for v in eligible if w in _sheet_name(v)]
+        if len(sheet_hits) == 1:
+            scope = sheet_hits[0]
+            break
+    # 3) 范围：点名 sheet 用那张表；否则同一文档的 eligible 表求和（一份台账多 sheet）
+    if scope is not None:
+        targets = [scope]
+    else:
+        anchor = max(eligible, key=lambda v: _table_score(words, v))
+        targets = [v for v in eligible if v.doc_id == anchor.doc_id]
+    total = sum(len(v.rows) for v in targets)
+    if total == 0:
+        return None
+    detail = " + ".join(f"{_sheet_name(v)} {len(v.rows)}" for v in targets)
+    answer = f"{unit} 总数: {total}" if len(targets) == 1 else f"{unit} 总数: {total}（{detail}）"
+    rows = tuple(tuple(r) for v in targets for r in v.rows)
+    return TableAnswer(
+        kind="count", subject=unit, answer_text=answer,
+        columns=tuple(targets[0].columns), rows=rows,
+        table_id=targets[0].table_id, source=targets[0].source or "",
+        section=targets[0].section, chunk_ids=targets[0].chunk_ids,
+        doc_id=targets[0].doc_id, kb_id=targets[0].kb_id,
     )
 
 
@@ -445,20 +552,32 @@ async def query_table(
             views.append(tv)
     if not views:
         return None
-    words = _content_words(query)
+    # 只保留问句本体：丢弃「请以表格输出」「不用把交底时间输出」等元指令子句（污染打分）
+    core = _question_core(query)
+    words = _content_words(core)
     if not words:
         return None
     scored = sorted(((v, _table_score(words, v)) for v in views), key=lambda x: x[1], reverse=True)
     best, best_score = scored[0]
     if best_score < 1.0:
         return None  # 表与问题无交集 → 不接管，回退向量
-    # 实体落点门禁：问句里的「点名实体」（≥3 字、非泛词、非框架词）若在最优表里毫无落点，
-    # 说明这张表答不了这个具体实体（如「肖家湾水厂项目有哪些报送方案」里的「肖家湾」）——
-    # 直接回退向量检索，绝不把整列 dump 出来冒充答案。
+    # 实体落点门禁：问句里的「点名实体」（≥3 字、非泛词、非单位词、非框架词）若在最优表里
+    # 毫无落点，说明这张表答不了这个具体实体（如「肖家湾水厂项目有哪些报送方案」里的
+    # 「肖家湾」）——直接回退向量检索，绝不把整列 dump 出来冒充答案。
     for w in words:
-        if len(w) >= 3 and w not in _GENERIC_FILTER_WORDS and w not in _QUERY_STOPWORDS:
+        if (
+            len(w) >= 3
+            and w not in _GENERIC_FILTER_WORDS
+            and w not in _GENERIC_UNIT_WORDS
+            and w not in _QUERY_STOPWORDS
+        ):
             if not _word_present(w, best):
                 return None
     if kind == "count":
-        return _answer_count(best, query, words)
+        # 点名实体计数（「动力配电箱有几台」）优先；定位不到具体实体时走「求总数」
+        # （「一共多少方案」→ 整份文档行数求和）。求总数也返回 None 时回退向量。
+        ans = _answer_count(best, query, words)
+        if ans is not None:
+            return ans
+        return _answer_total(views, query, words)
     return _answer_enum(best, query, words)
