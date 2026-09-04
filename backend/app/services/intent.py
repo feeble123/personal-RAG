@@ -68,3 +68,33 @@ def is_real_time_query(query: str) -> bool:
     if _CLOCK_CAL.search(q):
         return True
     return False
+
+
+# ---- 表格结构化查询信号（单元二 2-4）----
+# 计数类问法：X 的数量/多少/几台/几套…——答案落在一张表的某列某值，应精确读。
+_TABLE_COUNT_RE = re.compile(r"数量|多少|几台|几套|几座|几个|几处|个数|台数|套数|共计|合计")
+# 枚举类问法：列出/有哪些/清单/一览…——答案是一张表里某列的整列值。
+_TABLE_ENUM_RE = re.compile(r"有哪些|列出|清单|一览|名单|哪些|所有|全部|都有|都包含")
+
+
+def table_query_kind(query: str) -> str | None:
+    """判断问题是否「读表」式，并返回子类型：`count`（计数/查值）/ `enum`（枚举/清单）。
+
+    这是**宽松预筛**：只要出现计数/枚举信号就进入精确通道候选。真正的门禁在
+    精确通道内部——找不到强匹配的表（或无法精确读出答案）就返回 None 回退向量检索，
+    保证「预警分级有哪几级」「应急预案有哪些措施」这类非表格问题零回归。
+    返回 None 表示非读表式问题。
+    """
+    q = query.strip()
+    if not q:
+        return None
+    if _TABLE_COUNT_RE.search(q):
+        return "count"
+    if _TABLE_ENUM_RE.search(q):
+        return "enum"
+    return None
+
+
+def is_table_query(query: str) -> bool:
+    """判断问题是否「读表」式（计数 / 枚举 / 查值）。等价于 table_query_kind(q) is not None。"""
+    return table_query_kind(query) is not None

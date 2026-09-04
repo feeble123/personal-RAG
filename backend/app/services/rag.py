@@ -529,6 +529,30 @@ async def rerank(query: str, documents: list[str]) -> list[float]:
     return scores
 
 
+def _table_citation(ans) -> RetrievedChunk | None:
+    """把精确读表答案转成一条检索引用（snippet=格式化答案正文，带出处）。
+
+    chunk_id 取答案来源表的首个切片 id（引用锚点），snippet 放完整答案文本；
+    LLM 生成时据此引用，命中 expect_keywords 也靠 snippet 里的原文值（如「3」）。
+    """
+    from app.services.table_query import TableAnswer
+
+    if not isinstance(ans, TableAnswer):
+        return None
+    chunk_id = ans.chunk_ids[0] if ans.chunk_ids else None
+    return RetrievedChunk(
+        chunk_id=chunk_id,
+        kb_id=ans.kb_id or 0,
+        doc_id=ans.doc_id or 0,
+        source=ans.source or "",
+        section=ans.section,
+        snippet=ans.answer_text,
+        score=1.0,
+        rank=1,
+        block_type="table",
+    )
+
+
 async def retrieve(
     db: AsyncSession,
     query: str,
@@ -553,6 +577,34 @@ async def retrieve(
     # P2 单元3：检索范围指标（scoped=点名文档限定，global=跨全库）
     metrics["retrieval_requests_total"].labels("scoped" if doc_ids else "global").inc()
     top_k = top_k or settings.top_k_final
+
+    # 单元二 2-4：读表问题走精确结构化通道（先于向量检索）。命中「计数/枚举/查值」且
+    # 库里能精确定位到一张表、读出确切答案时，直接返回该表的引用（不走向量/BM25/rerank）；
+    # 任何一步不确定都返回 None → 原样回退下方向量检索，保证非表格问题零回归。
+    # 点名文档限定（doc_ids）时暂不走精确通道（语义不同：可能只要某文档里的表）。
+    if not doc_ids:
+        try:
+            from app.services.table_query import query_table
+
+            table_ans = await query_table(db, query, kb_id)
+        except Exception:
+            logger.warning("精确读表通道失败，回退向量检索", exc_info=True)
+            table_ans = None
+        if table_ans is not None:
+            cite = _table_citation(table_ans)
+            if cite is not None:
+                if return_trace:
+                    trace = RetrievalTrace(
+                        query=query,
+                        candidates=[],
+                        rerank_ok=False,
+                        rerank_status="disabled",
+                        expanded_type="table",
+                        vector_hits=0,
+                        bm25_hits=0,
+                    )
+                    return RetrievedResult(cites=[cite], trace=trace)
+                return [cite]
 
     # 单元 N 口语→术语 查询扩展：口语/宽泛问法追加规范术语（只加词不删词），
     # 仅作用于检索查询（向量/BM25/rerank），语义缓存/记忆库/用户可见提问仍用原 query。
