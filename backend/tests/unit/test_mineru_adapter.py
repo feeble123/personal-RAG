@@ -84,6 +84,57 @@ class TestTableParse:
         assert _parse_table_html("<table>broken") is None
         assert _parse_table_html("") is None
 
+    def test_rowspan_filled(self):
+        """单元二①：rowspan 合并格值填回覆盖的每一行（分类列不再只有首行有值）。"""
+        html = (
+            "<table>"
+            "<tr><td>序号</td><td>分类</td><td>要求</td></tr>"
+            "<tr><td>55</td><td rowspan=2>业务应用</td><td>持续提升</td></tr>"
+            "<tr><td>56</td><td>持续提升</td></tr>"
+            "</table>"
+        )
+        t = _parse_table_html(html)
+        assert t["rows"][1] == ["55", "业务应用", "持续提升"]
+        # 分类列填回：56 行也带上「业务应用」
+        assert t["rows"][2] == ["56", "业务应用", "持续提升"]
+
+    def test_colspan_filled(self):
+        """单元二①：colspan 合并格值填回覆盖的每一列。"""
+        html = (
+            "<table>"
+            "<tr><td>序号</td><td colspan=2>建设内容</td></tr>"
+            "<tr><td>55</td><td>工程安全</td><td>预警</td></tr>"
+            "</table>"
+        )
+        t = _parse_table_html(html)
+        assert t["rows"][0] == ["序号", "建设内容", "建设内容"]
+
+    def test_rowspan_colspan_mixed(self):
+        """单元二①：rowspan+colspan 混合（真实表格形态）每列都有值。"""
+        html = (
+            "<table>"
+            "<tr><td colspan=3>结构型式</td><td>允许流速</td></tr>"
+            "<tr><td rowspan=2>序号</td><td colspan=2>黏土类</td><td>0.75</td></tr>"
+            "<tr><td colspan=2>黄土类</td><td>1.00</td></tr>"
+            "</table>"
+        )
+        t = _parse_table_html(html)
+        assert t["rows"][0] == ["结构型式", "结构型式", "结构型式", "允许流速"]
+        assert t["rows"][1] == ["序号", "黏土类", "黏土类", "0.75"]
+        assert t["rows"][2] == ["序号", "黄土类", "黄土类", "1.00"]
+
+    def test_span_attr_quoted_and_unquoted(self):
+        """单元二①：rowspan/colspan 属性带引号和不带引号都解析。"""
+        html = (
+            "<table>"
+            "<tr><td rowspan=\"2\" colspan='1'>A</td><td>B</td></tr>"
+            "<tr><td>C</td></tr>"
+            "</table>"
+        )
+        t = _parse_table_html(html)
+        assert t["rows"][0] == ["A", "B"]
+        assert t["rows"][1] == ["A", "C"]
+
 
 class TestAdapt:
     def test_excludes_header_footer(self, content_list, middle):

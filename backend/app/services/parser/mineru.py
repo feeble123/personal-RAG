@@ -630,25 +630,83 @@ def _norm_mineru_text(text: str) -> str:
     return t
 
 
+# 单元二 子单元①：MinerU 表格单元格解析（td/th + rowspan/colspan 属性）。
+# MinerU 的表格 HTML 里合并单元格用 rowspan/colspan 表达（带引号/不带引号都有）。
+_TABLE_CELL_RE = re.compile(r"<(td|th)\b([^>]*)>(.*?)</\1>", re.DOTALL | re.IGNORECASE)
+_TABLE_SPAN_RE = re.compile(r"(rowspan|colspan)\s*=\s*[\"']?(\d+)", re.IGNORECASE)
+
+
+def _cell_span(attrs: str) -> tuple[int, int]:
+    """从 td/th 属性串解析 rowspan/colspan（默认 1；引号可选）。"""
+    rowspan = 1
+    colspan = 1
+    for m in _TABLE_SPAN_RE.finditer(attrs):
+        if m.group(1).lower() == "rowspan":
+            rowspan = int(m.group(2))
+        else:
+            colspan = int(m.group(2))
+    return rowspan, colspan
+
+
+def _expand_table_grid(parsed_rows: list[list[tuple[int, int, str]]]) -> list[list[str]]:
+    """把带 rowspan/colspan 的单元格展开成规则二维网格（合并格填回）。
+
+    每个被合并的单元格，其值复制填满 rowspan×colspan 覆盖的每个格子；
+    未填充的残留（畸形 HTML）转空串。空 tr 行在解析阶段已保留占位，
+    保证 rowspan 依赖的连续行号不错位。
+    """
+    grid: list[list[str | None]] = []
+    for r, cells in enumerate(parsed_rows):
+        while len(grid) <= r:
+            grid.append([])
+        row = grid[r]
+        col = 0
+        for rs, cs, text in cells:
+            # 跳过被上方 rowspan 占用的格子（已有值）
+            while col < len(row) and row[col] is not None:
+                col += 1
+            # 填满 rowspan×colspan 覆盖区（含下方预留行）
+            for rr in range(r, r + rs):
+                while len(grid) <= rr:
+                    grid.append([])
+                grow = grid[rr]
+                while len(grow) < col + cs:
+                    grow.append(None)
+                for cc in range(col, col + cs):
+                    grow[cc] = text
+            col += cs
+    return [[c if c is not None else "" for c in row] for row in grid]
+
+
 def _parse_table_html(html: str) -> dict | None:
     """解析 MinerU table_body HTML → {rows, header_path}（供 IR table 字段）。
 
+    单元二 子单元①：合并单元格（rowspan/colspan）填回——被合并格的值复制填满
+    它覆盖的每一行每一列，避免「分类」「结构型式」这类合并列只有首行有值、
+    其余行空白（水力学/数字孪生 36/79 张表中招）。
+
     容错：解析失败降级为纯文本行（不抛异常）。
     """
-    import re
-
     if not html:
         return None
     try:
         rows_raw = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL | re.IGNORECASE)
-        rows: list[list[str]] = []
+        if not rows_raw:
+            return None
+        parsed_rows: list[list[tuple[int, int, str]]] = []
         for r in rows_raw:
-            cells = [
-                re.sub(r"<[^>]+>", "", c).strip()
-                for c in re.findall(r"<td[^>]*>(.*?)</td>", r, re.DOTALL | re.IGNORECASE)
-            ]
-            if cells and any(c for c in cells):
-                rows.append(cells)
+            cells: list[tuple[int, int, str]] = []
+            for m in _TABLE_CELL_RE.finditer(r):
+                text = re.sub(r"<[^>]+>", "", m.group(3)).strip()
+                rs, cs = _cell_span(m.group(2))
+                cells.append((rs, cs, text))
+            # 空 tr 行也保留占位，保证 rowspan 依赖的连续行号不错位
+            parsed_rows.append(cells)
+        if not parsed_rows:
+            return None
+        rows = _expand_table_grid(parsed_rows)
+        # 展开后再过滤全空行（rowspan 填对位置后空行才可安全丢弃）
+        rows = [row for row in rows if any(c for c in row)]
         if not rows:
             return None
         header_path = rows[0]
