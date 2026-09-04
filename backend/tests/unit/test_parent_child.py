@@ -291,7 +291,12 @@ class TestWriteChunksParentChild:
                 children = [c for c in chunks if c.block_type == "table"]
                 parents = [c for c in chunks if c.block_type == "parent"]
                 assert len(children) == 1, f"应 1 表格子块, 实得 {len(children)}"
-                assert children[0].table_data == table_data, "子块 table_data 应正确落库"
+                # table_id 落库时已前缀 doc{id}:（跨文档唯一），其余字段原样
+                got = children[0].table_data
+                assert got is not None, "子块 table_data 应落库"
+                assert got["table_id"] == f"doc{doc_id}:excel-0", "table_id 应加文档命名空间"
+                assert got["columns"] == table_data["columns"]
+                assert got["rows"] == table_data["rows"]
                 assert all(p.table_data is None for p in parents), "父块不携带 table_data"
         finally:
             async with async_session_factory() as db:

@@ -108,6 +108,21 @@ def _extract_formula_no(content: str) -> str | None:
     return m2.group(1) if m2 else None
 
 
+def _namespace_table_data(table_data: dict | None, doc_id: int) -> dict | None:
+    """单元二 2-3：table_data 的 table_id 前缀文档命名空间，保证跨文档全局唯一。
+
+    解析层给的 table_id 是 element_id（如 "excel-0"），不同文档会撞名；写库时
+    前缀 `doc{doc_id}:` 变成 `doc{id}:excel-0`，读表服务（table_query）才能精确
+    定位到某文档的某张表。返回新 dict（不突变入参）。
+    """
+    if not table_data:
+        return None
+    tid = table_data.get("table_id")
+    if not tid:
+        return None
+    return {**table_data, "table_id": f"doc{doc_id}:{tid}"}
+
+
 def enqueue_ingestion(doc_id: int) -> None:
     """投递入库任务：**写 DB job**（幂等：该文档已有活跃 job 则忽略，不重复投递）。
 
@@ -839,7 +854,7 @@ async def _write_chunks(
                     formula_no=_extract_formula_no(c.content),
                     parent_chunk_id=parent.id,
                     parent_context=c.parent_content,
-                    table_data=getattr(c, "table_data", None),
+                    table_data=_namespace_table_data(getattr(c, "table_data", None), doc.id),
                 )
                 db.add(child)
                 next_idx += 1
@@ -862,7 +877,7 @@ async def _write_chunks(
                     block_type=getattr(c, "block_type", "text") or "text",
                     clause_no=_extract_clause_no(c.section),
                     formula_no=_extract_formula_no(c.content),
-                    table_data=getattr(c, "table_data", None),
+                    table_data=_namespace_table_data(getattr(c, "table_data", None), doc.id),
                 )
             )
         target.chunk_count = len(chunks)
