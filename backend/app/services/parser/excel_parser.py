@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from app.services.parser.base import DocumentParser, ParsedBlock, ParsedDocument
+from app.services.parser.ir import DocumentElement
 
 
 def _row_to_line(cells: list[str]) -> str:
@@ -56,6 +57,7 @@ class ExcelParser(DocumentParser):
 
         quality: dict = {"parser": "excel", "sheets": 0, "rows": 0}
         blocks: list[ParsedBlock] = []
+        elements: list[DocumentElement] = []
 
         sheets = pd.read_excel(path, sheet_name=None, dtype=str, keep_default_na=False, engine=None)
         for sheet_name, frame in sheets.items():
@@ -64,18 +66,28 @@ class ExcelParser(DocumentParser):
                 continue
             header = _normalize_excel_row([c for c in frame.columns])
             section = f"{filename} / {sheet_name}"
-            # 表头行
-            blocks.append(ParsedBlock(text=_row_to_line(header), section=section, block_type="table"))
+            data_rows: list[list[str]] = []
             for _, row in frame.iterrows():
                 cells = _normalize_excel_row([c for c in row.values])
+                data_rows.append(cells)
+                quality["rows"] += 1
+
+            # 兼容层 blocks：仍逐行（表头 + 数据行），供 boilerplate/完整性自检沿用
+            blocks.append(ParsedBlock(text=_row_to_line(header), section=section, block_type="table"))
+            for cells in data_rows:
                 line = _row_to_line(cells)
                 if line.strip(" |"):
                     blocks.append(ParsedBlock(text=line, section=section, block_type="table"))
-                    quality["rows"] += 1
+
+            # 单元二 2-1：element.table 携带完整表结构（列名 + 全部行），与 MinerU 的
+            # {rows, header_path} 一致——不再把 pandas 现成的「列名+一行行」拍扁成纯文本。
+            all_rows = [header] + data_rows
+            table = {"rows": all_rows, "header_path": header}
+            text = "\n".join(_row_to_line(r) for r in all_rows)
+            b = ParsedBlock(text=text, section=section, block_type="table")
+            elements.append(b.to_element(len(elements), "excel", table=table))
 
         quality["blocks"] = len(blocks)
-        # P1-1：blocks → IR elements（Excel 每行是 TABLE，无标题层级）
-        elements = [b.to_element(i, "excel") for i, b in enumerate(blocks)]
         return ParsedDocument(blocks=blocks, quality=quality, elements=elements)
 
 
