@@ -484,7 +484,22 @@ def _answer_total(views: list[TableView], query: str, words: list[str]) -> Table
     if total == 0:
         return None
     detail = " + ".join(f"{_sheet_name(v)} {len(v.rows)}" for v in targets)
-    answer = f"{unit} 总数: {total}" if len(targets) == 1 else f"{unit} 总数: {total}（{detail}）"
+    head = f"{unit} 总数: {total}" if len(targets) == 1 else f"{unit} 总数: {total}（{detail}）"
+    # 关键：把真实的名称列值一并带进 answer_text（snippet）。
+    # LLM 只看 snippet（chat.py 只喂 snippet，不喂 rows），若 snippet 只有「总数 40」没有名字，
+    # 用户要求「以表格输出清单」时 LLM 会编造「（制度体系方案 1）」这类假名——编造比漏答严重得多。
+    names: list[str] = []
+    for v in targets:
+        nc = _find_column(v, _is_name_column)
+        if nc is None:
+            continue
+        for r in v.rows:
+            name = (r[nc].strip() if nc < len(r) else "")
+            if name and name not in names:
+                names.append(name)
+    answer = head
+    if names:
+        answer = f"{head}\n{unit}清单: " + "、".join(names)
     rows = tuple(tuple(r) for v in targets for r in v.rows)
     return TableAnswer(
         kind="count", subject=unit, answer_text=answer,

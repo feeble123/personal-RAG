@@ -226,6 +226,21 @@ class TestTotalCount:
         # 「时间」命中 5 个列名，去重后应只 +3（不是 15）
         assert _table_score(["时间"], tv) == 3.0
 
+    def test_total_answer_carries_real_names(self):
+        """总数答案必须带真实名称列值——否则 LLM 只有「40」这个数，用户要清单时会编假名。
+
+        这是「编造比漏答严重」的回归锁：snippet 里必须能看到真实方案名（如「制度方案0」），
+        不能只给一个光秃秃的总数。
+        """
+        small, big = _ledger_views()
+        words = _content_words(_question_core("这份台账中一共有多少方案？"))
+        ans = _answer_total([small, big], "这份台账中一共有多少方案？", words)
+        assert ans is not None
+        # 必须带「清单」段 + 真实名（第一个 sheet 的第一个名）
+        assert "清单" in ans.answer_text
+        assert "制度方案0" in ans.answer_text
+        assert "备案方案0" in ans.answer_text
+
 
 class TestQueryTableGate:
     """强门禁：非表格问题在「无表库」里必须返回 None（不接管，回退向量）。"""
