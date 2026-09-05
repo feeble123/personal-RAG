@@ -12,9 +12,11 @@ backend/data/
 # 测试用 PDF（用户本地资料，不进 git：体积大 / 版权）
 PDF test/
 
-# 评测临时产物（baseline.json 保留进 git）
+# 评测临时产物（baseline.json / 评测代码保留进 git，跑出来的报告不进）
 backend/evaluation/report.json
 backend/evaluation/vague_report.json
+backend/evaluation/mineru_backend_report.json
+backend/evaluation/parser_bakeoff_report.json
 
 # Node
 node_modules/
@@ -37,6 +39,18 @@ frontend/test-report/
 
 # Claude Code 本地权限配置（本机专用，不进 git）
 .claude/settings.local.json
+
+# AI 工作档案（给我用的内部记录，本地保留、不上 GitHub）
+CLAUDE.md
+AGENTS.md
+.planning/
+.claude/
+.agents/
+
+# 历史报告 / 实施计划（内部文档，本地保留）
+RAG-OPTIMIZATION-IMPLEMENTATION-PLAN.md
+RAG-SYSTEM-AUDIT-REPORT.md
+evaluation-report.md
 
 # OS
 Thumbs.db
