@@ -40,10 +40,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements.txt
 
-      - name: 安装后端依赖（阿里云镜像，与本机一致）
+      - name: 安装后端依赖（官方 PyPI：GitHub 海外 runner 访问国内镜像会超时）
         run: pip install -r requirements.txt
-        env:
-          PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple/
 
       - name: 安装系统依赖（onnxruntime 需要 libgomp1，与 Dockerfile 一致）
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
@@ -71,8 +69,14 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - name: 安装前端依赖
-        run: npm ci
+      - name: 安装前端依赖（官方 npm：海外 runner 访问国内镜像会超时）
+        # 1) 删掉 .npmrc：里面 script-shell 指向本机 Windows 的 Git Bash 路径，Linux runner 上不存在 → exit 254
+        # 2) lockfile 里 579 个包 resolved 指向 registry.npmmirror.com（国内镜像），替换回官方 npmjs
+        # 3) 本机开发不受影响：本机仍用阿里镜像装包，CI 的替换只发生在云端的临时环境
+        run: |
+          rm -f .npmrc
+          sed -i 's#registry.npmmirror.com#registry.npmjs.org#g' package-lock.json
+          npm ci
 
       - name: ESLint（零告警红线）
         run: npm run lint
