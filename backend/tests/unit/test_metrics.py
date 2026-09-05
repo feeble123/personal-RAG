@@ -64,9 +64,12 @@ class TestMetricsEndpoint:
 
         routes = app.routes
         metrics_idx = next(i for i, r in enumerate(routes) if getattr(r, "path", None) == "/metrics")
-        spa_idx = next(i for i, r in enumerate(routes)
-                       if getattr(r, "path", None) == "/{full_path:path}")
-        assert metrics_idx < spa_idx, "/metrics 必须在 SPA fallback 之前"
+        # SPA catch-all 路由只在 frontend/dist 存在时注册（本地 build 过前端有、
+        # CI 只 checkout 代码没有）。没有 catch-all 时本就没有被吞的风险，直接通过。
+        spa_idx = next((i for i, r in enumerate(routes)
+                        if getattr(r, "path", None) == "/{full_path:path}"), None)
+        if spa_idx is not None:
+            assert metrics_idx < spa_idx, "/metrics 必须在 SPA fallback 之前"
 
 
 class TestEmbeddedMetrics:
