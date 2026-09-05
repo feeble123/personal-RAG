@@ -41,7 +41,8 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: 安装后端依赖（官方 PyPI：GitHub 海外 runner 访问国内镜像会超时）
-        run: pip install -r requirements.txt
+        # 装运行时依赖 + 测试依赖（pytest/pytest-asyncio 不在运行时清单里，分开装）
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
       - name: 安装系统依赖（onnxruntime 需要 libgomp1，与 Dockerfile 一致）
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1

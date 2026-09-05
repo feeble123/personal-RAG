@@ -1,0 +1,6 @@
+# 测试专用依赖（CI 与本地开发装，生产/容器不装）
+# 与 requirements.txt（运行时依赖）分开：pytest/pytest-asyncio 只在跑测试时需要。
+# 版本与本机 .venv 实测一致（2026-09-05）。
+pytest>=9.1
+pytest-asyncio>=1.4
+httpx>=0.28
