@@ -64,6 +64,49 @@ class TestBM25:
         assert bm25.search(123456, "任意查询") == []
         assert bm25.has_kb(123456) is False
 
+    def test_rebuild_and_search_no_race_interleaving(self, monkeypatch):
+        """P0-1 竞态修复：重建进行中，并发查询绝不读到「新名单+旧索引」的错位结果。
+
+        旧实现锁内先改 _ids 再慢分词、search 不取锁，重建窗口内会张冠李戴。
+        用慢分词放大窗口，重建线程与查询线程并发，断言任何一次查询的 chunk_id
+        都来自同一代数据（要么全旧、要么全新），绝无跨代混合。
+        """
+        import threading
+        import time
+
+        kb_id = 9901
+        bm25.rebuild(kb_id, [(1, "明渠均匀流 恒定 水深"), (2, "设计洪水 暴雨 汇流")])
+
+        real_tokenize = bm25.tokenize
+        started = threading.Event()
+
+        def slow_tokenize(text):
+            started.set()
+            time.sleep(0.05)
+            return real_tokenize(text)
+
+        monkeypatch.setattr(bm25, "tokenize", slow_tokenize)
+
+        t = threading.Thread(
+            target=bm25.rebuild,
+            args=(kb_id, [(11, "水工建筑物 大坝 泄水"), (12, "闸门 启闭 调度")]),
+        )
+        try:
+            t.start()
+            started.wait(timeout=5)
+
+            mixed = False
+            for _ in range(6):
+                ids = {cid for cid, _ in bm25.search(kb_id, "大坝 闸门", k=10)}
+                # 同代配对：旧代 {1,2} 或新代 {11,12}，跨代组合即错位
+                if not (ids <= {1, 2} or ids <= {11, 12}):
+                    mixed = True
+                    break
+            t.join(timeout=5)
+            assert not mixed, "查询读到了新旧混合的错位结果"
+        finally:
+            bm25.remove_kb(kb_id)
+
 
 class TestDocTitleResolution:
     """问题中点名文档（《书名》/「XXX中」）的候选提取与匹配（BUG-A）。"""

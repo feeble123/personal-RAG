@@ -27,11 +27,19 @@ def tokenize(text: str) -> list[str]:
 
 
 def rebuild(kb_id: int, items: list[tuple[int, str]]) -> None:
-    """重建某知识库语料。items = [(chunk_id, content)]。"""
+    """重建某知识库语料。items = [(chunk_id, content)]。
+
+    竞态修复（code-review P0-1）：分词构建是耗时操作，若在锁内做，期间并发查询
+    会读到「新名单 + 旧索引」的错位中间态（score 与 chunk_id 张冠李戴）。
+    改为锁外构建完整的新 (ids, index)，锁内一次性原子替换——锁只持微秒级，
+    查询端（search 亦取锁读快照）读到的 (ids, index) 永远来自同一代。
+    """
+    new_ids = [cid for cid, _ in items]
+    corpus = [tokenize(content) for _, content in items]
+    new_index = BM25Okapi(corpus) if corpus else None
     with _lock:
-        _ids[kb_id] = [cid for cid, _ in items]
-        corpus = [tokenize(content) for _, content in items]
-        _bm25[kb_id] = BM25Okapi(corpus) if corpus else None
+        _ids[kb_id] = new_ids
+        _bm25[kb_id] = new_index
 
 
 def remove_kb(kb_id: int) -> None:
@@ -49,14 +57,21 @@ def all_kb_ids() -> list[int]:
 
 
 def search(kb_id: int, query: str, k: int = 50) -> list[tuple[int, float]]:
-    """返回 [(chunk_id, score)]，按分数降序。"""
-    index = _bm25.get(kb_id)
-    if not index or not _ids.get(kb_id):
+    """返回 [(chunk_id, score)]，按分数降序。
+
+    竞态修复（code-review P0-1）：与 rebuild 共用同一把 _lock，锁内一次性读出
+    一致的 (index, ids) 快照后退出锁，再在锁外做分词/打分/排序。既不阻塞 rebuild
+    （rebuild 只在锁内做微秒级的替换），又保证 ids 与 index 永远配对，不错位。
+    """
+    with _lock:
+        index = _bm25.get(kb_id)
+        ids = _ids.get(kb_id)
+    if not index or not ids:
         return []
     q = tokenize(query)
     if not q:
         return []
     scores = index.get_scores(q)
     # (chunk_id, score) 排序
-    pairs = sorted(zip(_ids[kb_id], scores), key=lambda x: x[1], reverse=True)
+    pairs = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
     return [(cid, float(score)) for cid, score in pairs[:k]]
