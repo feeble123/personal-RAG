@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import QaMemory
+from app.services import vecmath
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +46,8 @@ class RecallResult:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    n = len(a)
-    dot = sum(a[i] * b[i] for i in range(n))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+    """单对余弦（委托 vecmath，消除重复实现；行为与原实现一致）。"""
+    return vecmath.cosine(a, b)
 
 
 def _subjects_match(a: str | None, b: str | None) -> bool:
@@ -107,10 +104,12 @@ async def recall(
     ).limit(cfg.pool)
     rows = (await db.execute(stmt)).scalars().all()
     hits: list[tuple[QaMemory, float]] = []
-    for row in rows:
-        try:
-            sim = _cosine(query_vector, json.loads(row.question_vector_json))
-        except Exception:
+    # P1-3：批量反序列化 + 余弦是纯 CPU 密集活，放线程池执行，不在事件循环里跑。
+    sims = await asyncio.to_thread(
+        vecmath.score_json_batch, query_vector, [r.question_vector_json for r in rows]
+    )
+    for row, sim in zip(rows, sims):
+        if sim is None:
             continue
         if sim >= cfg.threshold and _subjects_match(subject, row.subject):
             hits.append((row, sim))
@@ -161,10 +160,13 @@ async def remember(
         QaMemory.updated_at.desc()
     ).limit(cfg.pool)
     dup: QaMemory | None = None
-    for row in (await db.execute(stmt)).scalars().all():
-        try:
-            sim = _cosine(query_vector, json.loads(row.question_vector_json))
-        except Exception:
+    dup_rows = (await db.execute(stmt)).scalars().all()
+    # P1-3：批量余弦放线程池，不在事件循环里逐条跑。
+    sims = await asyncio.to_thread(
+        vecmath.score_json_batch, query_vector, [r.question_vector_json for r in dup_rows]
+    )
+    for row, sim in zip(dup_rows, sims):
+        if sim is None:
             continue
         if sim >= cfg.threshold and _subjects_match(subject, row.subject):
             dup = row

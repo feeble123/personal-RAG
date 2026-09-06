@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.metrics import metrics
 from app.db.models import SemanticCache
+from app.services import vecmath
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +35,8 @@ async def clear_cache() -> None:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    n = len(a)
-    dot = sum(a[i] * b[i] for i in range(n))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+    """单对余弦（委托 vecmath，消除重复实现；行为与原实现一致）。"""
+    return vecmath.cosine(a, b)
 
 
 def _now() -> datetime:
@@ -109,11 +106,13 @@ async def find(
     rows = [r for r in rows if not _is_expired(r)]
     best: SemanticCache | None = None
     best_sim = 0.0
-    for row in rows:
-        try:
-            vec = json.loads(row.query_vector_json)
-            sim = _cosine(query_vector, vec)
-        except Exception:
+    # P1-3：批量反序列化 + 余弦是纯 CPU 密集活，放线程池执行，不在事件循环里
+    # 逐条三重循环拖慢所有并发用户首 token（原 _cosine 已迁至 vecmath）。
+    sims = await asyncio.to_thread(
+        vecmath.score_json_batch, query_vector, [r.query_vector_json for r in rows]
+    )
+    for row, sim in zip(rows, sims):
+        if sim is None:
             continue
         if sim > best_sim:
             best = row

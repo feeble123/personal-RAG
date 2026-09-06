@@ -22,7 +22,7 @@ from app.core.config import settings
 from app.core.metrics import metrics
 from app.db.models import Chunk, Document
 from app.schemas import CitationOut
-from app.services import bm25, vector_store
+from app.services import bm25, vecmath, vector_store
 from app.services.embedding import embed_query
 from app.services.query_expand import expand_query
 
@@ -491,13 +491,8 @@ class RetrievedResult:
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    n = len(a)
-    dot = sum(a[i] * b[i] for i in range(n))
-    na = (sum(x * x for x in a)) ** 0.5
-    nb = (sum(x * x for x in b)) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
+    """单对余弦（委托 vecmath，消除重复实现；行为与原实现一致）。"""
+    return vecmath.cosine(a, b)
 
 
 async def rerank(query: str, documents: list[str]) -> list[float]:
@@ -667,10 +662,14 @@ async def retrieve(
     extra_ids = [cid for cid in bm25_norm if cid not in candidates]
     if extra_ids:
         embeddings = await asyncio.to_thread(vector_store.get_embeddings_by_ids, extra_ids)
-        for cid, vec in embeddings.items():
-            candidates[cid] = _cosine(qvec, vec)
+        # P1-3：补召回余弦是纯 CPU 密集活，放线程池批量算，不在事件循环里逐条跑。
+        sims = await asyncio.to_thread(
+            vecmath.cosine_batch, qvec, [embeddings[cid] for cid in extra_ids]
+        )
+        for cid, sim in zip(extra_ids, sims):
+            candidates[cid] = sim
             if return_trace:
-                trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).vector_score = candidates[cid]
+                trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).vector_score = sim
 
     # 4) P1-9 RRF 融合（替代 0.7v+0.3bm25 线性加权——两分数不同标度，线性会失真）。
     #    向量命中按 score 降序；BM25 按库内归一化分降序。

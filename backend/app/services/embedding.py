@@ -89,6 +89,16 @@ def profile_fingerprint() -> str:
     return get_profile().fingerprint()
 
 
+async def profile_fingerprint_async() -> str:
+    """异步获取 profile 指纹：首次探测维度放线程池，不阻塞事件循环。
+
+    P1-3 修复：get_profile 首次会同步 HTTP 探测维度（数百 ms~数秒），若在
+    事件循环里跑会拖慢所有并发用户。这里用 to_thread 让探测在后台线程执行。
+    探测完成后再调用，后续均为内存读取（近零开销），安全复用。
+    """
+    return await asyncio.to_thread(profile_fingerprint)
+
+
 def reset_profile() -> None:
     """测试用：重置 profile 缓存。"""
     global _current_profile
@@ -96,12 +106,14 @@ def reset_profile() -> None:
 
 
 def _probe_dimension() -> int:
-    """探测当前 embedder 的向量维度（固定 probe 文本）。"""
-    try:
-        v = get_embedder().embed_query("probe")
-        return len(v)
-    except Exception:
-        return 0
+    """探测当前 embedder 的向量维度（固定 probe 文本）。
+
+    P1-3 修复：探测失败抛异常而非返回 0——返回 0 会被永久缓存进 profile，
+    导致后续所有向量维度错乱、检索全废且无感知。抛异常则 _current_profile 保持
+    未初始化（None），下次调用自动重试，问题可自愈可观测。
+    """
+    v = get_embedder().embed_query("probe")
+    return len(v)
 
 
 class EmbeddingProvider(Protocol):
@@ -188,9 +200,14 @@ def _cached_query_vector(profile: str, model: str, text: str) -> tuple[float, ..
 
 
 async def embed_query(text: str) -> list[float]:
-    """异步查询向量：LRU 缓存（key 含 profile 指纹）+ 线程池。"""
+    """异步查询向量：LRU 缓存（key 含 profile 指纹）+ 线程池。
+
+    P1-3 修复：profile 指纹先异步取（首次探测维度在后台线程跑），
+    避免探测的同步 HTTP 在事件循环里阻塞所有并发用户。
+    """
+    fp = await profile_fingerprint_async()
     vector = await asyncio.to_thread(
-        _cached_query_vector, profile_fingerprint(), settings.embedding_model, text
+        _cached_query_vector, fp, settings.embedding_model, text
     )
     return list(vector)
 
@@ -214,7 +231,7 @@ async def load_cache_vectors(db: AsyncSession, hashes: list[str]) -> dict[str, l
     """从 embedding_cache 表加载已计算向量（按 profile 指纹精确匹配）。"""
     if not settings.embedding_cache_enabled or not hashes:
         return {}
-    fp = profile_fingerprint()
+    fp = await profile_fingerprint_async()
     rows = await db.scalars(
         select(EmbeddingCache).where(
             EmbeddingCache.content_hash.in_(hashes),
@@ -228,7 +245,7 @@ async def store_cache_vectors(db: AsyncSession, vectors: dict[str, list[float]])
     """写入 embedding_cache 表（同 content_hash+profile 已存在则跳过）。"""
     if not settings.embedding_cache_enabled or not vectors:
         return
-    fp = profile_fingerprint()
+    fp = await profile_fingerprint_async()
     existing = await db.scalars(
         select(EmbeddingCache.content_hash).where(
             EmbeddingCache.content_hash.in_(list(vectors)),
