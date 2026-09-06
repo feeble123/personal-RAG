@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _client: chromadb.ClientAPI | None = None
 _collection: Any | None = None
+_collections: dict[str, Any] = {}   # B1：按名字缓存 collection（软切换原语用）
 _lock = threading.Lock()
 
 _HNSW_CONFIG = {
@@ -60,6 +61,142 @@ def _get_collection():
         else:
             _collection = _client.get_collection(name)
         return _collection
+
+
+# ---- B1：按名字操作 collection（软切换原语，为「每库每版本一个 collection」铺路）----
+
+def _get_collection_by_name(name: str) -> Any:
+    """按名字取（懒建）collection，进程内缓存，线程安全。
+
+    与 _get_collection 的区别：后者固定返回默认 collection（kb_chunks）；
+    这里支持任意名字（软切换时每库每版本一个独立 collection，互不牵连）。
+    """
+    global _client
+    with _lock:
+        col = _collections.get(name)
+        if col is not None:
+            return col
+        if _client is None:
+            _client = chromadb.PersistentClient(path=str(settings.chroma_dir_path))
+        if name not in {c.name for c in _client.list_collections()}:
+            try:
+                col = _client.create_collection(name=name, configuration=_HNSW_CONFIG)
+                logger.info("创建 Chroma collection: %s (HNSW=%s)", name, _HNSW_CONFIG["hnsw"])
+            except TypeError:
+                # 旧版 Chroma：退回默认
+                col = _client.create_collection(name=name)
+        else:
+            col = _client.get_collection(name)
+        _collections[name] = col
+        return col
+
+
+def _drop_collection_named(name: str) -> None:
+    """物理删除指定名字的 collection + 失效进程内缓存（不存在时忽略）。"""
+    global _client
+    with _lock:
+        if _client is None:
+            _client = chromadb.PersistentClient(path=str(settings.chroma_dir_path))
+        try:
+            _client.delete_collection(name)
+        except Exception:  # 不存在时忽略
+            pass
+        _collections.pop(name, None)
+
+
+def build_collection(
+    name: str,
+    ids: list[str],
+    embeddings: list[list[float]],
+    documents: list[str],
+    metadatas: list[dict[str, Any]],
+) -> int:
+    """建（或重建）指定名字的 collection 并写入全量向量，返回实际 count。
+
+    不碰其他 collection——「每库每版本一个 collection」的软切换第一步：
+    先建新版本 collection，核对 count 一致后再切指针。同名残留先清（幂等）。
+    """
+    _drop_collection_named(name)
+    col = _get_collection_by_name(name)
+    _assert_dimension(col, embeddings)
+    if ids:
+        col.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+    return col.count()
+
+
+def drop_collection(name: str) -> None:
+    """删除指定名字的 collection（软切换后清理旧版本用）。"""
+    _drop_collection_named(name)
+
+
+def query_named(
+    name: str,
+    query_vector: list[float],
+    where: dict[str, Any] | None = None,
+    n_results: int = 10,
+) -> list[SearchHit]:
+    """在指定名字的 collection 里检索（软切换后按 active 版本 collection 名查）。"""
+    return _query_collection(_get_collection_by_name(name), query_vector, where, n_results)
+
+
+def count_named(name: str) -> int:
+    return _get_collection_by_name(name).count()
+
+
+def delete_by_where_named(name: str, where: dict[str, Any]) -> None:
+    col = _get_collection_by_name(name)
+    try:
+        col.delete(where=where)
+    except Exception as exc:  # 不存在时删除可能报错，容忍
+        logger.debug("Chroma delete(%s) 忽略异常: %s", where, exc)
+
+
+def get_embeddings_by_ids_named(name: str, ids: list[int]) -> dict[int, list[float]]:
+    """在指定名字的 collection 里按 chunk id 取向量。"""
+    return _get_embeddings(_get_collection_by_name(name), ids)
+
+
+def _query_collection(
+    col: Any,
+    query_vector: list[float],
+    where: dict[str, Any] | None,
+    n_results: int,
+) -> list[SearchHit]:
+    """把 Chroma query 结果转成 SearchHit 列表（query / query_named 共用）。"""
+    res = col.query(
+        query_embeddings=[query_vector],
+        where=where,
+        n_results=n_results,
+        include=["documents", "metadatas", "distances"],
+    )
+    hits: list[SearchHit] = []
+    ids = res.get("ids", [[]])[0]
+    distances = res.get("distances", [[]])[0]
+    metadatas = res.get("metadatas", [[]])[0]
+    for cid, dist, meta in zip(ids, distances, metadatas):
+        try:
+            chunk_id = int(cid)
+        except (TypeError, ValueError):
+            continue
+        # cosine distance → 相似度（越小距离越相关）
+        similarity = max(0.0, 1.0 - float(dist))
+        hits.append(SearchHit(chunk_id=chunk_id, score=similarity, distance=float(dist), metadata=meta or {}))
+    hits.sort(key=lambda h: h.score, reverse=True)
+    return hits
+
+
+def _get_embeddings(col: Any, ids: list[int]) -> dict[int, list[float]]:
+    """按 chunk id 取向量（get_embeddings_by_ids / get_embeddings_by_ids_named 共用）。"""
+    if not ids:
+        return {}
+    res = col.get(ids=[str(i) for i in ids], include=["embeddings"])
+    out: dict[int, list[float]] = {}
+    for cid, emb in zip(res.get("ids", []), res.get("embeddings", [])):
+        try:
+            out[int(cid)] = emb
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 def reset_collection() -> None:
@@ -290,27 +427,7 @@ def query(
     where: dict[str, Any] | None = None,
     n_results: int = 10,
 ) -> list[SearchHit]:
-    col = _get_collection()
-    res = col.query(
-        query_embeddings=[query_vector],
-        where=where,
-        n_results=n_results,
-        include=["documents", "metadatas", "distances"],
-    )
-    hits: list[SearchHit] = []
-    ids = res.get("ids", [[]])[0]
-    distances = res.get("distances", [[]])[0]
-    metadatas = res.get("metadatas", [[]])[0]
-    for cid, dist, meta in zip(ids, distances, metadatas):
-        try:
-            chunk_id = int(cid)
-        except (TypeError, ValueError):
-            continue
-        # cosine distance → 相似度（越小距离越相关）
-        similarity = max(0.0, 1.0 - float(dist))
-        hits.append(SearchHit(chunk_id=chunk_id, score=similarity, distance=float(dist), metadata=meta or {}))
-    hits.sort(key=lambda h: h.score, reverse=True)
-    return hits
+    return _query_collection(_get_collection(), query_vector, where, n_results)
 
 
 def count() -> int:
@@ -319,14 +436,4 @@ def count() -> int:
 
 def get_embeddings_by_ids(ids: list[int]) -> dict[int, list[float]]:
     """按 chunk id 取向量（用于 BM25 补召回 chunk 的实时余弦计算）。"""
-    if not ids:
-        return {}
-    col = _get_collection()
-    res = col.get(ids=[str(i) for i in ids], include=["embeddings"])
-    out: dict[int, list[float]] = {}
-    for cid, emb in zip(res.get("ids", []), res.get("embeddings", [])):
-        try:
-            out[int(cid)] = emb
-        except (TypeError, ValueError):
-            continue
-    return out
+    return _get_embeddings(_get_collection(), ids)
