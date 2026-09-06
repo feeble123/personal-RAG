@@ -2,7 +2,7 @@
 
 层2（完备性）：枚举/概述类问题生成后，判断回答是否完整覆盖了检索证据指向的章节条目；
 不完整 → 调用方扩大证据重新生成。产出「完备率」指标。
-层3（引用忠实）：校验回答每个 [n] 是否被对应引用支撑，产出「引用准确率」指标。
+层3（引用忠实）：校验回答每个 [n] 是否被对应引用支撑，产出「编号合规率」+「引用相关率」两指标。
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ import logging
 import re
 from dataclasses import dataclass
 
-from app.core.config import settings
 from app.services.chat import build_chat_model
 
 logger = logging.getLogger(__name__)
@@ -105,36 +104,13 @@ async def verify_completeness(query: str, answer: str, cites) -> CompletenessVer
         return CompletenessVerdict()
 
 
-# ---- 层3：引用忠实校验（单元3 使用）----
+# ---- 层3：引用忠实校验（确定性两层判定，零 LLM）----
 @dataclass
 class CitationVerdict:
     ok: bool = True                        # 编号合规：所有 [n] 都在资料条数范围内
     bad_numbers: list[int] = None          # 越界/编造的引用编号（编号合规层）
     unsupported_numbers: list[int] = None  # 编号合法但词面不支撑的引用（相关性层）
     note: str = ""
-
-
-_CITATION_PROMPT = """核对回答中的引用编号 [n] 是否被对应资料支撑，只输出 JSON。
-
-【回答】{answer}
-【资料】
-{cites}
-
-规则：回答里标注的 [n] 必须对应下方第 n 条资料，且该条资料的内容确实支撑了回答中标注处的主张。
-若某编号超出资料条数、或资料内容与主张无关/编造 → 该引用无效。
-
-输出严格 JSON：{{"ok": true/false, "bad_numbers": [无效的编号], "note": "..."}}"""
-
-
-def _numbered_cites(cites) -> str:
-    lines = []
-    for i, c in enumerate(cites, start=1):
-        loc = c.source
-        if getattr(c, "page", None):
-            loc += f" 第{c.page}页"
-        snippet = getattr(c, "snippet", "") or ""
-        lines.append(f"[{i}] {loc}: {snippet[:200]}")
-    return "\n".join(lines)
 
 
 def _out_of_range_citations(answer: str, cites) -> list[int]:
