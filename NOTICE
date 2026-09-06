@@ -1,0 +1,55 @@
+# 第三方依赖声明（NOTICE）
+
+本项目的源代码（frontend/ 与 backend/app 等自研代码）以 **MIT License**（见 LICENSE）授权。
+
+以下第三方库为独立项目，各有其自身的开源协议。安装时由 pip / npm 分别拉取，
+其协议仅约束库本身的源码，不影响本项目自研代码的 MIT 授权。使用本项目前，
+请自行查阅各库的最新许可证文本（以安装版本为准）。
+
+## 后端（Python，backend/requirements.txt）
+
+| 依赖 | 用途 | 许可证 |
+| --- | --- | --- |
+| fastapi / uvicorn / starlette / pydantic | Web 框架与数据校验 | MIT / BSD |
+| sqlalchemy / alembic / aiosqlite / asyncpg | 数据库 ORM 与迁移 | MIT |
+| psycopg2-binary | PostgreSQL 驱动（迁移脚本用） | LGPL（仅当修改其源码并分发时需开源改动） |
+| langchain / langchain-* / chromadb | RAG 编排与向量检索 | MIT / Apache-2.0 |
+| rank-bm25 / jieba | 关键词检索与中文分词 | MIT / Apache-2.0 |
+| **PyMuPDF** | PDF 解析（文字层/表格/OCR 页面渲染） | **AGPL-3.0 或 Artifex 商业许可** |
+| pdfplumber / pypdf | PDF 文本与表格提取 | MIT / BSD |
+| python-docx / pandas / openpyxl | 文档与表格数据处理 | MIT / BSD |
+| rapidocr-onnxruntime | 扫描件 OCR | Apache-2.0 |
+| celery / redis | 任务队列与调度 | BSD / MIT |
+| httpx / tenacity | 网络请求与重试 | BSD / Apache-2.0 |
+| prometheus-client | 指标暴露 | Apache-2.0 |
+| bcrypt / PyJWT / slowapi | 安全与限流 | Apache-2.0 / MIT |
+
+## 前端（TypeScript，frontend/package.json）
+
+| 依赖 | 用途 | 许可证 |
+| --- | --- | --- |
+| react / react-dom | UI 框架 | MIT |
+| antd / @ant-design/icons | 组件库与图标 | MIT |
+| @tanstack/react-query | 数据请求缓存 | MIT |
+| zustand | 状态管理 | MIT |
+| axios | HTTP 请求 | MIT |
+| react-markdown / remark-* / rehype-katex / katex | Markdown 与数学公式渲染 | MIT |
+| react-router-dom / react-window | 路由与虚拟列表 | MIT |
+| @tsparticles/react / @tsparticles/slim | 粒子背景动画 | MIT |
+| dayjs | 日期处理 | MIT |
+| vite / typescript / vitest / eslint / playwright 等 | 构建、测试与工具链（devDependencies，不随产物分发） | MIT |
+
+## 关于 PyMuPDF 的 AGPL 说明
+
+PyMuPDF 采用「AGPL-3.0 或 Artifex 商业许可」双许可。AGPL 的“网络条款”要求：
+**若在网络服务中提供使用了该库的软件，则需向使用者开源相关源码**。
+
+本项目当前以 **MIT 开源** 的方式提供，自研代码全部公开，因此与 PyMuPDF 的
+AGPL 条款不存在冲突。但请注意以下两点：
+
+1. 若未来改以 **闭源方式提供在线服务**，需将 PyMuPDF 替换为宽松协议库
+   （如 pdfplumber + pypdf + pypdfium2），或购买 Artifex 商业许可。
+2. 本项目对 PyMuPDF 仅为普通 API 调用（import fitz 后调用其公开接口），
+   未修改其源码；其版权与协议归属 Artifex Software Inc.。
+
+本声明仅为友好提示，不构成法律意见。
