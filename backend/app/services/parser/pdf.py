@@ -31,6 +31,7 @@ from app.services.parser.headings import (
 )
 from app.services.parser.ocr import OCRResult, ocr_image, ocr_image_tiled, ocr_image_union
 from app.services.parser.ocr_progress import clear_progress, set_progress
+from app.services.parser.orientation import render_corrected
 
 logger = logging.getLogger(__name__)
 
@@ -267,9 +268,8 @@ class PDFParser(DocumentParser):
         for page_no, page in enumerate(doc, start=1):
             page_order.append(page_no)
             if _page_needs_ocr(page):
-                zoom = settings.ocr_dpi / 72.0
-                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-                ocr_payloads[page_no] = pix.tobytes("png")
+                # P1-3 旋转页纠正：横置页先转正再渲染，避免 OCR 条带读串行、表格切碎
+                ocr_payloads[page_no] = render_corrected(page, dpi=settings.ocr_dpi)
 
         # 2) 并行 OCR（onnxruntime session 并发安全）
         # max_workers=2：平衡速度与内存占用（并发过多在服务进程内容易内存尖峰）
@@ -484,10 +484,10 @@ class PDFParser(DocumentParser):
         try:
             for pno, missing_nums in affected.items():
                 page = doc[pno - 1]
-                zoom = settings.ocr_dpi / 72.0
-                pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+                # P1-3 旋转页纠正：断号修复重 OCR 同样先转正横置页
+                pix_bytes = render_corrected(page, dpi=settings.ocr_dpi)
                 # 三路并集（整页+3条带+6条带）：单种配置漏的行不同，并集互补最大化恢复
-                res = ocr_image_union(pix.tobytes("png"))
+                res = ocr_image_union(pix_bytes)
                 orig = [b for b in parsed.blocks if b.page == pno]
                 # 该页起始章节上下文 = 页内首个带 section 的块（跨页标题续接）
                 section_hint = next((b.section for b in orig if b.section), None)

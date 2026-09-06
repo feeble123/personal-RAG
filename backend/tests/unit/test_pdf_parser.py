@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.services.chunker import chunk_blocks
+from app.services.parser import pdf as pdf_module
 from app.services.parser.pdf import PDFParser
 
 SAMPLE = Path(__file__).resolve().parents[1] / "data" / "shuili.pdf"
@@ -47,3 +48,23 @@ class TestPDFParser:
         # 文本量、页码等质量字段完整
         assert "total_chars" in parsed.quality
         assert parsed.quality["pages"] >= 1
+
+    def test_ocr_path_uses_rotation_correction(self, monkeypatch):
+        """P1-3 接线：OCR 渲染路径必须走 render_corrected（旋转页转正），而非裸 get_pixmap。
+
+        用 monkeypatch 替换 pdf 模块命名空间里的 render_corrected，解析扫描样本，
+        断言它被调用——证明「转正工具」真正接进了 OCR 生产线。
+        """
+        if not SCAN.exists():
+            return
+        called: list[int] = []
+        original = pdf_module.render_corrected
+
+        def fake_render_corrected(page, dpi=200, **kw):
+            called.append(1)
+            # 真实调用原函数，保证解析流程不因替换而短路
+            return original(page, dpi=dpi, **kw)
+
+        monkeypatch.setattr(pdf_module, "render_corrected", fake_render_corrected)
+        PDFParser().parse(SCAN, "scan_sample.pdf")
+        assert called, "OCR 路径未调用 render_corrected——旋转页纠正未接线"
