@@ -2,26 +2,28 @@
 
 > 面向**水利工程基础知识**的企业级 RAG 知识库问答系统。用户通过浏览器完成知识库管理与知识库问答，回答自动引用知识库片段。
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 ## ✨ 功能特性
 
 | 功能 | 说明 |
 |---|---|
 | **知识库管理**（仅管理员） | 多知识库管理、PDF/Word/Markdown/TXT/Excel 上传（≤200MB）、后台异步入库 + 进度、文档重解析、检索质量预览 |
-| **知识库问答 + 引用** | 基于 RAG 生成回答，前端显示引用卡片（来源文件 / 页码 / 章节 / 原文片段），点击可查看全文 |
-| **文档类型标注**（P0-11） | 上传时选择「教材 / 规范 / 手册 / 其他」，随每个知识片段保留，供未来 AI 判断引用来源可信度 |
-| **对外检索服务**（P0-11） | 独立的 `retriever.py` 检索服务，输出稳定契约（片段 + 出处元数据），未来可套一层 HTTP 供外部 AI 调用 |
+| **知识库问答 + 引用** | 基于 RAG 生成回答，正文内嵌**行内引用角标**（[1]、[2]…），点击弹出引用详情（来源文件 / 页码 / 章节 / 原文片段），回答下方附**来源清单**便于审查 |
+| **文档类型标注** | 上传时选择「教材 / 规范 / 手册 / 其他」，随每个知识片段保留，供 AI 判断引用来源可信度 |
+| **对外检索服务** | 独立的 `retriever.py` 检索服务，输出稳定契约（片段 + 出处元数据），未来可套一层 HTTP 供外部 AI 调用 |
 | **多用户多会话** | 每个用户独立的会话列表，会话归属强隔离（他人访问返回 404） |
 | **历史持久化** | 消息与引用全部落库，任意时间登录可完整找回历史对话（含引用还原） |
-| **账号体系** | 注册 / 登录 / 修改密码；管理员 `admin` / `123456`（首启自动创建） |
+| **账号体系** | 注册 / 登录 / 修改密码；管理员 `admin` / `123456`（首启自动创建，生产环境强制改强密码） |
 | **企业级性能优化** | 见下文「性能优化」章节 |
-| **增值功能** | 语义缓存秒回、会话标题自动生成、系统统计、多格式解析、扫描 PDF 自动 OCR、深浅主题等 |
+| **增值功能** | 语义缓存秒回、会话标题自动生成、系统统计、多格式解析、扫描 PDF 自动 OCR、问答记忆（👍/👎 反馈沉淀）等 |
 
 ## 🧱 技术栈
 
 | 层 | 技术 | 说明 |
 |---|---|---|
 | 后端框架 | **FastAPI** + uvicorn | 异步、自带 Swagger 文档（`/api/docs`） |
-| RAG 框架 | **LangChain**（LCEL）| 必选框架；管线按阶段函数组织，预留 LangGraph 升级路径 |
+| RAG 框架 | **LangChain**（LCEL）| 管线按阶段函数组织，预留 LangGraph 升级路径 |
 | LLM | **DeepSeek**（`deepseek-chat`）| `langchain_deepseek.ChatDeepSeek`，流式输出 |
 | Embedding | **OpenAI 兼容 API**（硅基流动免费 `BAAI/bge-m3`）| 零嵌入成本；`EMBEDDING_*` 配置可切换任何厂商 |
 | 向量库 | **Chroma** 嵌入式 | 持久化到本地，HNSW 参数调优，metadata 过滤 |
@@ -68,7 +70,7 @@ npm run build
 1. 浏览器打开 http://localhost:5173（开发）或 http://localhost:8000（单机托管）
 2. **管理员** `admin / 123456` 登录 → 进入「知识库管理」上传文档
 3. 任意用户注册登录 → 新建会话 → 选择知识库 → 提问
-4. 回答下方显示**引用卡片**，点击查看引用原文
+4. 回答正文中的**行内角标**可点击查看引用原文，回答下方附**来源清单**
 
 ## 📁 项目结构
 
@@ -78,7 +80,7 @@ npm run build
 │   │   ├── core/           # 配置 / 安全 / 依赖注入 / 异常 / 限流
 │   │   ├── db/             # SQLAlchemy 模型 + async session
 │   │   ├── modules/        # auth / users / conversations / knowledge / qa / ingestion
-│   │   └── services/       # parser / chunker / embedding / vector_store / bm25 / rag / chat / semantic_cache / retriever(P0-11)
+│   │   └── services/       # parser / chunker / embedding / vector_store / bm25 / rag / chat / semantic_cache / retriever
 │   ├── scripts/            # 演示数据种子
 │   ├── tests/              # pytest 端到端测试（离线 FAKE 模式）
 │   └── data/               # 数据库 / 上传文件 / Chroma（运行时生成）
@@ -98,9 +100,9 @@ npm run build
 
 **文档入库流**：上传(≤200MB 流式写盘) → 后台任务（信号量限并发）→ 分层解析(文字层/OCR) → 结构感知分块（注入章节上下文）→ embedding 缓存向量化 → Chroma + BM25 更新。
 
-**问答流（SSE）**：鉴权 → 存用户消息 → 混合检索（向量 + BM25 加权 → **bge-reranker 重排**）→ 语义缓存检查 → LCEL 组装 prompt（引用编号）→ DeepSeek 流式生成 → 引用落库 → 前端渲染引用卡片。
+**问答流（SSE）**：鉴权 → 存用户消息 → 混合检索（向量 + BM25 加权 → **bge-reranker 重排**）→ 语义缓存检查 → LCEL 组装 prompt（引用编号）→ DeepSeek 流式生成 → 引用落库 → 前端渲染行内引用。
 
-## 🔌 对外检索服务（P0-11，为 DSH 预留）
+## 🔌 对外检索服务（为本地 AI Agent 底座预留）
 
 本项目检索逻辑已抽成独立服务 `backend/app/services/retriever.py`，与页面代码解耦。未来本地 AI 智能体底座（DeepSeek Harness，DSH）可通过 HTTP 调用它获取「相关片段 + 出处」，再综合成带引用的回答。**当前只做了服务层，未实现 HTTP 端点**（下一阶段在 `retriever.py` 外套一层只读 HTTP router 即可）。
 
@@ -162,7 +164,7 @@ npm run build
 ```bash
 cd backend
 PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q
-# 全量 ~504 个测试：认证 / 权限 / 知识库 / 入库 / 检索 / 会话隔离 / SSE 问答 / 引用还原 /
+# 全量 645 个测试：认证 / 权限 / 知识库 / 入库 / 检索 / 会话隔离 / SSE 问答 / 引用还原 /
 # 语义缓存 / 统计 / 版本化入库 / 检索契约 / 出处元数据 / 追问改写 / MinerU 清洗 等（离线 FAKE 模式，无需真实 API Key）
 ```
 
@@ -173,3 +175,14 @@ PYTHONIOENCODING=utf-8 .venv/Scripts/python.exe -m pytest -q
 - **扫描版 PDF 入库慢**：48 页扫描 PDF 在 CPU 上约需 2~3 分钟（OCR 推理），页面会显示「解析中」进度。超大扫描文档建议用独立进程入库：`scripts/ingest_real_pdf.py "<pdf路径>"`（更稳定）
 - **首问很慢**：启动已预热 BM25；首次 embedding 调用有网络延迟，之后有查询向量缓存
 - **修改端口 / 上传大小**：编辑 `.env` 中 `PORT` / `MAX_UPLOAD_SIZE`
+
+## 📄 开源许可
+
+本项目自研代码以 **[MIT License](LICENSE)** 授权，版权归属 `feeble123`，可自由使用、修改、商用，仅需保留版权声明。
+
+第三方依赖的完整协议清单见 **[NOTICE](NOTICE)**。绝大多数依赖为宽松协议（MIT / BSD / Apache-2.0），无商用限制。唯一需留意的是 **PyMuPDF**（PDF 解析库）采用 **AGPL-3.0 或 Artifex 商业许可**：
+
+- **纯开源**（本项目当前形态，代码公开）——与 AGPL 无冲突，可放心使用；
+- **若未来改闭源提供在线服务**（代码不公开），需将 PyMuPDF 替换为宽松协议库（pdfplumber + pypdf + pypdfium2）或购买 Artifex 商业许可。
+
+> 详见 [NOTICE](NOTICE) 中的「关于 PyMuPDF 的 AGPL 说明」。上述为友好提示，不构成法律意见。
