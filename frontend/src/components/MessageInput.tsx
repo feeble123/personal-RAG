@@ -1,14 +1,14 @@
 import { useState } from 'react'
-import { Button, Input, Select, Space, Typography } from 'antd'
-import { SendOutlined, StopOutlined } from '@ant-design/icons'
+import { Select, Space, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { kbPublicApi } from '@/api/modules'
 import { ANSWER_STYLE_OPTIONS, type KnowledgeBase } from '@/api/types'
 import { useChatStore } from '@/stores/chat'
+import PromptInput from './PromptInput'
 
-// 底部输入：知识库选择 + 回答风格 + 发送/停止
+// 底部输入（单元2 装配层）：知识库选择 + 回答风格 + 裁剪版 PromptInput（透明青蓝）。
+// 业务逻辑（知识库/风格/store 对接）在这里，纯输入交互在 PromptInput。
 export default function MessageInput() {
-  const [text, setText] = useState('')
   const [kbId, setKbId] = useState<number | null>(null)
   // 回答风格（单元 F）：默认跟随所选知识库的 answer_style，也可手动切换
   const [style, setStyle] = useState<string>('standard')
@@ -28,17 +28,8 @@ export default function MessageInput() {
     }
   }
 
-  const doSend = () => {
-    if (!text.trim()) return
-    send(text.trim(), kbId, style)
-    setText('')
-  }
-
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault()
-      doSend()
-    }
+  const doSend = (text: string) => {
+    send(text, kbId, style)
   }
 
   return (
@@ -65,26 +56,12 @@ export default function MessageInput() {
           />
         </Space>
       </Space>
-      <Space.Compact style={{ width: '100%' }} size="large">
-        <Input.TextArea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKey}
-          autoSize={{ minRows: 1, maxRows: 6 }}
-          placeholder="输入你的水利工程问题，Enter 发送，Shift+Enter 换行"
-          style={{ flex: 1, fontSize: 'var(--font-md)' }}
-        />
-        {streaming ? (
-          <Button danger icon={<StopOutlined />} onClick={stop} size="large">
-            停止
-          </Button>
-        ) : (
-          <Button type="primary" icon={<SendOutlined />} onClick={doSend} size="large" disabled={!text.trim()}>
-            发送
-          </Button>
-        )}
-      </Space.Compact>
-      {!currentId && <Typography.Text type="secondary" style={{ fontSize: 'var(--font-xs)', marginTop: 6, display: 'block' }}>请先新建或选择一个会话</Typography.Text>}
+      <PromptInput onSend={doSend} onStop={stop} streaming={streaming} />
+      {!currentId && (
+        <Typography.Text type="secondary" style={{ fontSize: 'var(--font-xs)', marginTop: 6, display: 'block' }}>
+          请先新建或选择一个会话
+        </Typography.Text>
+      )}
     </div>
   )
 }

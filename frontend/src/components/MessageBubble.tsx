@@ -1,5 +1,5 @@
-import { memo, useMemo } from 'react'
-import { App, Avatar, Button, Space, Tag, Tooltip, Typography } from 'antd'
+import { memo, useMemo, useState } from 'react'
+import { App, Avatar, Button, Tag, Tooltip, Typography } from 'antd'
 import {
   CopyOutlined,
   DislikeOutlined,
@@ -24,7 +24,9 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 // KaTeX 公式样式（数学公式排版字体与布局）
 import 'katex/dist/katex.min.css'
-import CitationCard from './CitationCard'
+import rehypeInlineCitations from '@/plugins/rehypeInlineCitations'
+import CitationDetail from './CitationDetail'
+import InlineCitations from './InlineCitations'
 import { useChatStore } from '@/stores/chat'
 import type { StreamMessage } from '@/stores/chat'
 
@@ -42,6 +44,9 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   const optimizeMessage = useChatStore((s) => s.optimizeMessage)
   const anyStreaming = useChatStore((s) => s.streaming)
   const { message: appMsg } = App.useApp()
+
+  // 引用详情弹窗：点击正文角标 / 底部来源清单时打开
+  const [detailIdx, setDetailIdx] = useState<number | null>(null)
 
   // 公式定界符兜底：LLM 偶发输出 LaTeX 标准写法 \(...\) / \[...\]，而 remark-math
   // 只认 $...$ / $$...$$。渲染前把前者归一化为后者，避免公式被当普通文字原样显示。
@@ -93,7 +98,28 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
           {isUser ? (
             <Typography.Text style={{ color: '#fff', whiteSpace: 'pre-wrap' }}>{msg.content}</Typography.Text>
           ) : msg.content ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex, [rehypeInlineCitations, { count: msg.citations.length }]]}
+              components={{
+                cite: ({ node, ...props }) => {
+                  const n = Number((node?.properties as Record<string, unknown>)['data-cite'])
+                  return (
+                    <a
+                      className="cite-mark"
+                      href={`#cite-${n}`}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        setDetailIdx(n - 1)
+                      }}
+                      title={`来源 ${n}`}
+                    >
+                      {n}
+                    </a>
+                  )
+                },
+              }}
+            >
               {markdown}
             </ReactMarkdown>
           ) : streaming ? (
@@ -128,11 +154,7 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
         )}
 
         {!isUser && showCitations && msg.citations.length > 0 && (
-          <Space wrap size={[6, 6]} style={{ marginTop: 6 }}>
-            {msg.citations.map((c, i) => (
-              <CitationCard key={c.chunk_id ?? `cite-${i}`} citation={c} index={i + 1} />
-            ))}
-          </Space>
+          <InlineCitations citations={msg.citations} onOpen={setDetailIdx} />
         )}
 
         {/* 问答记忆：来源标签 + 复制 + 👍/👎 反馈（有真实 message_id 才可反馈） */}
@@ -208,6 +230,13 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
           </div>
         )}
       </div>
+
+      {/* 引用详情弹窗（点正文角标 / 底部来源清单触发） */}
+      <CitationDetail
+        citation={detailIdx != null ? msg.citations[detailIdx] ?? null : null}
+        open={detailIdx != null}
+        onClose={() => setDetailIdx(null)}
+      />
     </div>
   )
 }

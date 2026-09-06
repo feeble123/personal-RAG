@@ -179,6 +179,99 @@ body {
   font-size: var(--font-sm);
 }
 
+/* ==================== 行内引用角标（正文 [n] → 小角标） ==================== */
+/* 正文里的引用角标：等宽小方角 + 电光青描边，悬浮发光 */
+.msg-bubble a.cite-mark,
+.cite-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin: 0 2px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: 0.12em;
+  color: #00c6ff;
+  background: rgba(0, 198, 255, 0.12);
+  border: 1px solid rgba(0, 198, 255, 0.32);
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.msg-bubble a.cite-mark:hover,
+.cite-mark:hover {
+  background: rgba(0, 198, 255, 0.2);
+  border-color: rgba(0, 198, 255, 0.6);
+  box-shadow: 0 0 10px rgba(0, 198, 255, 0.35);
+}
+
+/* ==================== 底部来源清单（透明青蓝） ==================== */
+.cite-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(122, 190, 255, 0.12);
+}
+.cite-ref {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(163, 190, 220, 0.72);
+  font-size: var(--font-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.cite-ref:hover {
+  background: rgba(0, 198, 255, 0.08);
+}
+.cite-mark-static {
+  margin: 0;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.cite-ref-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(228, 241, 255, 0.92);
+}
+.cite-sep {
+  flex-shrink: 0;
+  color: rgba(163, 190, 220, 0.5);
+}
+.cite-ref-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: rgba(163, 190, 220, 0.72);
+}
+.cite-arrow {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #00c6ff;
+  opacity: 0;
+  transform: translateX(-2px);
+  transition: opacity 0.16s ease, transform 0.2s ease;
+}
+.cite-ref:hover .cite-arrow {
+  opacity: 1;
+  transform: translateX(0);
+}
+
 /* ==================== 消息气泡 ==================== */
 /* 气泡本体填满外层行容器（外层容器已由组件控制响应式最大宽），字体随视口缩放 */
 .msg-bubble {
@@ -298,6 +391,109 @@ body {
   50% {
     opacity: 0;
   }
+}
+
+/* ==================== 输入框（裁剪版 PromptInput，透明青蓝） ==================== */
+.pi-wrap {
+  width: 100%;
+  font-family: var(--font-sans);
+}
+.pi-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(20, 32, 58, 0.55);
+  border: 1px solid rgba(122, 190, 255, 0.16);
+  border-radius: 12px;
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 2px 12px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.pi-frame:focus-within {
+  border-color: rgba(0, 198, 255, 0.45);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 0 0 3px rgba(0, 198, 255, 0.12);
+}
+
+.pi-editor-wrap {
+  position: relative;
+}
+.pi-field {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  outline: 0;
+  background: transparent;
+  color: rgba(228, 241, 255, 0.92);
+  font: inherit;
+  font-size: var(--font-md);
+  line-height: 1.6;
+  min-height: 24px;
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.pi-field[data-empty]::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: rgba(163, 190, 220, 0.5);
+  pointer-events: none;
+}
+
+.pi-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.pi-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 发送按钮：电光青发光；停止按钮：危险红 */
+.pi-send {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(0, 198, 255, 0.12);
+  color: rgba(163, 190, 220, 0.6);
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
+}
+.pi-send:disabled {
+  cursor: not-allowed;
+}
+.pi-send:disabled:active {
+  transform: none;
+}
+.pi-send-active {
+  background: linear-gradient(135deg, #00c6ff, #0a7bff);
+  color: #fff;
+  box-shadow: 0 4px 16px rgba(0, 198, 255, 0.4);
+}
+.pi-send-active:hover {
+  box-shadow: 0 6px 22px rgba(0, 198, 255, 0.55);
+}
+.pi-send:active {
+  transform: scale(0.96);
+}
+.pi-send-stop {
+  background: rgba(255, 92, 122, 0.18);
+  color: #ff5c7a;
+}
+.pi-send-stop:hover {
+  background: rgba(255, 92, 122, 0.28);
 }
 
 /* ==================== 深色滚动条 ==================== */
