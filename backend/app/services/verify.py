@@ -108,8 +108,9 @@ async def verify_completeness(query: str, answer: str, cites) -> CompletenessVer
 # ---- 层3：引用忠实校验（单元3 使用）----
 @dataclass
 class CitationVerdict:
-    ok: bool = True
-    bad_numbers: list[int] = None  # 无效/不被支撑的引用编号
+    ok: bool = True                        # 编号合规：所有 [n] 都在资料条数范围内
+    bad_numbers: list[int] = None          # 越界/编造的引用编号（编号合规层）
+    unsupported_numbers: list[int] = None  # 编号合法但词面不支撑的引用（相关性层）
     note: str = ""
 
 
@@ -138,28 +139,96 @@ def _numbered_cites(cites) -> str:
 
 def _out_of_range_citations(answer: str, cites) -> list[int]:
     """确定性超范围引用检测（不依赖 LLM）：回答里 [n] 且 n > 资料条数 → 幻觉编号。"""
-    import re
-
     n_cites = len(cites)
     nums = [int(x) for x in re.findall(r"\[(\d+)\]", answer or "")]
     return sorted({n for n in nums if n > n_cites or n < 1})
 
 
-async def verify_citations(answer: str, cites) -> CitationVerdict:
-    """引用忠实校验：回答里的每个 [n] 是否被第 n 条资料真实支撑。
+def _jieba_keywords(text: str) -> set[str]:
+    """jieba 分词取实词集合（去掉空白/单字符/纯标点）。用于词面重叠判定。"""
+    import jieba
 
-    以**确定性为主**（稳定，不随 LLM 波动）：
-    1. 解析回答所有 [n]：n 超出资料条数（或 <1）→ 幻觉编号，必判无效
-       （防「cites=8 却引用 [15]」这类编造编号）
-    2. 范围内编号默认视为有效（编号存在即支撑——校验目的防"编造"，语义支撑
-       由 LLM 回答本身负责；LLM 主观判定波动大，会误报）
-    3. 可选 LLM 语义校验：仅当 use_llm=True 时启用（评测/质检用，不默认）
+    words = set()
+    for w in jieba.lcut(text or ""):
+        w = w.strip()
+        if len(w) < 2 or w.isspace():
+            continue
+        if re.fullmatch(r"[\W_]+", w):
+            continue
+        words.add(w.lower())
+    return words
+
+
+# 标注句与资料原文的 Jaccard 词重叠低于此值 → 判定「不支撑」（挂错引用）
+_CITATION_MIN_JACCARD = 0.05
+
+
+def _sentence_before_citation(answer: str, n: int) -> str:
+    """提取回答中第 1 个 [n] 标注前紧邻的一句话（到上一个句号/换行/分号为止）。
+
+    用于判断「给无关句挂 [n]」——取标注所在句的上下文，与第 n 条资料比对。
+    """
+    matches = list(re.finditer(r"\[(\d+)\]", answer or ""))
+    # 取编号等于 n 的标记（通常首个），其前一句为「被标注句」
+    nth = [m for m in matches if int(m.group(1)) == n]
+    if not nth:
+        return ""
+    idx = nth[0].start()
+    seg = answer[:idx]
+    cut = max(seg.rfind("。"), seg.rfind("；"), seg.rfind("\n"), seg.rfind("．"))
+    start = cut + 1 if cut >= 0 else max(0, idx - 80)
+    return answer[start:idx].strip()
+
+
+def _word_overlap_supported(answer: str, cites) -> list[int]:
+    """确定性「标注句 vs 资料原文」词面重叠检测：重叠过低 → 判定挂错引用。
+
+    零 LLM、可复现。只抓「给无关句挂 [n]」这类明确错挂（中文同义改写不会误报，
+    因为同义改写通常仍共享若干实词）。返回不被支撑的编号列表。
+    """
+    unsupported = []
+    n_cites = len(cites)
+    for n in range(1, n_cites + 1):
+        cite = cites[n - 1]
+        snippet = getattr(cite, "snippet", "") or ""
+        sent = _sentence_before_citation(answer, n)
+        if not sent or not snippet:
+            continue
+        sent_kw = _jieba_keywords(sent)
+        cite_kw = _jieba_keywords(snippet)
+        if not sent_kw or not cite_kw:
+            continue
+        inter = sent_kw & cite_kw
+        union = sent_kw | cite_kw
+        jaccard = len(inter) / len(union)
+        if jaccard < _CITATION_MIN_JACCARD:
+            unsupported.append(n)
+    return unsupported
+
+
+async def verify_citations(answer: str, cites) -> CitationVerdict:
+    """引用校验：回答里的每个 [n] 是否被第 n 条资料真实支撑。
+
+    以**确定性为主**（稳定、可复现，不随 LLM 波动），分两层：
+    1. **编号合规**（ok / bad_numbers）：n 超出资料条数（或 <1）→ 幻觉/编造编号。
+    2. **词面支撑**（unsupported_numbers）：n 合法但「标注句 vs 第 n 条资料原文」的
+       jieba 词面重叠过低 → 给无关句挂引用（挂错引用）。
+
+    注意：两层相互独立。ok 只代表「编号没越界」，不代表「内容相关」——
+    这就是为什么指标名要如实区分「编号合规率」和「引用相关率」，不冒充语义级校验。
+    unsupported_numbers 是词面启发式（零 LLM），只抓明确错挂，不做强否定。
     """
     if not answer or not cites:
         return CitationVerdict()
-    # 确定性超范围检测（核心）
     over = _out_of_range_citations(answer, cites)
     if over:
-        return CitationVerdict(ok=False, bad_numbers=over, note=f"引用编号超出资料条数: {over}")
-    # 范围内 → 引用编号存在即有效（确定性）
-    return CitationVerdict(ok=True, bad_numbers=[], note="")
+        return CitationVerdict(
+            ok=False, bad_numbers=over, unsupported_numbers=[], note=f"引用编号超出资料条数: {over}"
+        )
+    unsupported = _word_overlap_supported(answer, cites)
+    return CitationVerdict(
+        ok=True,
+        bad_numbers=[],
+        unsupported_numbers=unsupported,
+        note=f"词面不支撑的引用: {unsupported}" if unsupported else "",
+    )

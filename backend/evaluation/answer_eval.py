@@ -1,7 +1,8 @@
 """P1 工作包B：回答质量评测。
 
 对 gold 问题调真实 LLM 生成回答，用 verify.py 校验：
-- 引用准确率：回答中 [n] 编号被对应资料支撑的比例（verify_citations）
+- 编号合规率：回答中 [n] 编号都落在资料条数范围内（未编造编号）的比例
+- 引用相关率：编号合法且「标注句 vs 资料原文」词面重叠达标（未挂错引用）的比例
 - 完备率：枚举类回答完整覆盖资料条目的比例（verify_completeness）
 - 事实正确率：回答核心事实与 answer_hint 一致的比例（关键词判定，无 LLM 判定）
 
@@ -158,6 +159,7 @@ async def eval_one(db, gold: dict) -> dict:
         "answer_head": answer[:200],
         "citation_ok": citation.ok,
         "bad_numbers": citation.bad_numbers,
+        "unsupported_numbers": citation.unsupported_numbers,
         "completeness_enum": completeness.enumeration,
         "completeness_ok": completeness.complete,
         "completeness_note": completeness.note[:120],
@@ -201,9 +203,12 @@ async def main(sample: int, kb_filter: str | None) -> int:
                 print(f"⏭  {r['q']}  ({r['reason']})")
                 continue
             mark = "✅" if r["citation_ok"] else "❌"
+            # 相关性层：有编号合法但挂错的引用时单独标出（不与编号合规混同）
+            unsup = r.get("unsupported_numbers") or []
+            rel_s = "挂错" + str(unsup) if unsup else "相关✓"
             enum_s = "枚举" if r["completeness_enum"] else "    "
             fact_s = "✓" if r["fact_ok"] else ("✗" if r["fact_ok"] is False else "?")
-            print(f"{mark}[{r['intent']:12}] {r['q']}  cites={r['cites_count']} 引={r['citation_ok']} {enum_s}完={r['completeness_ok']} 事实={fact_s}")
+            print(f"{mark}[{r['intent']:12}] {r['q']}  cites={r['cites_count']} 编号={r['citation_ok']} {rel_s} {enum_s}完={r['completeness_ok']} 事实={fact_s}")
 
     active = [r for r in results if not r["skipped"]]
     total = len(active)
@@ -212,6 +217,13 @@ async def main(sample: int, kb_filter: str | None) -> int:
         return 0
 
     cit_ok = sum(1 for r in active if r["citation_ok"]) / total
+    # 引用相关率：所有编号合法（无越界）且无词面不支撑的引用 → 该问引用相关达标
+    # 注意：越界编号问（citation_ok=False）不计入相关率分母，避免双重扣分。
+    valid = [r for r in active if r["citation_ok"]]
+    rel_ok = (
+        sum(1 for r in valid if not (r.get("unsupported_numbers") or [])) / len(valid)
+        if valid else None
+    )
     # 完备率：只统计枚举类问题
     enum_qs = [r for r in active if r["completeness_enum"]]
     comp_ok = sum(1 for r in enum_qs if r["completeness_ok"]) / len(enum_qs) if enum_qs else None
@@ -221,7 +233,9 @@ async def main(sample: int, kb_filter: str | None) -> int:
 
     print("\n===== 回答质量汇总 =====")
     print(f"有效问数: {total}")
-    print(f"引用准确率: {cit_ok:.1%}")
+    print(f"编号合规率: {cit_ok:.1%}")
+    if rel_ok is not None:
+        print(f"引用相关率({len(valid)}问): {rel_ok:.1%}")
     if comp_ok is not None:
         print(f"完备率(枚举{len(enum_qs)}问): {comp_ok:.1%}")
     if fact_ok is not None:
@@ -229,7 +243,8 @@ async def main(sample: int, kb_filter: str | None) -> int:
 
     report = {
         "total": total,
-        "citation_accuracy": round(cit_ok, 4),
+        "citation_compliance": round(cit_ok, 4),  # 编号合规率（原 citation_accuracy 改名）
+        "citation_relevance": round(rel_ok, 4) if rel_ok is not None else None,  # 引用相关率
         "completeness_rate": round(comp_ok, 4) if comp_ok is not None else None,
         "fact_accuracy": round(fact_ok, 4) if fact_ok is not None else None,
         "results": active,
