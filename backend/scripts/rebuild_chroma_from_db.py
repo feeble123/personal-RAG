@@ -22,6 +22,7 @@ async def main() -> None:
     import asyncio
     import logging
     import time
+    from datetime import datetime, timezone
     from sqlalchemy import select
 
     from app.core.config import settings
@@ -38,15 +39,22 @@ async def main() -> None:
             await db.execute(
                 select(Chunk, Document)
                 .join(Document, Chunk.doc_id == Document.id)
+                .where(Chunk.document_version_id == Document.active_version_id)
                 .order_by(Chunk.id)
             )
         ).all()
-        hashes = [c.content_hash for c, _ in rows]
-        cache = await load_cache_vectors(db, hashes)
 
     if not rows:
-        print("DB 无切片，跳过")
+        print("DB 无 active 切片，跳过")
         return
+
+    # 按知识库分组
+    by_kb: dict[int, list[tuple]] = {}
+    for c, d in rows:
+        by_kb.setdefault(d.kb_id, []).append((c, d))
+
+    hashes = [c.content_hash for c, _ in rows]
+    cache = await load_cache_vectors(db, hashes)
 
     vec_map: dict[str, list[float]] = {}
     for c, _ in rows:
@@ -63,26 +71,62 @@ async def main() -> None:
     else:
         print("全部命中 embedding 缓存，无 API 调用")
 
-    ids = [str(c.id) for c, _ in rows]
-    documents = [c.content for c, _ in rows]
-    embeddings = [vec_map[c.content_hash] for c, _ in rows]
-    metadatas = [
-        {
-            "kb_id": d.kb_id,
-            "doc_id": d.id,
-            "chunk_id": c.id,
-            "source": d.filename,
-            "page": c.page or 0,
-            "section": c.section or "",
-        }
-        for c, d in rows
-    ]
-    try:
-        vector_store.add_vectors(ids, embeddings, documents, metadatas)
-        print(f"已写入 {len(ids)} 个向量到 Chroma")
-    except Exception as exc:  # noqa: BLE001
-        logging.exception("写入 Chroma 失败")
-        print(f"失败: {str(exc)[:200]}")
+    # 每个库重建一个版本号 collection，并更新 IndexVersion 指针（软切换）
+    from app.db.models import IndexVersion, KnowledgeBase
+
+    async with async_session_factory() as db:
+        for kb_id, items in by_kb.items():
+            existing = (
+                await db.execute(select(IndexVersion.id).where(IndexVersion.kb_id == kb_id))
+            ).scalars().all()
+            next_v = (max(existing) if existing else 0) + 1
+            name = f"{settings.chroma_collection}_kb{kb_id}_v{next_v}"
+
+            ids = [str(c.id) for c, _ in items]
+            documents = [c.content for c, _ in items]
+            embeddings = [vec_map[c.content_hash] for c, _ in items]
+            metadatas = [
+                {
+                    "kb_id": d.kb_id,
+                    "doc_id": d.id,
+                    "chunk_id": c.id,
+                    "source": d.filename,
+                    "page": c.page or 0,
+                    "section": c.section or "",
+                }
+                for c, d in items
+            ]
+            try:
+                actual = await asyncio.to_thread(
+                    vector_store.build_collection, name, ids, embeddings, documents, metadatas
+                )
+                if actual != len(items):
+                    raise RuntimeError(f"count 核对失败: expected={len(items)} actual={actual}")
+                iv = IndexVersion(
+                    kb_id=kb_id,
+                    status="active",
+                    physical_name=name,
+                    expected_count=len(items),
+                    actual_count=len(items),
+                    activated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                )
+                db.add(iv)
+                await db.flush()
+                kb = await db.get(KnowledgeBase, kb_id)
+                if kb is not None:
+                    prev_iv_id = kb.active_index_version_id
+                    kb.active_index_version_id = iv.id
+                    if prev_iv_id is not None and prev_iv_id != iv.id:
+                        old_iv = await db.get(IndexVersion, prev_iv_id)
+                        if old_iv is not None:
+                            old_iv.status = "retired"
+                            old_iv.retired_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await db.commit()
+                print(f"kb={kb_id} 已重建 {len(ids)} 个向量 → {name}")
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("重建 kb=%s 失败", kb_id)
+                print(f"kb={kb_id} 失败: {str(exc)[:200]}")
+                await db.rollback()
 
 
 if __name__ == "__main__":

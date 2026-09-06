@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.metrics import metrics
-from app.db.models import Chunk, Document
+from app.db.models import Chunk, Document, IndexVersion, KnowledgeBase
 from app.schemas import CitationOut
 from app.services import bm25, vecmath, vector_store
 from app.services.embedding import embed_query
@@ -45,6 +45,26 @@ async def _active_version_ids(
         stmt = stmt.where(Document.id.in_(doc_ids))
     rows = (await db.execute(stmt)).all()
     return {r[0] for r in rows}
+
+
+async def _active_collection_names(
+    db: AsyncSession, kb_id: int | None = None
+) -> list[str]:
+    """当前 active 索引版本对应的 Chroma collection 名列表。
+
+    P1-1/P1-2 软切换：检索不再读单一 collection，而是按 kb 的
+    active_index_version_id → IndexVersion.physical_name 路由到对应 collection。
+    kb_id 给定 → 该库一个名字；kb_id=None → 所有库的 active collection 名（跨库检索）。
+    指针为 NULL（无索引）的库跳过。
+    """
+    stmt = (
+        select(IndexVersion.physical_name)
+        .join(KnowledgeBase, KnowledgeBase.active_index_version_id == IndexVersion.id)
+    )
+    if kb_id is not None:
+        stmt = stmt.where(KnowledgeBase.id == kb_id)
+    rows = (await db.execute(stmt)).scalars().all()
+    return [r for r in rows if r]
 
 
 # 中文问句的提问词（用于提取 rerank 核心主题词）
@@ -608,7 +628,7 @@ async def retrieve(
     # P1-1 评测门禁：收集各阶段分数供 trace
     trace_cands: dict[int, CandidateTrace] = {}
 
-    # 1) 向量检索（真实余弦相似度）；doc_ids 限定 → Chroma metadata doc_id 过滤
+    # 1) 向量检索（真实余弦相似度）；按 kb 路由到对应 active collection（软切换）
     qvec = await embed_query(rq)
     doc_chunk_ids: set[int] = set()
     doc_kb_ids: set[int] = set()
@@ -624,10 +644,29 @@ async def retrieve(
         rows = (await db.execute(stmt)).all()
         doc_chunk_ids = {cid for cid, _ in rows}
         doc_kb_ids = {kid for _, kid in rows}
+        # doc_ids 限定：按这些文档所属库的 collection 检索，where 只留 doc_id 过滤
+        doc_collections = await _active_collection_names(db, kb_id=kb_id)
+        if not doc_collections:
+            # 兜底：kb_id 未给但 doc_ids 给了 → 跨全库的 collection 名
+            doc_collections = await _active_collection_names(db)
         where = {"doc_id": doc_ids[0]} if len(doc_ids) == 1 else {"doc_id": {"$in": doc_ids}}
     else:
         where = {"kb_id": kb_id} if kb_id else None
-    vec_hits = await asyncio.to_thread(vector_store.query, qvec, where, settings.top_k_vector)
+    # 路由：单库读该库 active collection；跨库（kb_id=None 且无 doc_ids）遍历全部库
+    if doc_ids:
+        vec_hits = await asyncio.to_thread(
+            vector_store.query_many, doc_collections, qvec, where, settings.top_k_vector
+        )
+    elif kb_id is not None:
+        names = await _active_collection_names(db, kb_id=kb_id)
+        vec_hits = await asyncio.to_thread(
+            vector_store.query_many, names, qvec, None, settings.top_k_vector
+        )
+    else:
+        names = await _active_collection_names(db)
+        vec_hits = await asyncio.to_thread(
+            vector_store.query_many, names, qvec, None, settings.top_k_vector
+        )
     candidates: dict[int, float] = {h.chunk_id: h.score for h in vec_hits}
     if return_trace:
         for h in vec_hits:
@@ -661,7 +700,9 @@ async def retrieve(
     # 3) BM25 补召回：向量 top50 未出现的 chunk，实时算真实余弦
     extra_ids = [cid for cid in bm25_norm if cid not in candidates]
     if extra_ids:
-        embeddings = await asyncio.to_thread(vector_store.get_embeddings_by_ids, extra_ids)
+        # 软切换：按 active collection 取向量（跨库合并）
+        all_names = await _active_collection_names(db, kb_id=kb_id) or await _active_collection_names(db)
+        embeddings = await asyncio.to_thread(vector_store.get_embeddings_by_ids_many, all_names, extra_ids)
         # P1-3：补召回余弦是纯 CPU 密集活，放线程池批量算，不在事件循环里逐条跑。
         sims = await asyncio.to_thread(
             vecmath.cosine_batch, qvec, [embeddings[cid] for cid in extra_ids]

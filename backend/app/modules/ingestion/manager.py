@@ -21,7 +21,7 @@ from sqlalchemy import delete, func, select, update
 
 from app.core.config import settings
 from app.core.metrics import metrics
-from app.db.models import Chunk, Document, DocumentVersion, IngestionJob, KnowledgeBase
+from app.db.models import Chunk, Document, DocumentVersion, IndexVersion, IngestionJob, KnowledgeBase
 from app.db.session import async_session_factory
 from app.services import bm25, semantic_cache, vector_store
 from app.services.chunker import chunk_blocks, chunk_toc_pages
@@ -767,13 +767,13 @@ async def _process_document(doc_id: int) -> None:
         await _update_job_stage(db, doc.id, "indexing")
         await _raise_if_cancelled(db, doc.id)
 
-        # P0-8 影子索引：构建「新世界」快照（所有文档 active + 本 target）→ 核对 count →
-        # 通过后再原子发布 pointer。任何失败走 _run_ingestion 失败路径，旧 active 不动。
-        await _build_shadow_index(db, doc, target)
+        # P0-8 影子索引：按库构建「新世界」快照（该库所有文档 active + 本 target）→ 核对
+        # count → 通过后再发布。任何失败走 _run_ingestion 失败路径，旧 active 不动。
+        collection_name, index_count = await _build_shadow_index(db, doc, target)
         # P0-9：索引就绪 → job 推进到 publishing（发布在即）
         await _update_job_stage(db, doc.id, "publishing")
-        # 原子发布：切 active pointer + target=active + 旧版=retired
-        await _publish_version(db, doc, target)
+        # 原子发布：先切 DB 指针（target=active + 旧版=retired + 索引指针），成功后再软切向量
+        await _publish_version(db, doc, target, collection_name, index_count)
         logger.info("文档入库完成 doc=%s chunks=%d version=%s", doc_id, len(chunks), target.id)
     # 在会话外重建 BM25（只读）；清空语义缓存（新文档入库后旧答案失效）
     await _rebuild_bm25(doc.kb_id)
@@ -884,11 +884,17 @@ async def _write_chunks(
         await db.flush()
 
 
-async def _publish_version(db, doc: Document, target: DocumentVersion) -> None:
-    """原子发布：单事务切 active pointer + target=active + 旧版=retired + 文档 ready。
+async def _publish_version(
+    db, doc: Document, target: DocumentVersion, collection_name: str, index_count: int
+) -> None:
+    """原子发布：DB 单事务切指针（P1-1 根治）。
 
-    旧 active 版本的 chunks **保留在 DB**（回滚 = pointer 指回前一版即可）；检索层
-    只查 active（见 rag.py），retired 不进 Chroma/BM25 索引。
+    顺序关键（相比旧版「先向量后 DB」）：
+    1. 新 collection 已在 _build_shadow_index 完整建成并核对 count（不碰旧索引）。
+    2. DB 单事务：target=active + 旧版=retired + doc 指针 + IndexVersion 指针 + 文档 ready。
+       提交失败 → 整体回滚，旧索引/旧 collection 原样可查，零损失。
+    3. DB 提交成功后无需任何内存切换：检索层按 kb.active_index_version_id →
+       IndexVersion.physical_name 路由，提交即读新 collection（旧 collection 延后 GC）。
     """
     prev = await db.scalar(
         select(DocumentVersion).where(
@@ -906,8 +912,35 @@ async def _publish_version(db, doc: Document, target: DocumentVersion) -> None:
     doc.status = "ready"
     doc.parsed_at = now
     doc.chunk_count = target.chunk_count
+
+    # 索引版本：把本次建成的 collection 登记为 active 指针（同事务切，保证 DB 一致）
+    iv = IndexVersion(
+        kb_id=doc.kb_id,
+        status="active",
+        physical_name=collection_name,
+        expected_count=index_count,
+        actual_count=index_count,
+        activated_at=now,
+    )
+    db.add(iv)
+    await db.flush()  # 拿 iv.id 写进指针
+    kb = await db.get(KnowledgeBase, doc.kb_id)
+    if kb is not None:
+        # 旧 active 索引版本退休（保留记录，可回滚）
+        prev_iv_id = kb.active_index_version_id
+        kb.active_index_version_id = iv.id
+        if prev_iv_id is not None and prev_iv_id != iv.id:
+            old_iv = await db.get(IndexVersion, prev_iv_id)
+            if old_iv is not None:
+                old_iv.status = "retired"
+                old_iv.retired_at = now
+
     await _refresh_kb_stats(db, doc.kb_id)
     await db.commit()
+
+    # DB 已成功，且新 collection 在 _build_shadow_index 里已完整建成（count 核对过）。
+    # 检索层按 kb.active_index_version_id → physical_name 路由，提交后即读新 collection；
+    # 无需任何内存切换——DB 指针是唯一真相源，旧 collection 延后 GC（不删，可回滚）。
 
 
 def _active_chunk_rows(rows) -> list:
@@ -916,28 +949,40 @@ def _active_chunk_rows(rows) -> list:
     return [(c, d) for c, d in rows if c.document_version_id in active_ids]
 
 
-async def _build_shadow_index(db, doc: Document, target: DocumentVersion) -> None:
-    """构建「新世界」影子索引：所有文档 active 版本 + 本 target 的切片。
+async def _build_shadow_index(db, doc: Document, target: DocumentVersion) -> tuple[str, int]:
+    """构建本库的「新世界」索引（新版本号 collection，不碰旧的），返回 (名字, count)。
 
-    P0-8 核心：建 shadow collection（不碰 active），核对 count 一致后原子改名切换。
-    - 失败 → drop_shadow + 抛异常 → _run_ingestion 标 target=failed，旧 active collection 原样可查
-    - 成功 → shadow 变 active，新内容立即可查（发布 pointer 在其后单事务进行）
+    P1-2 根治：只查**本知识库**（where kb_id）的 active chunks，不再拉全库重建。
+    软切换（P1-1）：新 collection 用版本号名独立建成，核对 count 一致后由
+    _publish_version 在 DB 提交成功后 activate；失败只删这个新 collection，旧索引原样可查。
     """
+    kb_id = doc.kb_id
+    # 只取本库：其他文档按 active_version_id，本文档用 target
     rows = (
         await db.execute(
-            select(Chunk, Document).join(Document, Chunk.doc_id == Document.id).order_by(Chunk.id)
+            select(Chunk, Document)
+            .join(Document, Chunk.doc_id == Document.id)
+            .where(Chunk.kb_id == kb_id)
+            .order_by(Chunk.id)
         )
     ).all()
-    # 「新世界」active 集合：其他文档按 active_version_id，本文档用 target
     active_ids = {d.active_version_id for _, d in rows if d.active_version_id is not None}
     active_ids.discard(doc.active_version_id)  # 本文档旧版本让位给 target
     active_ids.add(target.id)
     sel_rows = [(c, d) for c, d in rows if c.document_version_id in active_ids]
 
+    # 下一个版本号 collection 名（用现有 index_versions 计数递增，独立于 DB 事务）
+    existing = (
+        await db.execute(select(IndexVersion.id).where(IndexVersion.kb_id == kb_id))
+    ).scalars().all()
+    next_v = (max(existing) if existing else 0) + 1
+    collection_name = f"{settings.chroma_collection}_kb{kb_id}_v{next_v}"
+
     if not sel_rows:
-        await asyncio.to_thread(vector_store.drop_shadow)
-        await asyncio.to_thread(vector_store.reset_collection)
-        return
+        # 空库：建空 collection（软切换后查空），旧索引退休
+        await asyncio.to_thread(vector_store.build_collection, collection_name, [], [], [], [])
+        return collection_name, 0
+
     hashes = [c.content_hash for c, _ in sel_rows]
     cache = await load_cache_vectors(db, hashes)
     vec_map: dict[str, list[float]] = {}
@@ -966,20 +1011,20 @@ async def _build_shadow_index(db, doc: Document, target: DocumentVersion) -> Non
     ]
     try:
         actual = await asyncio.to_thread(
-            vector_store.build_shadow, ids, embeddings, documents, metadatas
+            vector_store.build_collection, collection_name, ids, embeddings, documents, metadatas
         )
         if actual != len(sel_rows):
             raise RuntimeError(
-                f"影子索引 count 核对失败: expected={len(sel_rows)} actual={actual}"
+                f"索引 count 核对失败: expected={len(sel_rows)} actual={actual}"
             )
-        await asyncio.to_thread(vector_store.swap_shadow_to_active)
     except Exception:
-        # 失败：清 shadow（active 原样保留），上报让 target 标 failed
+        # 失败：删掉这个新 collection（旧索引原样保留），上报让 target 标 failed
         try:
-            await asyncio.to_thread(vector_store.drop_shadow)
+            await asyncio.to_thread(vector_store.drop_collection, collection_name)
         except Exception:
-            logger.exception("drop_shadow 失败（忽略）")
+            logger.exception("drop_collection 失败（忽略）")
         raise
+    return collection_name, len(sel_rows)
 
 
 async def _refresh_kb_stats(db, kb_id: int) -> None:
@@ -1020,12 +1065,76 @@ async def _rebuild_bm25(kb_id: int) -> None:
         logger.exception("BM25 重建失败 kb=%s", kb_id)
 
 
+async def _rebuild_kb_index(db, kb_id: int) -> tuple[str, int]:
+    """按库重建向量索引：读取该库 active chunks，写入新版本 collection，软切 active 指针。
+
+    与入库发布共用「软切换」语义：先建新 collection，成功后再切指针（先 DB 后向量）。
+    用于删除文档/删除库后索引内容变化时重建。返回 (新 collection 名, count)。
+    """
+    rows = (
+        await db.execute(
+            select(Chunk, Document)
+            .join(Document, Chunk.doc_id == Document.id)
+            .where(
+                Chunk.kb_id == kb_id,
+                Chunk.document_version_id == Document.active_version_id,
+            )
+            .order_by(Chunk.id)
+        )
+    ).all()
+    sel_rows = [(c, d) for c, d in rows if d.active_version_id is not None]
+
+    existing = (
+        await db.execute(select(IndexVersion.id).where(IndexVersion.kb_id == kb_id))
+    ).scalars().all()
+    next_v = (max(existing) if existing else 0) + 1
+    collection_name = f"{settings.chroma_collection}_kb{kb_id}_v{next_v}"
+
+    if not sel_rows:
+        await asyncio.to_thread(vector_store.build_collection, collection_name, [], [], [], [])
+        return collection_name, 0
+
+    hashes = [c.content_hash for c, _ in sel_rows]
+    cache = await load_cache_vectors(db, hashes)
+    vec_map: dict[str, list[float]] = {}
+    for c, _ in sel_rows:
+        v = cache.get(c.content_hash)
+        if v is not None:
+            vec_map[c.content_hash] = v
+    missing = [c for c, _ in sel_rows if c.content_hash not in vec_map]
+    if missing:
+        vectors = await embed_documents([c.content for c in missing])
+        for c, v in zip(missing, vectors):
+            vec_map[c.content_hash] = v
+    ids = [str(c.id) for c, _ in sel_rows]
+    embeddings = [vec_map[c.content_hash] for c, _ in sel_rows]
+    documents = [c.content for c, _ in sel_rows]
+    metadatas = [
+        {
+            "kb_id": d.kb_id,
+            "doc_id": d.id,
+            "chunk_id": c.id,
+            "source": d.filename,
+            "page": c.page or 0,
+            "section": c.section or "",
+        }
+        for c, d in sel_rows
+    ]
+    actual = await asyncio.to_thread(
+        vector_store.build_collection, collection_name, ids, embeddings, documents, metadatas
+    )
+    if actual != len(sel_rows):
+        raise RuntimeError(f"索引 count 核对失败: expected={len(sel_rows)} actual={actual}")
+    return collection_name, len(sel_rows)
+
+
 # ---------- 删除清理（供路由调用） ----------
 async def delete_document(doc_id: int) -> None:
-    """删除文档：Chroma 向量 + chunks + 文件 + 文档记录，刷新统计与 BM25。
+    """删除文档：chunks + 文件 + 文档记录 + 按库重建索引 + 刷新统计与 BM25。
 
     注意：全程 bulk delete（DB 级 FK CASCADE 处理 citations），
     不把子对象加载进 ORM 会话，避免与级联删除发生 StaleDataError。
+    删除后按库重建向量索引（软切换），旧 collection 延后 GC。
     """
     from app.db.models import Document as Doc
     from app.db.models import DocumentVersion
@@ -1036,7 +1145,6 @@ async def delete_document(doc_id: int) -> None:
             return
         kb_id = doc.kb_id
         stored_path = doc.stored_path
-        await asyncio.to_thread(vector_store.delete_by_where, {"doc_id": doc_id})
         await db.execute(delete(Chunk).where(Chunk.doc_id == doc_id))
         # P0-8：清版本行（chunks 已被上面的 bulk delete 连带，这里清版本本身）
         await db.execute(delete(DocumentVersion).where(DocumentVersion.document_id == doc_id))
@@ -1047,7 +1155,29 @@ async def delete_document(doc_id: int) -> None:
             pass
         await db.execute(delete(Doc).where(Doc.id == doc_id))
         await _refresh_kb_stats(db, kb_id)
+        # 索引版本：登记新版本（先建 collection，成功后再切指针）
+        collection_name, index_count = await _rebuild_kb_index(db, kb_id)
+        iv = IndexVersion(
+            kb_id=kb_id,
+            status="active",
+            physical_name=collection_name,
+            expected_count=index_count,
+            actual_count=index_count,
+            activated_at=_now(),
+        )
+        db.add(iv)
+        await db.flush()
+        kb = await db.get(KnowledgeBase, kb_id)
+        if kb is not None:
+            prev_iv_id = kb.active_index_version_id
+            kb.active_index_version_id = iv.id
+            if prev_iv_id is not None and prev_iv_id != iv.id:
+                old_iv = await db.get(IndexVersion, prev_iv_id)
+                if old_iv is not None:
+                    old_iv.status = "retired"
+                    old_iv.retired_at = _now()
         await db.commit()
+        # DB 成功，检索按指针路由到新 collection（无需内存切换）
     await _rebuild_bm25(kb_id)
     await semantic_cache.clear_cache()
 
@@ -1072,7 +1202,9 @@ async def delete_kb(kb_id: int) -> None:
                 (settings.upload_dir_path / p).unlink(missing_ok=True)
             except Exception:
                 pass
-        await asyncio.to_thread(vector_store.delete_by_where, {"kb_id": kb_id})
+        # 删除该库全部版本号 collection（软切换下每库多个版本；前缀即库隔离）
+        prefix = f"{settings.chroma_collection}_kb{kb_id}_v"
+        await asyncio.to_thread(vector_store.drop_collections_by_prefix, prefix)
         await db.execute(delete(Chunk).where(Chunk.kb_id == kb_id))
         await db.execute(delete(DocumentVersion).where(DocumentVersion.document_id.in_(
             select(Doc.id).where(Doc.kb_id == kb_id)

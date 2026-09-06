@@ -45,22 +45,9 @@ class SearchHit:
 
 
 def _get_collection():
-    global _client, _collection
-    with _lock:
-        if _collection is not None:
-            return _collection
-        _client = chromadb.PersistentClient(path=str(settings.chroma_dir_path))
-        name = settings.chroma_collection
-        if name not in {c.name for c in _client.list_collections()}:
-            try:
-                _collection = _client.create_collection(name=name, configuration=_HNSW_CONFIG)
-                logger.info("创建 Chroma collection: %s (HNSW=%s)", name, _HNSW_CONFIG["hnsw"])
-            except TypeError:
-                # 旧版 Chroma：退回默认
-                _collection = _client.create_collection(name=name)
-        else:
-            _collection = _client.get_collection(name)
-        return _collection
+    global _collection
+    _collection = _get_collection_by_name(settings.chroma_collection)
+    return _collection
 
 
 # ---- B1：按名字操作 collection（软切换原语，为「每库每版本一个 collection」铺路）----
@@ -129,6 +116,22 @@ def drop_collection(name: str) -> None:
     _drop_collection_named(name)
 
 
+def drop_collections_by_prefix(prefix: str) -> list[str]:
+    """删除所有名字以 prefix 开头的 collection（整库删除时清该库全部版本）。
+
+    返回被删除的 collection 名列表。软切换下每个库有多个版本号 collection，
+    删库时需一并清掉；此函数不碰其他库（前缀即库隔离）。
+    """
+    global _client
+    client = _client_instance()
+    removed: list[str] = []
+    for name in [c.name for c in client.list_collections()]:
+        if name.startswith(prefix):
+            _drop_collection_named(name)
+            removed.append(name)
+    return removed
+
+
 def query_named(
     name: str,
     query_vector: list[float],
@@ -137,6 +140,30 @@ def query_named(
 ) -> list[SearchHit]:
     """在指定名字的 collection 里检索（软切换后按 active 版本 collection 名查）。"""
     return _query_collection(_get_collection_by_name(name), query_vector, where, n_results)
+
+
+def query_many(
+    names: list[str],
+    query_vector: list[float],
+    where: dict[str, Any] | None = None,
+    n_results: int = 10,
+) -> list[SearchHit]:
+    """在多个 collection 里检索并合并（跨库 kb_id=None 时用）。
+
+    每个 collection 各查 n_results，合并后按相似度降序截断到 n_results。
+    where 过滤按 collection 各自应用（metadata 层隔离，跨库结果互不污染）。
+    """
+    all_hits: list[SearchHit] = []
+    for name in names:
+        try:
+            all_hits.extend(
+                _query_collection(_get_collection_by_name(name), query_vector, where, n_results)
+            )
+        except Exception as exc:
+            logger.warning("查询 collection %s 失败，跳过: %s", name, exc)
+            continue
+    all_hits.sort(key=lambda h: h.score, reverse=True)
+    return all_hits[:n_results]
 
 
 def count_named(name: str) -> int:
@@ -154,6 +181,18 @@ def delete_by_where_named(name: str, where: dict[str, Any]) -> None:
 def get_embeddings_by_ids_named(name: str, ids: list[int]) -> dict[int, list[float]]:
     """在指定名字的 collection 里按 chunk id 取向量。"""
     return _get_embeddings(_get_collection_by_name(name), ids)
+
+
+def get_embeddings_by_ids_many(names: list[str], ids: list[int]) -> dict[int, list[float]]:
+    """跨多个 collection 取向量并合并（补召回 chunk 可能跨库）。"""
+    out: dict[int, list[float]] = {}
+    for name in names:
+        try:
+            out.update(_get_embeddings(_get_collection_by_name(name), ids))
+        except Exception as exc:
+            logger.warning("取向量 collection %s 失败，跳过: %s", name, exc)
+            continue
+    return out
 
 
 def _query_collection(
@@ -200,22 +239,15 @@ def _get_embeddings(col: Any, ids: list[int]) -> dict[int, list[float]]:
 
 
 def reset_collection() -> None:
-    """删除并重建整个 collection（清空所有向量）。
+    """删除并重建当前 active collection（清空所有向量）。
 
     用于重灌后的整库重建：`delete_by_where + add` 反复执行会损坏 HNSW 索引
     （实测 "Error loading hnsw index"，整个集合查询崩溃），重建是最可靠的方式。
     """
-    global _collection, _client
-    col = _get_collection()
+    global _collection
     name = settings.chroma_collection
-    try:
-        _client.delete_collection(name)
-    except Exception:  # 不存在时忽略
-        pass
-    try:
-        _collection = _client.create_collection(name=name, configuration=_HNSW_CONFIG)
-    except TypeError:
-        _collection = _client.create_collection(name=name)
+    _drop_collection_named(name)
+    _collection = _get_collection_by_name(name)
 
 
 def _assert_dimension(col, embeddings: list[list[float]]) -> None:
@@ -316,17 +348,24 @@ def swap_shadow_to_active() -> None:
 
     rename 失败窗口（删 live → 改名前）内查询可能空；失败则回退 reset_collection，
     由调用方在 try/except 里做兜底重建（见 manager._rebuild_chroma）。
+
+    遗留兼容层：B2 起生产发布改用 build_collection + IndexVersion 指针软切换，
+    此函数仅测试/旧脚本使用。删除/改名后同步失效 _collections 缓存，避免缓存
+    持有已删 collection 的悬空 handle。
     """
     global _client, _collection
     client = _client_instance()
     shadow = _shadow_name()
     name = settings.chroma_collection
-    try:
-        client.delete_collection(name)
-    except Exception:  # 不存在时忽略
-        pass
-    client.get_collection(shadow).modify(name=name)
-    _collection = client.get_collection(name)
+    with _lock:
+        try:
+            client.delete_collection(name)
+        except Exception:  # 不存在时忽略
+            pass
+        _collections.pop(name, None)  # 失效旧 active 缓存
+        client.get_collection(shadow).modify(name=name)
+        _collections.pop(shadow, None)  # shadow 改名后旧缓存失效
+    _collection = _get_collection_by_name(name)  # 锁外预热（_get_collection_by_name 自身加锁）
 
 
 def drop_shadow() -> None:
@@ -338,6 +377,8 @@ def drop_shadow() -> None:
         client.delete_collection(shadow)
     except Exception:  # 不存在时忽略
         pass
+    with _lock:
+        _collections.pop(shadow, None)
 
 
 def gc_orphan_hnsw_dirs() -> int:
@@ -432,6 +473,22 @@ def query(
 
 def count() -> int:
     return _get_collection().count()
+
+
+def count_all() -> int:
+    """统计所有 kb_chunks* collection 的向量总数（软切换后每库一个 collection）。
+
+    健康探活/统计展示用：跨所有库的 active+retired collection 求和。
+    """
+    client = _client_instance()
+    total = 0
+    for name in [c.name for c in client.list_collections()]:
+        if name.startswith(settings.chroma_collection):
+            try:
+                total += _get_collection_by_name(name).count()
+            except Exception as exc:
+                logger.warning("count collection %s 失败，跳过: %s", name, exc)
+    return total
 
 
 def get_embeddings_by_ids(ids: list[int]) -> dict[int, list[float]]:

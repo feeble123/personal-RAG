@@ -188,7 +188,7 @@ def create_app() -> FastAPI:
 
                 from app.services import vector_store
 
-                await asyncio.to_thread(vector_store.count)
+                await asyncio.to_thread(vector_store.count_all)
                 checks["chroma"] = "ok"
             except Exception as exc:  # noqa: BLE001
                 ok = False

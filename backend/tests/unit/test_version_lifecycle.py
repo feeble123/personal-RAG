@@ -98,8 +98,9 @@ class TestReparseSuccess:
                 ))
                 target.chunk_count = 1
                 await db.flush()
-                # 发布
-                await manager._publish_version(db, doc, target)
+                # 发布（B2 新签名：先建 collection 再切 DB 指针）
+                collection_name, index_count = await manager._build_shadow_index(db, doc, target)
+                await manager._publish_version(db, doc, target, collection_name, index_count)
                 await db.commit()
 
             async with async_session_factory() as db:
@@ -207,12 +208,14 @@ class TestShadowFailureMatrix:
             def _boom_shadow(*a, **k):
                 raise RuntimeError("注入: 影子索引写入失败")
 
-            monkeypatch.setattr(mgr.vector_store, "build_shadow", _boom_shadow)
+            monkeypatch.setattr(mgr.vector_store, "build_collection", _boom_shadow)
         elif inject == "swap":
-            def _boom_swap():
-                raise RuntimeError("注入: 影子切换失败")
+            # B2 新架构：切换 = _publish_version 的 DB 提交（无独立向量 swap 步骤）。
+            # 注入发布函数抛异常，模拟「DB 提交失败」→ 旧版 active、旧 chunks 保留。
+            async def _boom_publish(*a, **k):
+                raise RuntimeError("注入: 发布(DB提交)失败")
 
-            monkeypatch.setattr(mgr.vector_store, "swap_shadow_to_active", _boom_swap)
+            monkeypatch.setattr(mgr, "_publish_version", _boom_publish)
         else:
             raise ValueError(inject)
 

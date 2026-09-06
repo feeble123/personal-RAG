@@ -272,7 +272,7 @@ async def system_stats(db: DbSession, _admin: AdminUser) -> dict:
     kb_rows = (await db.execute(select(KnowledgeBase.id, KnowledgeBase.name, KnowledgeBase.chunk_count))).all()
     vector_count = 0
     try:
-        vector_count = await asyncio.to_thread(vector_store.count)
+        vector_count = await asyncio.to_thread(vector_store.count_all)
     except Exception:
         pass
 
