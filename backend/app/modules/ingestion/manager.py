@@ -150,7 +150,26 @@ async def enqueue_ingestion_async(doc_id: int, kind: str = "ingest") -> int | No
             )
         )
         if active is not None:
-            return None
+            # B2 收尾窗口竞态：doc.status="ready" 与 job.stage="publishing" 同一事务
+            # 原子落库，但 job 要等 _execute_job 收尾（rebuild_bm25 + 清缓存）后才标
+            # succeeded。这 ~几百 ms 窗口内 doc 已 ready、无 building 版本，但 job 仍
+            # 是活跃阶段。此时重灌应放行——否则 reparse 被幂等检查误判为「有活跃任务」
+            # 而静默丢弃，导致失败注入测试无法复现、真实用户重灌偶发丢单。
+            # 判定：publishing 且无 building 版本 = 上次发布已成功、仅在收尾 → 放行；
+            # 其余活跃阶段（parsing/embedding/indexing 等）仍是真在途 → 照旧拒绝。
+            if active.stage == "publishing":
+                building = await db.scalar(
+                    select(DocumentVersion).where(
+                        DocumentVersion.document_id == doc_id,
+                        DocumentVersion.status == "building",
+                    )
+                )
+                if building is None:
+                    pass  # 收尾窗口：放行重灌
+                else:
+                    return None
+            else:
+                return None
         job = IngestionJob(document_id=doc_id, kind=kind, stage="queued")
         db.add(job)
         await db.commit()
