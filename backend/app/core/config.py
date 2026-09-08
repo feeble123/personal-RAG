@@ -95,7 +95,6 @@ class Settings(BaseSettings):
     chroma_collection: str = "kb_chunks"
     top_k_vector: int = 50      # 向量检索候选
     top_k_bm25: int = 50        # BM25 检索候选
-    top_k_rrf: int = 20         # 融合后候选
     top_k_final: int = 5        # 最终进入 prompt 的引用数
     # ---- 重排（bge-reranker API，解决 BGE-M3 向量对部分查询区分度不足）----
     rerank_enabled: bool = True

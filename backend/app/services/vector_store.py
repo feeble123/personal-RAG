@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import chromadb
+from chromadb.errors import NotFoundError
 
 from app.core.config import settings
 
@@ -86,7 +87,7 @@ def _drop_collection_named(name: str) -> None:
             _client = chromadb.PersistentClient(path=str(settings.chroma_dir_path))
         try:
             _client.delete_collection(name)
-        except Exception:  # 不存在时忽略
+        except NotFoundError:  # 不存在时忽略（其他异常如磁盘满/权限错不吞，向上抛）
             pass
         _collections.pop(name, None)
 
@@ -267,8 +268,10 @@ def _assert_dimension(col, embeddings: list[list[float]]) -> None:
                 )
     except ValueError:
         raise
-    except Exception:
-        pass  # 读参照失败（新 collection 等）跳过
+    except NotFoundError:
+        pass  # 新 collection 无向量，跳过维度校验（正常路径）
+    except Exception as exc:
+        logger.warning("维度校验读参照失败，跳过: %s", exc)
 
 
 def add_vectors(
@@ -315,7 +318,7 @@ def build_shadow(
     shadow = _shadow_name()
     try:
         client.delete_collection(shadow)
-    except Exception:  # 不存在时忽略
+    except NotFoundError:  # 不存在时忽略（其他异常如磁盘满/权限错不吞，向上抛）
         pass
     try:
         col = client.create_collection(name=shadow, configuration=_HNSW_CONFIG)
@@ -337,8 +340,10 @@ def build_shadow(
             )
     except ValueError:
         raise
-    except Exception:
-        pass
+    except NotFoundError:
+        pass  # active collection 无向量，跳过维度校验（正常路径）
+    except Exception as exc:
+        logger.warning("影子维度校验读参照失败，跳过: %s", exc)
     col.add(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
     return col.count()
 
@@ -360,7 +365,7 @@ def swap_shadow_to_active() -> None:
     with _lock:
         try:
             client.delete_collection(name)
-        except Exception:  # 不存在时忽略
+        except NotFoundError:  # 不存在时忽略（其他异常如磁盘满/权限错不吞，向上抛）
             pass
         _collections.pop(name, None)  # 失效旧 active 缓存
         client.get_collection(shadow).modify(name=name)
@@ -375,7 +380,7 @@ def drop_shadow() -> None:
     shadow = _shadow_name()
     try:
         client.delete_collection(shadow)
-    except Exception:  # 不存在时忽略
+    except NotFoundError:  # 不存在时忽略（其他异常如磁盘满/权限错不吞，向上抛）
         pass
     with _lock:
         _collections.pop(shadow, None)

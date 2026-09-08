@@ -476,7 +476,7 @@ async def chat(
                             user_id=user.id,  # P0-3 缓存按用户隔离
                         )
                 except Exception:
-                    logger.debug("语义缓存写入失败，忽略")
+                    logger.warning("语义缓存写入失败，忽略", exc_info=True)
             yield _sse(
                 {"event": "done",
                  "data": {"message_id": asst_id, "evidence_level": evidence_level,
@@ -502,7 +502,7 @@ async def chat(
                     )
                     await sdb.commit()
             except Exception:
-                pass
+                logger.warning("失败消息落库失败（历史展示缺失，不影响主流程）", exc_info=True)
         finally:
             # P2 单元3：问答指标（generator 无论 return/异常/正常结束都会执行）
             metrics["chat_requests_total"].labels(_chat_result).inc()

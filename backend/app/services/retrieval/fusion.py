@@ -25,10 +25,3 @@ def rrf_fuse(
     for rank, (cid, _) in enumerate(bm25_hits, start=1):
         scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank)
     return scores
-
-
-def rrf_score_to_prob(rrf: float, hits_count: int) -> float:
-    """RRF 分 → 0~1 归一化（供 trace/evidence 参考；不是概率）。"""
-    if hits_count == 0:
-        return 0.0
-    return min(1.0, rrf / (2.0 * hits_count))
