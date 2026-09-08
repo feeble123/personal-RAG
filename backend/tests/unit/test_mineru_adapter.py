@@ -22,6 +22,7 @@ from app.services.parser.mineru import (
     _parse_chapter_heading,
     _guess_heading_level,
     _parse_outline_number,
+    _strip_toc_page_number,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "evaluation" / "fixtures"
@@ -505,3 +506,59 @@ class TestExtractTocGeneric:
         assert "3" in toc and toc["3"] == ("液体运动", 1)
         assert "3.1" in toc
         assert "3.4" in toc
+
+
+class TestStripTocPageNumber:
+    """单元 G5 前置：目录页码剥离支持「右括号页码」体例。
+
+    回归背景：GB50201-2014 防洪标准目录页码是「1）/ 28）/ (7)」右括号格式，
+    旧实现只认「点线……1」和「纯数字粘连」，剥不掉 → 目录整块被判非目录 →
+    toc_map 提取 0 条 → section 失去目录兜底校验 → 正文「表格注释编号项」
+    （如「3 灌溉引水枢纽工程包括…；」）被误判一级标题，一二级大纲丢失。
+    """
+
+    def test_fullwidth_paren_page(self):
+        assert _strip_toc_page_number("1  总  则  1）") == "1  总  则"
+
+    def test_halfwidth_paren_page(self):
+        assert _strip_toc_page_number("11.2 水工建筑物级别 28)") == "11.2 水工建筑物级别"
+
+    def test_paren_wrapped_page(self):
+        # 括号包数字：`(7)` 整体剥，不能把左括号留在标题里
+        assert _strip_toc_page_number("5 建筑物作业 (7)") == "5 建筑物作业"
+
+    def test_paren_wrapped_page_no_space(self):
+        assert _strip_toc_page_number("管道线路 (13)") == "管道线路"
+
+    def test_dotted_leader_still_works(self):
+        # 原有省略号点线页码不受影响
+        assert _strip_toc_page_number("1.1 水力学的任务…………1") == "1.1 水力学的任务"
+
+    def test_plain_trailing_still_works(self):
+        assert _strip_toc_page_number("2.5 水资源综合评价62") == "2.5 水资源综合评价"
+
+    def test_leading_paren_not_stripped(self):
+        # 正文列表项「1）水库…」页码在行首，不应被剥
+        assert _strip_toc_page_number("1）水库总库容指…") == "1）水库总库容指…"
+
+
+class TestGuessHeadingRejectsLongClause:
+    """单元 G5 兜底：编号标题应短、无句中标点。
+
+    回归背景：即使某文档无目录（toc_map 空），正文「表格注释编号项」含句中逗号/分号，
+    也不该被 _guess_heading_level 判成标题，否则 section 被长句污染。
+    """
+
+    def test_table_note_item_rejected(self):
+        text = "3 灌溉引水枢纽工程包括拦河或顺河向布置的灌溉取水枢纽，引水流量采用设计流量；"
+        assert _guess_heading_level(text) is None
+
+    def test_clause_with_semicolon_rejected(self):
+        text = "4泵站工程指灌溉、排水(涝)的提水泵站，其装机流量…"
+        assert _guess_heading_level(text) is None
+
+    def test_legit_level1_still_works(self):
+        assert _guess_heading_level("6 避洪转移分析") == 1
+
+    def test_legit_level2_still_works(self):
+        assert _guess_heading_level("7.4 地图版面布局") == 2

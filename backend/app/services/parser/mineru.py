@@ -390,15 +390,29 @@ def _parse_outline_number(text: str) -> tuple[str, int, str] | None:
 
 
 def _strip_toc_page_number(line: str) -> str:
-    """剥离目录行末尾的省略号+页码 / 粘连页码，返回「编号+标题」部分。
+    """剥离目录行末尾的页码，返回「编号+标题」部分。
 
-    形态：`1.1 水力学的任务…………………1` / `2.5 水资源综合评价62` / `第2章水资源评价……12`。
+    页码形态（多规范体例，逐一兼容）：
+    - `1.1 水力学的任务…………………1`（省略号点线 + 纯数字）
+    - `2.5 水资源综合评价62`（纯数字粘连）
+    - `1  总则  1）` / `4.3 泄水建筑物 6)` / `11.2 水工建筑物级别 28)`（数字 + 右括号）
+    - `5 建筑物作业 (7)` / `管道线路 (13)`（括号包数字）
     """
     import re
 
     line = line.strip()
     # 带省略号：…页码
     m = re.match(r"^(.*?)\s*[.·…]{1,}\s*\d{1,4}\s*$", line)
+    if m:
+        return m.group(1).strip()
+    # 括号包数字页码：`5 建筑物作业 (7)` / `管道线路 (13)` / `11.8 堤防工程 (33)`
+    # 必须排在「数字+右括号」之前——否则 `(7)` 会被后者误判成 `7)`，把 `(` 留在标题里。
+    m = re.match(r"^(.*?)\s*[(（]\s*\d{1,4}\s*[)）]\s*$", line)
+    if m:
+        return m.group(1).strip()
+    # 数字 + 右括号页码（全角/半角）：`1  总则  1）` / `11.2 级别 28)`
+    # 锚定行尾，只剥「行尾的 数字+右括号」——正文列表项「1）水库…」在行首，不受影响。
+    m = re.match(r"^(.*?)\s*\d{1,4}\s*[）)]\s*$", line)
     if m:
         return m.group(1).strip()
     # 无省略号：末尾「中文/括号 + 数字页码」粘连
@@ -474,6 +488,11 @@ def _guess_heading_level(text: str) -> int | None:
     只推断 1/2 级：「6 避洪转移分析」→ 1；「7.4 地图版面布局」→ 2。
     三级及以上（「4.6.16」）不推断——保留为正文，放在切片 body 里。
     单元 A：改用 _parse_outline_number，同时支持中文数字/章节式编号体系。
+
+    标题样兜底：编号标题应「短、无句中标点」。规范正文里的「表格注释编号项」
+    （如「注：3 灌溉引水枢纽工程包括…，引水流量采用设计流量；」）同样是
+    「数字+中文」，但含句中逗号/分号、且编号后标题长——这些是条文/注释，不是大纲，
+    必须拦下，否则 section 被长句污染（一二级大纲丢失）。
     """
     t = text.strip()
     if len(t) <= 2:
@@ -481,8 +500,16 @@ def _guess_heading_level(text: str) -> int | None:
     parsed = _parse_outline_number(t)
     if parsed is None:
         return None
-    _num, level, _title = parsed
-    return level if level in (1, 2) else None
+    _num, level, title = parsed
+    if level not in (1, 2):
+        return None
+    # 标题样校验：编号后标题部分含句中逗号/分号 → 条文/注释，非标题。
+    # 「11.1.5 当按工程任务…确定的等别不同时，其等别应按高者确定」这类条文号
+    # 已在 _parse_outline_number 的 4) 分支被判为三级（level 3），到不了这里；
+    # 此处拦的是「数字 + 长标题」一级误判（如「3 灌溉引水枢纽工程包括…；」）。
+    if any(ch in title for ch in "，；"):
+        return None
+    return level
 
 
 def _normalize_section_title(text: str) -> str:
