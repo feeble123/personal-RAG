@@ -28,6 +28,10 @@ from app.services.query_expand import expand_query
 
 logger = logging.getLogger(__name__)
 
+# G4：rerank 复用连接池。每次问答最多 3 次 rerank 调用，若每次新建 AsyncClient
+# 就要重复 3 次 TCP+TLS 握手（数百 ms）。单例客户端复用连接，显著降首 token 延迟。
+_rerank_client: "httpx.AsyncClient | None" = None
+
 
 async def _active_version_ids(
     db: AsyncSession, kb_id: int | None = None, doc_ids: list[int] | None = None
@@ -516,8 +520,20 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 async def rerank(query: str, documents: list[str]) -> list[float]:
-    """硅基流动 bge-reranker API 重排，返回与 documents 对齐的相关性分数（0~1）。"""
+    """硅基流动 bge-reranker API 重排，返回与 documents 对齐的相关性分数（0~1）。
+
+    G4：复用模块级 AsyncClient 连接池（懒加载，进程退出时由 close_rerank_client 关闭）。
+    """
+    global _rerank_client
     import httpx
+
+    if _rerank_client is None:
+        # 连接池：keepalive 复用 TCP 连接，避免每次调用重复握手。
+        # 单进程内并发安全（httpx 内部调度），多 worker 各自持有一个实例。
+        _rerank_client = httpx.AsyncClient(
+            timeout=30,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
 
     payload = {
         "model": settings.rerank_model,
@@ -530,18 +546,25 @@ async def rerank(query: str, documents: list[str]) -> list[float]:
         "Authorization": f"Bearer {settings.embedding_api_key}",
         "Content-Type": "application/json",
     }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(
-            f"{settings.embedding_base_url.rstrip('/')}/rerank", json=payload, headers=headers
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    resp = await _rerank_client.post(
+        f"{settings.embedding_base_url.rstrip('/')}/rerank", json=payload, headers=headers
+    )
+    resp.raise_for_status()
+    data = resp.json()
     scores = [0.0] * len(documents)
     for item in data.get("results", []):
         idx = item.get("index")
         if idx is not None and 0 <= idx < len(scores):
             scores[idx] = item.get("relevance_score", 0.0)
     return scores
+
+
+async def close_rerank_client() -> None:
+    """关闭 rerank 连接池（应用优雅退出时调用；测试可调用重置）。"""
+    global _rerank_client
+    if _rerank_client is not None:
+        await _rerank_client.aclose()
+        _rerank_client = None
 
 
 def _table_citation(ans) -> RetrievedChunk | None:

@@ -109,6 +109,10 @@ async def lifespan(app: FastAPI):
     yield
     # 优雅关闭：停掉 worker（置停止标记 + 取消轮询），避免任务残留
     ingestion_manager.stop_worker()
+    # G4：关闭 rerank 连接池（复用单例，退出时归还 keepalive 连接）
+    from app.services.rag import close_rerank_client
+
+    await close_rerank_client()
     logger.info("应用关闭")
 
 
