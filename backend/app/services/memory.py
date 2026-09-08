@@ -45,11 +45,6 @@ class RecallResult:
     force_rerank: bool = False  # bad 命中 → 强制重新检索信号
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    """单对余弦（委托 vecmath，消除重复实现；行为与原实现一致）。"""
-    return vecmath.cosine(a, b)
-
-
 def _subjects_match(a: str | None, b: str | None) -> bool:
     """主题一致性：余弦相似 ≠ 同一问题（同框架不同主题），须主题一致才允许命中。
     任一侧缺主题时保守放行。"""

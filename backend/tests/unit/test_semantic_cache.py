@@ -5,7 +5,7 @@ import pytest
 
 from app.db.session import async_session_factory, init_db
 from app.services import semantic_cache
-from app.services.semantic_cache import _cosine
+from app.services.vecmath import cosine as _cosine
 
 
 class TestCosine:

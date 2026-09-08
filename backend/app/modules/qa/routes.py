@@ -52,6 +52,27 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _build_citation(message_id: int, c, chunk_id: int | None = None) -> Citation:
+    """G3：统一构造 Citation（4 处重复落库合并为一处）。
+
+    c 可为 RetrievedChunk 或快照 dict（记忆/缓存重放）。chunk_id 显式传入时用传值
+    （校验后的结果），否则取 c.chunk_id；snippet 统一截断 1000 防超长。
+    """
+    snippet = (c.get("snippet") if isinstance(c, dict) else c.snippet) or ""
+    return Citation(
+        message_id=message_id,
+        chunk_id=chunk_id if chunk_id is not None else (c.get("chunk_id") if isinstance(c, dict) else c.chunk_id),
+        kb_id=c.get("kb_id") if isinstance(c, dict) else c.kb_id,
+        doc_id=c.get("doc_id") if isinstance(c, dict) else c.doc_id,
+        source=(c.get("source") or "") if isinstance(c, dict) else c.source,
+        page=c.get("page") if isinstance(c, dict) else c.page,
+        section=c.get("section") if isinstance(c, dict) else c.section,
+        snippet=snippet[:1000],
+        score=c.get("score") if isinstance(c, dict) else c.score,
+        rank=c.get("rank") if isinstance(c, dict) else c.rank,
+    )
+
+
 async def _existing_chunk_ids(db, chunk_ids: list) -> set[int]:
     """批量校验 chunk 是否仍存在（P0-5）。
 
@@ -206,20 +227,10 @@ async def chat(
                                 ss, [c.get("chunk_id") for c in mem.citations]
                             )
                             for c in mem.citations:
-                                ss.add(
-                                    Citation(
-                                        message_id=asst.id,
-                                        chunk_id=c.get("chunk_id") if c.get("chunk_id") in valid_ids else None,
-                                        kb_id=c.get("kb_id"),
-                                        doc_id=c.get("doc_id"),
-                                        source=c.get("source") or "",
-                                        page=c.get("page"),
-                                        section=c.get("section"),
-                                        snippet=(c.get("snippet") or "")[:1000],
-                                        score=c.get("score"),
-                                        rank=c.get("rank"),
-                                    )
-                                )
+                                ss.add(_build_citation(
+                                    asst.id, c,
+                                    chunk_id=c.get("chunk_id") if c.get("chunk_id") in valid_ids else None,
+                                ))
                             conv2 = await ss.get(Conversation, conv.id)
                             if conv2:
                                 conv2.last_message_at = _now()
@@ -326,20 +337,10 @@ async def chat(
                             ss, [c.get("chunk_id") for c in cached_cites]
                         )
                         for c in cached_cites:
-                            ss.add(
-                                Citation(
-                                    message_id=asst.id,
-                                    chunk_id=c.get("chunk_id") if c.get("chunk_id") in valid_ids else None,
-                                    kb_id=c.get("kb_id"),
-                                    doc_id=c.get("doc_id"),
-                                    source=c.get("source") or "",
-                                    page=c.get("page"),
-                                    section=c.get("section"),
-                                    snippet=(c.get("snippet") or "")[:1000],
-                                    score=c.get("score"),
-                                    rank=c.get("rank"),
-                                )
-                            )
+                            ss.add(_build_citation(
+                                asst.id, c,
+                                chunk_id=c.get("chunk_id") if c.get("chunk_id") in valid_ids else None,
+                            ))
                         conv2 = await ss.get(Conversation, conv.id)
                         if conv2:
                             conv2.last_message_at = _now()
@@ -439,20 +440,7 @@ async def chat(
                 cite_dicts = []
                 for c in cites:
                     cite_dicts.append(c.to_citation().model_dump())
-                    sdb.add(
-                        Citation(
-                            message_id=asst.id,
-                            chunk_id=c.chunk_id,
-                            kb_id=c.kb_id,
-                            doc_id=c.doc_id,
-                            source=c.source,
-                            page=c.page,
-                            section=c.section,
-                            snippet=c.snippet[:1000],
-                            score=c.score,
-                            rank=c.rank,
-                        )
-                    )
+                    sdb.add(_build_citation(asst.id, c))
                 conv2 = await sdb.get(Conversation, conv.id)
                 if conv2:
                     conv2.last_message_at = _now()
@@ -631,20 +619,7 @@ async def optimize_message(
                 sdb.add(new_asst)
                 await sdb.flush()
                 for c in cites:
-                    sdb.add(
-                        Citation(
-                            message_id=new_asst.id,
-                            chunk_id=c.chunk_id,
-                            kb_id=c.kb_id,
-                            doc_id=c.doc_id,
-                            source=c.source,
-                            page=c.page,
-                            section=c.section,
-                            snippet=c.snippet[:1000],
-                            score=c.score,
-                            rank=c.rank,
-                        )
-                    )
+                    sdb.add(_build_citation(new_asst.id, c))
                 conv2 = await sdb.get(Conversation, conv.id)
                 if conv2:
                     conv2.last_message_at = _now()

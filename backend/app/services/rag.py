@@ -514,11 +514,6 @@ class RetrievedResult:
     trace: RetrievalTrace | None = None
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    """单对余弦（委托 vecmath，消除重复实现；行为与原实现一致）。"""
-    return vecmath.cosine(a, b)
-
-
 async def rerank(query: str, documents: list[str]) -> list[float]:
     """硅基流动 bge-reranker API 重排，返回与 documents 对齐的相关性分数（0~1）。
 

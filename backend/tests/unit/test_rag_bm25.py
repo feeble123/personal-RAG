@@ -4,11 +4,11 @@ from __future__ import annotations
 import pytest
 
 from app.services import bm25
-from app.services.rag import _cosine
+from app.services.vecmath import cosine as _cosine
 
 
 class TestRagCosine:
-    """rag._cosine（向量排序核心，v2 检索用）。"""
+    """vecmath.cosine（向量排序核心，v2 检索用）。"""
 
     def test_identical(self):
         assert _cosine([1, 0, 0], [1, 0, 0]) == pytest.approx(1.0)

@@ -9,7 +9,8 @@ from sqlalchemy import delete, func, select
 from app.db.models import QaMemory
 from app.db.session import async_session_factory, init_db
 from app.services import memory
-from app.services.memory import MemoryConfig, _cosine
+from app.services.memory import MemoryConfig
+from app.services.vecmath import cosine as _cosine
 
 CFG = MemoryConfig(enabled=True, threshold=0.93, max_entries=300, pool=100)
 
