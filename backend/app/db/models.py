@@ -24,9 +24,14 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+# G5-1：JSON 列跨方言类型——PG 用 JSONB（可索引/可查询），SQLite 仍用 JSON（测试兼容）。
+# with_variant 保证 as_generic() 返回 JSON，test_alembic_baseline 的 schema 奇偶校验不炸。
+JSONType = JSON().with_variant(JSONB, "postgresql")
 
 
 class User(Base):
@@ -185,7 +190,7 @@ class Document(Base):
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 解析质量指标（扫描判定/OCR/乱码率等），答辩数据
-    quality: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    quality: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     # 切片策略（上传时选择，供策略 A/B 对比）：old=经典启发式 / new=目录+LLM断号补全
     chunk_strategy: Mapped[str] = mapped_column(String(10), default="old", nullable=False)
     # P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
@@ -243,7 +248,7 @@ class Chunk(Base):
     # 单元二 2-2：表格结构化数据（{table_id, columns, rows, row_index}）。
     # 仅表格子块携带；非表格块 NULL。table_id 标记同一张表（跨块聚合），
     # columns=列名、rows=数据行（不含表头）、row_index=本块在整表中的起始行。
-    table_data: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    table_data: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
 
     doc: Mapped[Document] = relationship(back_populates="chunks")
     version: Mapped["DocumentVersion"] = relationship(back_populates="chunks")
@@ -279,9 +284,9 @@ class DocumentVersion(Base):
     # 源文件 sha256（同一文件重灌可检测未变更，避免无意义发布）
     source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # 解析/切片画像（答辩数据）：parser 名 + chunk_strategy + chunk 参数
-    parser_profile: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    chunk_profile: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
-    quality_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    parser_profile: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    chunk_profile: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    quality_json: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
@@ -318,7 +323,7 @@ class IngestionJob(Base):
     lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 进度（解析/OCR 阶段）：{stage, done, total, percent}
-    progress: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
