@@ -14,12 +14,14 @@ import asyncio
 import hashlib
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
 
 from app.core.config import settings
+from app.core.time import as_utc, utcnow, utcnow_naive
+
 from app.core.metrics import metrics
 from app.db.models import Chunk, Document, DocumentVersion, IndexVersion, IngestionJob, KnowledgeBase
 from app.db.session import async_session_factory
@@ -66,7 +68,7 @@ _ACTIVE_STAGES = ("queued", "parsing", "chunking", "embedding", "indexing", "pub
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utcnow()
 
 
 def _source_hash(path) -> str | None:
@@ -221,7 +223,7 @@ async def queue_backlog_snapshot() -> list[tuple[str, int, float]]:
     for stage, cnt, oldest_created in rows:
         if cnt == 0 or oldest_created is None:
             continue
-        wait = max((now - oldest_created).total_seconds(), 0.0)
+        wait = max((now - as_utc(oldest_created)).total_seconds(), 0.0)
         out.append((stage, int(cnt), wait))
     return out
 
@@ -460,7 +462,7 @@ async def _reaper_pass() -> None:
     - 只回收「有租约」的 job（queued 无租约 = 等 worker 领，不回收）
     - lease 未过期的活跃 job 一律不动（worker 还活着）
     """
-    now = _now()
+    now = utcnow_naive()  # SQL 比较边界值用 naive UTC（SQLite 存 naive 墙钟）
     async with async_session_factory() as db:
         stale = (
             await db.execute(

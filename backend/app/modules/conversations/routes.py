@@ -1,12 +1,13 @@
 """会话与消息路由：CRUD + 游标分页（懒加载历史）。"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from fastapi import APIRouter, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
+from app.core.time import utcnow
 from app.core.deps import CurrentUser, DbSession
 from app.core.exceptions import BizError
 from app.db.models import Conversation, Message
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utcnow()
 
 
 async def get_owned_conversation(db: DbSession, conv_id: int, user_id: int) -> Conversation:

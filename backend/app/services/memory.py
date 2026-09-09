@@ -13,11 +13,12 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utcnow
 from app.db.models import QaMemory
 from app.services import vecmath
 
@@ -54,7 +55,7 @@ def _subjects_match(a: str | None, b: str | None) -> bool:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utcnow()
 
 
 def _scope_stmt(user_id: int, kb_id: int | None, doc_scope: str | None, style: str | None):

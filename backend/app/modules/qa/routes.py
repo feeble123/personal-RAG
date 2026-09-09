@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from time import perf_counter
 from typing import Literal
 
@@ -20,6 +20,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.core.config import settings
+from app.core.time import utcnow
+
 from app.core.deps import CurrentUser, DbSession
 from app.core.exceptions import BizError
 from app.core.metrics import metrics
@@ -45,7 +47,7 @@ router = APIRouter(tags=["qa"])
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utcnow()
 
 
 def _sse(payload: dict) -> str:

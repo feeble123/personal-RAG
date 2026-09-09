@@ -45,9 +45,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # P0-1：会话版本号。改密/禁用/重置密码时 +1 → 旧 access token（携带旧 sv）全部失效。
     session_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     conversations: Mapped[list["Conversation"]] = relationship(
@@ -70,10 +70,10 @@ class AuthSession(Base):
         ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
     refresh_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)  # sha256 hex
-    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class Conversation(Base):
@@ -85,11 +85,11 @@ class Conversation(Base):
     )
     title: Mapped[str] = mapped_column(String(200), default="新会话", nullable=False)
     last_message_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     user: Mapped[User] = relationship(back_populates="conversations")
@@ -127,7 +127,7 @@ class Message(Base):
     answer_complete: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # ---- LLM 优化（opt-in）：True = 用户点「🤖 LLM优化」产生的结果（刷新后可还原标签）----
     is_optimized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
     citations: Mapped[list["Citation"]] = relationship(
@@ -156,9 +156,9 @@ class KnowledgeBase(Base):
     # 回答风格（单元 F）：standard 规范条文 / logical 专业论证 / summary 要点摘要 /
     # expanded 拓展延伸 / tutorial 通俗讲解。问答时按此风格组装 SYSTEM_PROMPT
     answer_style: Mapped[str] = mapped_column(String(30), default="standard", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
     # P0-8：当前可查询的索引版本指针（原子发布切点）；NULL 表示无索引。
     # 普通 Integer 指针（无 FK）：版本随库 CASCADE 删除，单版本无独立 GC，指针永不悬空。
@@ -199,8 +199,8 @@ class Document(Base):
     # 单元 S：解析模式（上传时用户自选）。fast=快速（pipeline 老后端，快）/
     # high=高精度（hybrid-engine 新后端，公式/数字/符号/标题更准，慢 ~40%）。旧数据默认 fast。
     parse_mode: Mapped[str] = mapped_column(String(10), default="fast", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-    parsed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    parsed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # P0-8：当前可查询的文档版本指针（原子发布切点）；NULL 表示尚无可用版本。
     # 普通 Integer 指针（无 FK）：版本随文档 CASCADE 删除，单版本无独立 GC，指针永不悬空。
     active_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -289,9 +289,9 @@ class DocumentVersion(Base):
     quality_json: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     document: Mapped[Document] = relationship(back_populates="versions")
     chunks: Mapped[list["Chunk"]] = relationship(
@@ -320,16 +320,16 @@ class IngestionJob(Base):
     attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # 租约：当前 worker 身份 + 到期时间（reaper 回收超时 job）
     lease_owner: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    lease_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 进度（解析/OCR 阶段）：{stage, done, total, percent}
     progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -352,9 +352,9 @@ class IndexVersion(Base):
     expected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     actual_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
-    activated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     kb: Mapped[KnowledgeBase] = relationship(back_populates="index_versions")
 
@@ -379,7 +379,7 @@ class Citation(Base):
     snippet: Mapped[str] = mapped_column(Text, default="", nullable=False)  # 引用原文
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     message: Mapped[Message] = relationship(back_populates="citations")
     chunk: Mapped[Chunk] = relationship(back_populates="citations")
@@ -402,7 +402,7 @@ class EmbeddingCache(Base):
     profile_fingerprint: Mapped[str] = mapped_column(String(32), primary_key=True, default="")
     model_version: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     vector_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON 数组
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class SemanticCache(Base):
@@ -427,9 +427,9 @@ class SemanticCache(Base):
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     citations_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 
@@ -458,9 +458,9 @@ class QaMemory(Base):
     citations_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
     hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)  # 最近命中时的余弦分
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     __table_args__ = (Index("ix_qa_memory_user_scope", "user_id", "kb_id", "updated_at"),)
@@ -486,6 +486,6 @@ class AuditLog(Base):
     target_id: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 目标 id（字符串存，兼容未来）
     detail: Mapped[str] = mapped_column(String(500), default="", nullable=False)  # 操作摘要
     client_ip: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     __table_args__ = (Index("ix_audit_logs_created", "created_at"),)

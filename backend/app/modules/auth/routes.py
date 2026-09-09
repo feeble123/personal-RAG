@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.deps import CurrentUser
 from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
+from app.core.time import utcnow_naive
 from app.core.security import (
     REFRESH_COOKIE,
     create_access_token,
@@ -43,7 +44,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 def _now() -> datetime:
     """SQLite DateTime 存 naive（无时区），统一用 naive UTC 避免 aware/naive 比较错误。"""
-    return datetime.utcnow()
+    return utcnow_naive()
 
 
 def _set_refresh_cookie(resp: Response, token: str) -> None:

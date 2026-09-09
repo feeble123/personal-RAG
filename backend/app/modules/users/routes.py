@@ -15,6 +15,7 @@ from sqlalchemy import delete, func, select
 from app.core.deps import AdminUser, DbSession, SuperAdminUser, get_client_ip
 from app.core.exceptions import BizError
 from app.core.security import hash_password
+from app.core.time import utcnow
 from app.db.models import Chunk, Conversation, Document, KnowledgeBase, Message, QaMemory, User
 from app.modules.auth.schemas import USERNAME_RE, UserOut
 from app.services import audit, vector_store
@@ -30,7 +31,7 @@ async def _revoke_all_sessions(db, user_id: int) -> None:
     await db.execute(
         AuthSession.__table__.update()
         .where(AuthSession.user_id == user_id, AuthSession.revoked_at.is_(None))
-        .values(revoked_at=datetime.now())
+        .values(revoked_at=utcnow())
     )
 
 

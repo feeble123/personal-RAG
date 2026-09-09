@@ -12,12 +12,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.time import as_utc, utcnow
+
 from app.core.metrics import metrics
 from app.db.models import SemanticCache
 from app.services import vecmath
@@ -35,7 +37,7 @@ async def clear_cache() -> None:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utcnow()
 
 
 def _subjects_match(a: str | None, b: str | None) -> bool:
@@ -55,7 +57,7 @@ def _is_expired(row: SemanticCache) -> bool:
     ttl = settings.semantic_cache_ttl_seconds
     if ttl <= 0 or row.updated_at is None:
         return False
-    return (_now() - row.updated_at) > timedelta(seconds=ttl)
+    return (_now() - as_utc(row.updated_at)) > timedelta(seconds=ttl)
 
 
 async def find(
@@ -150,7 +152,8 @@ async def store(
         scope_filter = and_(scope_filter, SemanticCache.user_id == user_id)
     # 过期清理：同作用域超 TTL 的旧条目不占容量、不参与命中
     if settings.semantic_cache_ttl_seconds > 0:
-        expire_before = _now() - timedelta(seconds=settings.semantic_cache_ttl_seconds)
+        # SQL 比较边界值用 naive UTC（SQLite 存 naive 墙钟；PG timestamptz 下 SQLAlchemy 按 UTC 解释）
+        expire_before = (_now() - timedelta(seconds=settings.semantic_cache_ttl_seconds)).replace(tzinfo=None)
         await db.execute(
             delete(SemanticCache).where(scope_filter, SemanticCache.updated_at < expire_before)
         )
