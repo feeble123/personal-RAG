@@ -129,6 +129,7 @@ function parseSummary(r: DocumentItem): string[] {
   if (q.parser === 'excel') return [`工作表 ${n('sheets')}`, `${n('rows')} 行`]
   if (q.parser === 'csv') return [`${n('rows')} 行`]
   if (q.parser === 'markdown' || q.parser === 'text') return [`段落 ${n('paragraphs')}`, `片段 ${n('blocks')}`]
+  if (q.parser === 'mineru') return [`共 ${n('pages')} 页`, `元素 ${n('elements')}`, `片段 ${n('blocks')}`]
   return [`片段 ${n('blocks')}`]
 }
 
@@ -146,6 +147,13 @@ function qualityItems(q: Record<string, unknown>): { label: string; value: strin
     out.push({ label: '总字数', value: num('total_chars') })
     out.push({ label: '乱码比例', value: num('garble_ratio') })
     if (q.mean_ocr_confidence != null) out.push({ label: 'OCR平均置信度', value: num('mean_ocr_confidence') })
+    return out
+  }
+  if (parser === 'mineru') {
+    out.push({ label: '总页数', value: num('pages') })
+    out.push({ label: '内容元素', value: num('elements') })
+    out.push({ label: '内容片段', value: num('blocks') })
+    if (q.mineru_version != null && q.mineru_version !== 'unknown') out.push({ label: 'MinerU 版本', value: num('mineru_version') })
     return out
   }
   if (parser === 'docx') {
