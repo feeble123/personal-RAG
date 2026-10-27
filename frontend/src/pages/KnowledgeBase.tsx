@@ -1,17 +1,25 @@
+/**
+ * 知识库管理页（G6-1 拆分后的主文件）。
+ *
+ * 本文件只保留：页面状态、数据查询、操作回调、布局编排。
+ * 展示细节已拆到同目录 knowledge/ 与 components/DocDetail：
+ *   - documentMeta.ts  常量 + 纯函数
+ *   - DocumentTable    文档表格列
+ *   - UploadProgress   批量上传进度
+ *   - SearchPreview    检索预览
+ *   - ChunkBrowser     文档切片
+ *   - KbList           左侧知识库列表
+ */
 import { useRef, useState } from 'react'
 import {
   App,
   Button,
   Card,
-  Descriptions,
   Empty,
   Input,
   Layout,
-  List,
   Modal,
-  Popconfirm,
-  Progress,
-    Select,
+  Select,
   Space,
   Table,
   Tabs,
@@ -19,273 +27,32 @@ import {
   Tooltip,
   Typography,
 } from 'antd'
-import {
-  DeleteOutlined,
-  DatabaseOutlined,
-  EditOutlined,
-  PlusOutlined,
-  RedoOutlined,
-  SearchOutlined,
-  UploadOutlined,
-  FileOutlined,
-} from '@ant-design/icons'
+import { ArrowLeftOutlined, DatabaseOutlined, UploadOutlined } from '@ant-design/icons'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import dayjs from 'dayjs'
 import { kbApi } from '@/api/modules'
-import type { ChunkItem, Citation, DocumentItem, DocumentVersionItem, KnowledgeBase } from '@/api/types'
+import type { DocumentItem, KnowledgeBase } from '@/api/types'
 import { ANSWER_STYLE_OPTIONS } from '@/api/types'
 import { errMsg } from '@/api/client'
 import UserMenu from '@/components/UserMenu'
+import DocDetail from '@/components/DocDetail'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeftOutlined } from '@ant-design/icons'
+import {
+  ACCEPT,
+  DOC_TYPE_OPTIONS,
+  PARSE_MODE_OPTIONS,
+  type DocType,
+  type ParseMode,
+  type UploadTask,
+} from './knowledge/documentMeta'
+import { buildDocumentColumns } from './knowledge/DocumentTable'
+import UploadProgress from './knowledge/UploadProgress'
+import SearchPreview from './knowledge/SearchPreview'
+import ChunkBrowser from './knowledge/ChunkBrowser'
+import KbList from './knowledge/KbList'
 
 const { Header, Content } = Layout
 
-const STATUS_META: Record<string, { text: string; color: string }> = {
-  pending: { text: '排队中', color: 'default' },
-  parsing: { text: '解析中', color: 'processing' },
-  embedding: { text: '向量化中', color: 'processing' },
-  ready: { text: '已就绪', color: 'success' },
-  failed: { text: '失败', color: 'error' },
-}
-
-// 文档版本状态（P0-8 重灌审计）：building→validated→active，被新版替换→retired，失败→failed
-const VERSION_STATUS_META: Record<string, { text: string; color: string }> = {
-  building: { text: '构建中', color: 'processing' },
-  validated: { text: '已校验', color: 'default' },
-  active: { text: '当前生效', color: 'success' },
-  failed: { text: '失败', color: 'error' },
-  retired: { text: '已退役', color: 'default' },
-}
-
-// 批量上传任务：每个文件一条独立进度（上传中/成功/失败），供进度面板展示
-interface UploadTask {
-  key: string
-  filename: string
-  pct: number // 0~100
-  status: 'uploading' | 'done' | 'error'
-  error?: string
-}
-
-// P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
-type DocType = 'textbook' | 'standard' | 'manual' | 'other'
-const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
-  { value: 'textbook', label: '教材' },
-  { value: 'standard', label: '规范' },
-  { value: 'manual', label: '手册' },
-  { value: 'other', label: '其他' },
-]
-
-// 单元 S：解析模式（上传时用户自选）。fast=快速（pipeline 老后端，快）/
-// high=高精度（hybrid-engine 新后端，公式/数字/符号/标题更准，慢约 40%）
-type ParseMode = 'fast' | 'high'
-const PARSE_MODE_OPTIONS: { value: ParseMode; label: string }[] = [
-  { value: 'fast', label: '快速' },
-  { value: 'high', label: '高精度' },
-]
-
-// 解析阶段 → 进度百分比（阶段标记，非精确进度）
-const STAGE_PCT: Record<string, number> = {
-  pending: 5,
-  parsing: 45,
-  embedding: 80,
-}
-
-function formatBytes(v: number): string {
-  return v > 1024 * 1024 ? `${(v / 1024 / 1024).toFixed(1)} MB` : `${(v / 1024).toFixed(0)} KB`
-}
-
-// 解析类型标签（PDF 区分 文本层 / OCR / 混合）
-function parseLabel(r: DocumentItem): { label: string; color: string } {
-  const q = r.quality
-  if (!q) return { label: '—', color: 'default' }
-  if (q.parser === 'pdf') {
-    const ocr = Number(q.ocr_pages) || 0
-    const text = Number(q.text_pages) || 0
-    if (ocr > 0 && text > 0) return { label: '文本+OCR', color: 'gold' }
-    if (ocr > 0) return { label: 'OCR 识别', color: 'orange' }
-    return { label: '文本层', color: 'green' }
-  }
-  return { label: String(q.parser ?? r.file_type).toUpperCase(), color: 'blue' }
-}
-
-// 解析质量 → 一行摘要（页数 / 段落 / 行数等）
-function parseSummary(r: DocumentItem): string[] {
-  const q = r.quality
-  if (!q) return []
-  const n = (k: string) => Number(q[k]) || 0
-  if (q.parser === 'pdf') {
-    const lines = [`共 ${r.page_count ?? q.pages ?? 0} 页`]
-    const text = n('text_pages')
-    const ocr = n('ocr_pages')
-    if (text > 0) lines.push(`文本层 ${text} 页`)
-    if (ocr > 0) {
-      lines.push(`OCR ${ocr} 页`)
-      if (q.mean_ocr_confidence != null) lines.push(`OCR 置信度 ${q.mean_ocr_confidence}`)
-    }
-    return lines
-  }
-  if (q.parser === 'docx') return [`段落 ${n('paragraphs')}`, `标题 ${n('headings')}`, `表格 ${n('tables')}`]
-  if (q.parser === 'excel') return [`工作表 ${n('sheets')}`, `${n('rows')} 行`]
-  if (q.parser === 'csv') return [`${n('rows')} 行`]
-  if (q.parser === 'markdown' || q.parser === 'text') return [`段落 ${n('paragraphs')}`, `片段 ${n('blocks')}`]
-  if (q.parser === 'mineru') return [`共 ${n('pages')} 页`, `元素 ${n('elements')}`, `片段 ${n('blocks')}`]
-  return [`片段 ${n('blocks')}`]
-}
-
-// 解析质量 → 详情键值对（文档详情弹窗 / 悬停明细）
-function qualityItems(q: Record<string, unknown>): { label: string; value: string }[] {
-  const out: { label: string; value: string }[] = []
-  const num = (k: string) => (q[k] != null ? String(q[k]) : '—')
-  const parser = String(q.parser ?? '')
-  if (parser === 'pdf') {
-    out.push({ label: '总页数', value: num('pages') })
-    out.push({ label: '文本层页数', value: num('text_pages') })
-    out.push({ label: 'OCR页数', value: num('ocr_pages') })
-    out.push({ label: '表格数', value: num('tables') })
-    out.push({ label: '内容片段', value: num('blocks') })
-    out.push({ label: '总字数', value: num('total_chars') })
-    out.push({ label: '乱码比例', value: num('garble_ratio') })
-    if (q.mean_ocr_confidence != null) out.push({ label: 'OCR平均置信度', value: num('mean_ocr_confidence') })
-    return out
-  }
-  if (parser === 'mineru') {
-    out.push({ label: '总页数', value: num('pages') })
-    out.push({ label: '内容元素', value: num('elements') })
-    out.push({ label: '内容片段', value: num('blocks') })
-    if (q.mineru_version != null && q.mineru_version !== 'unknown') out.push({ label: 'MinerU 版本', value: num('mineru_version') })
-    return out
-  }
-  if (parser === 'docx') {
-    out.push({ label: '段落', value: num('paragraphs') })
-    out.push({ label: '标题', value: num('headings') })
-    out.push({ label: '表格', value: num('tables') })
-    out.push({ label: '内容片段', value: num('blocks') })
-    return out
-  }
-  if (parser === 'markdown' || parser === 'text') {
-    out.push({ label: '段落', value: num('paragraphs') })
-    out.push({ label: '内容片段', value: num('blocks') })
-    return out
-  }
-  if (parser === 'excel') {
-    out.push({ label: '工作表', value: num('sheets') })
-    out.push({ label: '数据行', value: num('rows') })
-    out.push({ label: '内容片段', value: num('blocks') })
-    return out
-  }
-  if (parser === 'csv') {
-    out.push({ label: '数据行', value: num('rows') })
-    out.push({ label: '内容片段', value: num('blocks') })
-    return out
-  }
-  return out
-}
-
-function DocDetail({ doc }: { doc: DocumentItem }) {
-  const quality = doc.quality
-  // 版本历史：按创建时间倒序（最新在前），active 高亮，chunk 数与上一版对比
-  const versions = [...(doc.versions ?? [])].sort(
-    (a, b) => +dayjs(b.created_at) - +dayjs(a.created_at),
-  )
-  return (
-    <div>
-      <Descriptions column={1} size="small" bordered>
-        <Descriptions.Item label="文件名">{doc.filename}</Descriptions.Item>
-        <Descriptions.Item label="类型">{doc.file_type}</Descriptions.Item>
-        <Descriptions.Item label="解析模式">
-          {doc.parse_mode === 'high' ? '高精度（hybrid-engine）' : '快速（pipeline）'}
-        </Descriptions.Item>
-        <Descriptions.Item label="大小">{formatBytes(doc.file_size)}</Descriptions.Item>
-        <Descriptions.Item label="状态">{STATUS_META[doc.status]?.text ?? doc.status}</Descriptions.Item>
-        <Descriptions.Item label="总页数">{doc.page_count ?? '—'}</Descriptions.Item>
-        <Descriptions.Item label="内容片段">{doc.chunk_count}</Descriptions.Item>
-        <Descriptions.Item label="入库时间">{dayjs(doc.created_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
-        {doc.parsed_at && (
-          <Descriptions.Item label="解析完成">{dayjs(doc.parsed_at).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
-        )}
-        {quality &&
-          qualityItems(quality).map((it) => (
-            <Descriptions.Item key={it.label} label={it.label}>
-              {it.value}
-            </Descriptions.Item>
-          ))}
-        {doc.error_message && <Descriptions.Item label="错误信息">{doc.error_message}</Descriptions.Item>}
-      </Descriptions>
-
-      {/* 版本历史（重灌审计）：chunk 数变化 + 状态时间线 */}
-      {versions.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-            版本历史（{versions.length}）
-          </Typography.Text>
-          <Table
-            rowKey="id"
-            size="small"
-            pagination={false}
-            dataSource={versions}
-            columns={[
-              {
-                title: '状态',
-                dataIndex: 'status',
-                key: 'status',
-                width: 90,
-                render: (s: string) => {
-                  const m = VERSION_STATUS_META[s] || { text: s, color: 'default' }
-                  return <Tag color={m.color}>{m.text}</Tag>
-                },
-              },
-              {
-                title: '切片数',
-                dataIndex: 'chunk_count',
-                key: 'chunk_count',
-                width: 100,
-                render: (v: number, r: DocumentVersionItem, i: number) => {
-                  // 与下一版（更旧）对比切片数增减
-                  const prev = versions[i + 1]
-                  const delta = prev ? v - prev.chunk_count : null
-                  return (
-                    <Space size={4}>
-                      <span>{v}</span>
-                      {delta !== null && delta !== 0 && (
-                        <Typography.Text type={delta > 0 ? 'success' : 'danger'} style={{ fontSize: 11 }}>
-                          {delta > 0 ? '+' : ''}{delta}
-                        </Typography.Text>
-                      )}
-                    </Space>
-                  )
-                },
-              },
-              {
-                title: '创建时间',
-                dataIndex: 'created_at',
-                key: 'created_at',
-                width: 150,
-                render: (v: string) => dayjs(v).format('MM-DD HH:mm'),
-              },
-              {
-                title: '生效时间',
-                dataIndex: 'activated_at',
-                key: 'activated_at',
-                width: 150,
-                render: (v: string | null) => (v ? dayjs(v).format('MM-DD HH:mm') : '—'),
-              },
-              {
-                title: '退役时间',
-                dataIndex: 'retired_at',
-                key: 'retired_at',
-                width: 150,
-                render: (v: string | null) => (v ? dayjs(v).format('MM-DD HH:mm') : '—'),
-              },
-            ]}
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
-const ACCEPT = '.pdf,.docx,.md,.markdown,.txt,.xlsx,.csv'
+const DOCS_PAGE_SIZE = 20
 
 export default function KnowledgeBase() {
   const navigate = useNavigate()
@@ -303,34 +70,11 @@ export default function KnowledgeBase() {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // ---- 文档切片浏览 ----
-  const [chunkDocId, setChunkDocId] = useState<number | undefined>(undefined)
-  const [chunkPage, setChunkPage] = useState(1)
-  // 父子块分家显示：默认「子块」；父块（粗粒度、覆盖全书）单独一栏，避免平铺造成「重复切」假象
-  const [chunkView, setChunkView] = useState<'child' | 'parent' | 'all'>('child')
-  const chunkQuery = useQuery<{
-    total: number
-    parent_total: number
-    child_total: number
-    items: ChunkItem[]
-  }>({
-    queryKey: ['kb-chunks', activeKb, chunkDocId, chunkPage, chunkView],
-    queryFn: () =>
-      kbApi.chunks(activeKb!, {
-        page: chunkPage,
-        page_size: 20,
-        doc_id: chunkDocId,
-        kind: chunkView,
-      }),
-    enabled: !!activeKb,
-  })
-
   // ---- 知识库列表 ----
   const { data: kbs = [] } = useQuery<KnowledgeBase[]>({ queryKey: ['admin-kbs'], queryFn: kbApi.list })
 
   // ---- 文档列表（active kb），有任务未完成时轮询 ----
   const [docsPage, setDocsPage] = useState(1)
-  const DOCS_PAGE_SIZE = 20
   const hasActive = (docs: DocumentItem[]) =>
     docs.some((d) => ['pending', 'parsing', 'embedding'].includes(d.status))
   const docsQuery = useQuery<{ items: DocumentItem[]; total: number }>({
@@ -453,138 +197,25 @@ export default function KnowledgeBase() {
     }
   }
 
-  // ---- 检索预览 ----
-  const [searchQ, setSearchQ] = useState('')
-  const searchQuery = useQuery<{ hits: Citation[] }>({
-    queryKey: ['kb-search', activeKb, searchQ],
-    queryFn: () => kbApi.search({ q: searchQ, kb_id: activeKb ?? undefined, top_k: 5 }),
-    enabled: searchQ.trim().length > 0 && !!activeKb,
+  const columns = buildDocumentColumns({
+    onOpenDetail: setDetailDoc,
+    onReparse: reparse,
+    onDelete: deleteDoc,
   })
 
-  const columns = [
-    {
-      title: '文件',
-      dataIndex: 'filename',
-      key: 'filename',
-      ellipsis: true,
-      render: (v: string, r: DocumentItem) => (
-        <Space>
-          <FileOutlined style={{ color: '#1677ff' }} />
-          <a onClick={() => setDetailDoc(r)} title="查看解析详情">
-            {v}
-          </a>
-        </Space>
-      ),
-    },
-    { title: '类型', dataIndex: 'file_type', key: 'file_type', width: 80 },
-    {
-      title: '大小',
-      dataIndex: 'file_size',
-      key: 'file_size',
-      width: 90,
-      render: (v: number) => formatBytes(v),
-    },
-    {
-      title: '状态',
-      dataIndex: 'status',
-      key: 'status',
-      width: 140,
-      render: (s: string, r: DocumentItem) => {
-        const meta = STATUS_META[s] || { text: s, color: 'default' }
-        const pct = STAGE_PCT[s]
-        const ocr = r.progress
-        const ocrPct = ocr && ocr.total ? (ocr.percent ?? 0) : null
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-            <Tag color={meta.color}>{meta.text}</Tag>
-            {ocrPct != null ? (
-              <>
-                <Progress percent={ocrPct} size="small" strokeWidth={5} style={{ width: 90 }} />
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  OCR {ocr?.done ?? 0}/{ocr?.total ?? 0} 页
-                </Typography.Text>
-              </>
-            ) : pct != null ? (
-              <Progress percent={pct} showInfo={false} status="active" strokeWidth={4} style={{ width: 72 }} />
-            ) : null}
-          </div>
-        )
-      },
-    },
-    {
-      title: 'Chunks',
-      dataIndex: 'chunk_count',
-      key: 'chunk_count',
-      width: 80,
-      render: (v: number, r: DocumentItem) =>
-        r.status === 'failed' ? (
-          <Tooltip title={r.error_message}>
-            <Typography.Text type="danger" style={{ cursor: 'help' }}>失败</Typography.Text>
-          </Tooltip>
-        ) : (
-          v
-        ),
-    },
-    {
-      title: '解析模式',
-      dataIndex: 'parse_mode',
-      key: 'parse_mode',
-      width: 90,
-      render: (v: string) =>
-        v === 'high' ? (
-          <Tag color="purple">高精度</Tag>
-        ) : (
-          <Tag color="blue">快速</Tag>
-        ),
-    },
-    {
-      title: '解析质量',
-      dataIndex: 'quality',
-      key: 'quality',
-      width: 210,
-      render: (_: unknown, r: DocumentItem) => {
-        if (r.status === 'failed') return <Tag color="error">解析失败</Tag>
-        if (!r.quality) return <Typography.Text type="secondary">—</Typography.Text>
-        const { label, color } = parseLabel(r)
-        const lines = parseSummary(r)
-        return (
-          <Tooltip
-            title={
-              <div style={{ maxWidth: 260 }}>
-                {qualityItems(r.quality).map((it) => (
-                  <div key={it.label} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                    <span>{it.label}</span>
-                    <span style={{ color: '#d9d9d9' }}>{it.value}</span>
-                  </div>
-                ))}
-              </div>
-            }
-          >
-            <div>
-              <Tag color={color}>{label}</Tag>
-              <Typography.Text style={{ fontSize: 12, color: '#666', display: 'block' }}>{lines.join(' · ')}</Typography.Text>
-            </div>
-          </Tooltip>
-        )
-      },
-    },
-    { title: '上传时间', dataIndex: 'created_at', key: 'created_at', width: 110, render: (v: string) => dayjs(v).format('MM-DD HH:mm') },
-    {
-      title: '操作',
-      key: 'action',
-      width: 110,
-      render: (_: unknown, r: DocumentItem) => (
-        <Space>
-          <Tooltip title="重新入库">
-            <Button size="small" icon={<RedoOutlined />} onClick={() => reparse(r.id)} />
-          </Tooltip>
-          <Popconfirm title="删除该文档？" okText="删除" cancelText="取消" onConfirm={() => deleteDoc(r.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ]
+  const openCreateKb = () => {
+    setKbForm({ name: '', description: '', answer_style: 'standard' })
+    setKbModal({ open: true })
+  }
+
+  const openEditKb = (kb: KnowledgeBase) => {
+    setKbForm({
+      name: kb.name,
+      description: kb.description || '',
+      answer_style: kb.answer_style || 'standard',
+    })
+    setKbModal({ open: true, editing: kb })
+  }
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -612,73 +243,16 @@ export default function KnowledgeBase() {
       <Content style={{ padding: 24 }}>
         <div style={{ display: 'flex', gap: 16 }}>
           {/* 左：知识库列表 */}
-          <Card size="small" title="知识库" style={{ width: 280, flexShrink: 0 }} styles={{ body: { padding: 8 } }}>
-            <Space direction="vertical" style={{ width: '100%' }}>
-              <Button
-                type="primary"
-                block
-                icon={<PlusOutlined />}
-                onClick={() => {
-                  setKbForm({ name: '', description: '', answer_style: 'standard' })
-                  setKbModal({ open: true })
-                }}
-              >
-                新建知识库
-              </Button>
-              <List
-                dataSource={kbs}
-                style={{ maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' }}
-                renderItem={(kb) => (
-                  <div
-                    onClick={() => setActiveKb(kb.id)}
-                    style={{
-                      padding: '8px 10px',
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                      marginBottom: 4,
-                      background: activeKb === kb.id ? 'rgba(0, 198, 255, 0.16)' : 'transparent',
-                      border: activeKb === kb.id ? '1px solid rgba(0, 198, 255, 0.3)' : '1px solid transparent',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <Typography.Text ellipsis style={{ display: 'block', fontSize: 13 }}>{kb.name}</Typography.Text>
-                      <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                        {kb.doc_count} 文档 · {kb.chunk_count} chunks
-                      </Typography.Text>
-                    </div>
-                    <Space size={0}>
-                      <Tooltip title="编辑">
-                        <Button
-                          size="small"
-                          type="text"
-                          icon={<EditOutlined />}
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setKbForm({
-                              name: kb.name,
-                              description: kb.description || '',
-                              answer_style: kb.answer_style || 'standard',
-                            })
-                            setKbModal({ open: true, editing: kb })
-                          }}
-                        />
-                      </Tooltip>
-                      <Tooltip title="删除">
-                        <Popconfirm title="删除该知识库及其全部文档？" okText="删除" cancelText="取消" onConfirm={() => deleteKb(kb.id)}>
-                          <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} />
-                        </Popconfirm>
-                      </Tooltip>
-                    </Space>
-                  </div>
-                )}
-              />
-            </Space>
-          </Card>
+          <KbList
+            kbs={kbs}
+            activeKb={activeKb}
+            onSelect={setActiveKb}
+            onCreate={openCreateKb}
+            onEdit={openEditKb}
+            onDelete={deleteKb}
+          />
 
-          {/* 右：文档 + 检索预览 */}
+          {/* 右：文档 + 检索预览 + 切片 */}
           <Card
             size="small"
             style={{ flex: 1, minWidth: 0 }}
@@ -748,60 +322,11 @@ export default function KnowledgeBase() {
                     label: `文档 (${docsTotal})`,
                     children: (
                       <div>
-                        {/* 批量上传进度面板：逐个文件进度 + 成败状态，全部完成可收起 */}
-                        {uploadTasks.length > 0 && (
-                          <Card
-                            size="small"
-                            title={
-                              <Space>
-                                <span>上传进度</span>
-                                {uploading ? <Tag color="processing">上传中</Tag> : <Tag>已完成</Tag>}
-                              </Space>
-                            }
-                            extra={
-                              !uploading && (
-                                <Button size="small" type="text" onClick={() => setUploadTasks([])}>
-                                  清空
-                                </Button>
-                              )
-                            }
-                            style={{ marginBottom: 12, background: 'rgba(10, 17, 34, 0.4)' }}
-                          >
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                              {uploadTasks.map((t) => (
-                                <div key={t.key} style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                  <div style={{ width: 220, minWidth: 0 }}>
-                                    <Typography.Text
-                                      ellipsis
-                                      style={{ display: 'block', fontSize: 13 }}
-                                      title={t.filename}
-                                    >
-                                      {t.filename}
-                                    </Typography.Text>
-                                  </div>
-                                  <div style={{ flex: 1 }}>
-                                    {t.status === 'error' ? (
-                                      <Typography.Text type="danger" style={{ fontSize: 12 }}>
-                                        {t.error || '上传失败'}
-                                      </Typography.Text>
-                                    ) : (
-                                      <Progress
-                                        percent={t.pct}
-                                        size="small"
-                                        status={t.status === 'done' ? 'success' : 'active'}
-                                      />
-                                    )}
-                                  </div>
-                                  {t.status === 'error' ? (
-                                    <Tag color="error">失败</Tag>
-                                  ) : t.status === 'done' ? (
-                                    <Tag color="success">完成</Tag>
-                                  ) : null}
-                                </div>
-                              ))}
-                            </div>
-                          </Card>
-                        )}
+                        <UploadProgress
+                          tasks={uploadTasks}
+                          uploading={uploading}
+                          onClear={() => setUploadTasks([])}
+                        />
                         <Table
                           rowKey="id"
                           columns={columns}
@@ -823,123 +348,12 @@ export default function KnowledgeBase() {
                   {
                     key: 'search',
                     label: '检索预览',
-                    children: (
-                      <div style={{ maxWidth: 720 }}>
-                        <Space.Compact style={{ width: '100%', marginBottom: 16 }}>
-                          <Input
-                            value={searchQ}
-                            onChange={(e) => setSearchQ(e.target.value)}
-                            onPressEnter={() => searchQuery.refetch()}
-                            placeholder="输入关键词验证检索质量（如：明渠均匀流）"
-                          />
-                          <Button type="primary" icon={<SearchOutlined />} onClick={() => searchQuery.refetch()}>
-                            检索
-                          </Button>
-                        </Space.Compact>
-                        {searchQuery.data?.hits?.length ? (
-                          <List
-                            dataSource={searchQuery.data.hits}
-                            renderItem={(h) => (
-                              <List.Item>
-                                <div style={{ width: '100%' }}>
-                                  <Space wrap style={{ marginBottom: 4 }}>
-                                    <Tag color="blue">#{h.rank}</Tag>
-                                    <Typography.Text strong>{h.source}</Typography.Text>
-                                    {h.page && <Tag>第{h.page}页</Tag>}
-                                    <Tag>相关度 {h.score?.toFixed(3)}</Tag>
-                                  </Space>
-                                  {h.section && (
-                                    <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>
-                                      章节：{h.section}
-                                    </Typography.Paragraph>
-                                  )}
-                                  <div className="citation-snippet" style={{ marginTop: 4 }}>
-                                    {h.snippet}
-                                  </div>
-                                </div>
-                              </List.Item>
-                            )}
-                          />
-                        ) : searchQ ? (
-                          <Empty description="无检索结果" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                        ) : (
-                          <Typography.Text type="secondary">输入关键词进行检索验证</Typography.Text>
-                        )}
-                      </div>
-                    ),
+                    children: <SearchPreview kbId={activeKb} />,
                   },
                   {
                     key: 'chunks',
                     label: '文档切片',
-                    children: (
-                      <div>
-                        <Space style={{ marginBottom: 12 }} wrap>
-                          <Select
-                            allowClear
-                            placeholder="按文档筛选"
-                            style={{ width: 320 }}
-                            value={chunkDocId}
-                            onChange={(v) => {
-                              setChunkDocId(v)
-                              setChunkPage(1)
-                            }}
-                            options={allDocs.map((d) => ({ value: d.id, label: d.filename }))}
-                          />
-                          <Select
-                            value={chunkView}
-                            style={{ width: 140 }}
-                            onChange={(v) => {
-                              setChunkView(v)
-                              setChunkPage(1)
-                            }}
-                            options={[
-                              { value: 'child', label: '子块（精确检索）' },
-                              { value: 'parent', label: '父块（长上下文）' },
-                              { value: 'all', label: '全部（不分家）' },
-                            ]}
-                          />
-                          <Typography.Text type="secondary">
-                            父块 {chunkQuery.data?.parent_total ?? 0} · 子块{' '}
-                            {chunkQuery.data?.child_total ?? 0}（当前显示 {chunkQuery.data?.total ?? 0}）
-                          </Typography.Text>
-                        </Space>
-                        {chunkQuery.data?.items?.length ? (
-                          <List
-                            dataSource={chunkQuery.data.items}
-                            pagination={{
-                              current: chunkPage,
-                              pageSize: 20,
-                              total: chunkQuery.data.total,
-                              showSizeChanger: false,
-                              onChange: setChunkPage,
-                            }}
-                            renderItem={(c) => (
-                              <List.Item>
-                                <div style={{ width: '100%' }}>
-                                  <Space wrap style={{ marginBottom: 4 }}>
-                                    <Tag>#{c.chunk_index}</Tag>
-                                    {c.block_type === 'parent' && <Tag color="gold">父块</Tag>}
-                                    {c.block_type && c.block_type !== 'parent' && (
-                                      <Tag>{c.block_type}</Tag>
-                                    )}
-                                    {c.page != null && <Tag>第{c.page}页</Tag>}
-                                    {c.section && <Tag color="blue">{c.section}</Tag>}
-                                  </Space>
-                                  <div className="citation-snippet" style={{ fontSize: 13 }}>
-                                    {c.content}
-                                  </div>
-                                </div>
-                              </List.Item>
-                            )}
-                          />
-                        ) : chunkQuery.isFetched ? (
-                          <Empty
-                            description="无切片（文档可能仍在解析中）"
-                            image={Empty.PRESENTED_IMAGE_SIMPLE}
-                          />
-                        ) : null}
-                      </div>
-                    ),
+                    children: <ChunkBrowser kbId={activeKb} allDocs={allDocs} />,
                   },
                 ]}
               />
