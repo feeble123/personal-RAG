@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.db.session import async_session_factory, init_db
+from app.db.session import async_session_factory, create_all_tables
 from app.services import semantic_cache
 from app.services.vecmath import cosine as _cosine
 
@@ -50,7 +50,7 @@ class TestCacheScopeIsolation:
 
     @pytest.fixture(autouse=True)
     async def _clean(self):
-        await init_db()  # 测试库建表（含语义缓存迁移列）
+        await create_all_tables()  # 测试库建表（含语义缓存迁移列）
         await semantic_cache.clear_cache()
         yield
         await semantic_cache.clear_cache()

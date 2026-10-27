@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.ratelimit import limiter
-from app.db.session import async_session_factory, ensure_db_at_head, init_db
+from app.db.session import async_session_factory, ensure_db_at_head
 
 logger = logging.getLogger("app")
 
@@ -92,9 +92,8 @@ async def lifespan(app: FastAPI):
     from app.services import vector_store
 
     vector_store.gc_orphan_hnsw_dirs()
-    # 建表 + 种子 + 预热 + 清空语义缓存（防旧检索答案残留劫持新检索）
-    await init_db()
-    # P0-6：检查迁移版本是否 head（只检查不自动迁移）；P2 单元1 异步化（PG 兼容）
+    # 种子 + 预热 + 清空语义缓存（防旧检索答案残留劫持新检索）
+    # G5-3：建表职责统一走 Alembic（生产先 `alembic upgrade head`），启动仅检查迁移版本
     await ensure_db_at_head()
     await _seed_admin()
     await _warmup_bm25()

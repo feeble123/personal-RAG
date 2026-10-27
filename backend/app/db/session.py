@@ -66,11 +66,12 @@ async def get_db() -> AsyncIterator[AsyncSession]:
             raise
 
 
-async def init_db() -> None:
-    """建表（幂等）。仅用于开发/测试快速建表；生产 schema 变更走 Alembic（`alembic upgrade head`）。
+async def create_all_tables() -> None:
+    """建表（幂等，create_all 只建缺失的表、不补列）。**仅测试/离线脚本用**。
 
-    create_all 只创建缺失的表、不补已有表的列——旧库升级请先 `alembic stamp head`（P0-6）。
-    原启动时手写 17 条 ALTER 已移除，职责移交 Alembic（见 alembic/versions/*）。
+    生产 schema 变更统一走 Alembic（`alembic upgrade head`）；create_all 与 Alembic
+    双轨并存会导致表结构漂移（见 G5-3）。测试建表（临时 SQLite）用本函数，
+    生产启动用 ensure_db_at_head() 检查迁移版本。
     """
     from app.db import models  # noqa: F401  确保模型注册
     from app.db.base import Base
@@ -78,6 +79,16 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ensured.")
+
+
+async def init_db() -> None:
+    """启动时确保数据库 schema 就绪（G5-3：不再 create_all，仅检查迁移版本 + 提示）。
+
+    生产/开发统一走 Alembic 迁移；本函数只调用 ensure_db_at_head() 检查并提示，
+    避免 create_all 与 Alembic 双轨并存导致表结构漂移。旧调用方（测试/脚本）应改用
+    create_all_tables()（测试建临时表）或 ensure_db_at_head()（检查迁移版本）。
+    """
+    await ensure_db_at_head()
 
 
 async def ensure_db_at_head() -> None:

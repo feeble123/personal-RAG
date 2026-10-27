@@ -40,7 +40,18 @@ _user_counter = {"n": 0}
 
 
 @pytest_asyncio.fixture(scope="session")
-async def client():
+async def _ensure_test_tables():
+    """测试建表（G5-3）：生产 schema 走 Alembic，测试临时 SQLite 用 create_all。
+
+    必须在 app lifespan 启动（_seed_admin 需表存在）之前完成。
+    """
+    from app.db.session import create_all_tables
+
+    await create_all_tables()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def client(_ensure_test_tables):
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as c:

@@ -33,11 +33,11 @@ def main() -> None:
 
     from app.core.config import settings
     from app.db.models import Document, KnowledgeBase
-    from app.db.session import async_session_factory, init_db
+    from app.db.session import async_session_factory, ensure_db_at_head
     from app.modules.ingestion import manager as ingestion
 
     async def run() -> None:
-        await init_db()
+        await ensure_db_at_head()
         settings.upload_dir_path.mkdir(parents=True, exist_ok=True)
         async with async_session_factory() as db:
             kb = await db.scalar(select(KnowledgeBase).where(KnowledgeBase.name == kb_name))

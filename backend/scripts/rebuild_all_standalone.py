@@ -25,10 +25,10 @@ async def main() -> None:
 
     from app.core.config import settings
     from app.db.models import Document
-    from app.db.session import async_session_factory, init_db
+    from app.db.session import async_session_factory, ensure_db_at_head
     from app.modules.ingestion import manager as ingestion
 
-    await init_db()
+    await ensure_db_at_head()
     settings.upload_dir_path.mkdir(parents=True, exist_ok=True)
     async with async_session_factory() as db:
         ids = list((await db.scalars(select(Document.id))).all())

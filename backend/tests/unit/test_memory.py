@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import delete, func, select
 
 from app.db.models import QaMemory
-from app.db.session import async_session_factory, init_db
+from app.db.session import async_session_factory, create_all_tables
 from app.services import memory
 from app.services.memory import MemoryConfig
 from app.services.vecmath import cosine as _cosine
@@ -58,7 +58,7 @@ class TestMemoryRecall:
 
     @pytest.fixture(autouse=True)
     async def _clean(self):
-        await init_db()
+        await create_all_tables()
         async with async_session_factory() as db:
             await db.execute(delete(QaMemory))
             await db.commit()
@@ -137,7 +137,7 @@ class TestMemoryRemember:
 
     @pytest.fixture(autouse=True)
     async def _clean(self):
-        await init_db()
+        await create_all_tables()
         async with async_session_factory() as db:
             await db.execute(delete(QaMemory))
             await db.commit()

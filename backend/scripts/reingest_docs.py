@@ -22,14 +22,14 @@ async def main() -> None:
     from sqlalchemy import select
 
     from app.db.models import Document
-    from app.db.session import async_session_factory, init_db
+    from app.db.session import async_session_factory, ensure_db_at_head
     from app.modules.ingestion import manager as ingestion
 
     ids = [int(a) for a in sys.argv[1:]]
     if not ids:
         print("用法: python scripts/reingest_docs.py <doc_id> [...]")
         return
-    await init_db()
+    await ensure_db_at_head()
     async with async_session_factory() as db:
         names = {
             d.id: d.filename
