@@ -98,3 +98,29 @@ def table_query_kind(query: str) -> str | None:
 def is_table_query(query: str) -> bool:
     """判断问题是否「读表」式（计数 / 枚举 / 查值）。等价于 table_query_kind(q) is not None。"""
     return table_query_kind(query) is not None
+
+
+# ---- 知识库元信息问句（G7）----
+# 用户在问「库里收录了哪些文件/文档/规范」，不是问某条规范的内容。
+# 关键区别：必须同时出现「查询动作词」+「载体词（文件/文档/规范/标准/书）」。
+# 只出现「有哪些/包括哪些」而无载体词（如「明渠均匀流有哪些形成条件」）不算。
+_CATALOG_RE = re.compile(
+    r"(?:知识库|资料库|数据库|你|系统).{0,12}(?:有哪些|有什么|包含|包括|收录|拥有|存了|放了|都有|收了).{0,12}"
+    r"(?:文件|文档|资料|规范|标准|书籍|书|知识)"
+    r"|(?:有哪些|什么|哪些).{0,8}(?:文件|文档|资料)"
+    r"|(?:文件|文档)\s*(?:清单|列表|目录)"
+    r"|(?:列出|罗列).{0,10}(?:文件|文档)"
+)
+
+
+def is_catalog_query(query: str) -> bool:
+    """判断问题是否在问「知识库收录了哪些文件」。
+
+    命中后应直接查文档表返回清单，而不是走向量检索——否则会捞回一堆条文片段，
+    LLM 只能回答「参考资料仅覆盖……」，答非所问（用户实测问题）。
+    """
+    q = query.strip()
+    if not q:
+        return False
+    return bool(_CATALOG_RE.search(q))
+    return table_query_kind(query) is not None

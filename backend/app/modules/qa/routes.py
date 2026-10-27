@@ -31,11 +31,12 @@ from app.db.session import async_session_factory
 from app.modules.conversations.routes import get_owned_conversation
 from app.modules.conversations.schemas import ChatIn
 from app.schemas import CitationOut
-from app.services import intent, memory, query_rewrite, rag, semantic_cache, verify
+from app.services import catalog, intent, memory, query_rewrite, rag, semantic_cache, verify
 from app.services.chat import (
     ANSWER_STYLES,
     DEFAULT_STYLE,
     STYLE_CONFIG,
+    build_catalog_prompt,
     build_chat_model,
     build_prompt,
     resolve_answer_style,
@@ -194,6 +195,57 @@ async def chat(
                 style_cfg = STYLE_CONFIG.get(style, STYLE_CONFIG[DEFAULT_STYLE])
                 cacheable = bool(style_cfg["cacheable"])
                 style_temp = float(style_cfg["temperature"])
+
+                # G7：知识库元信息问题（「你拥有哪些知识文件？」）→ 直接查文档表，
+                # 不走记忆/缓存/向量检索。否则会捞回一堆条文片段，模型只能答
+                # 「参考资料仅覆盖……」，答非所问。清单不写语义缓存（文件会变）。
+                if intent.is_catalog_query(body.content):
+                    _chat_result = "catalog"
+                    catalog_data = await catalog.load_catalog(sdb, body.kb_id)
+                    catalog_text = catalog.format_catalog(catalog_data)
+                    history = await _load_history(sdb, conv.id, settings.history_turns)
+                    llm = build_chat_model(style_temp)
+                    messages = build_catalog_prompt(
+                        body.content, catalog_text, history, style=style
+                    )
+                    # 清单不是原文引用，不返回 citations（前端来源清单为空）
+                    yield _sse({"event": "citations", "data": []})
+                    buffer = ""
+                    usage_in = usage_out = None
+                    async for chunk in llm.astream(messages):
+                        text = chunk.content
+                        if isinstance(text, list):
+                            text = "".join(x.get("text", "") for x in text if isinstance(x, dict))
+                        if not text:
+                            continue
+                        buffer += text
+                        usage = getattr(chunk, "usage_metadata", None)
+                        if usage:
+                            usage_in = usage.get("input_tokens") or usage_in
+                            usage_out = usage.get("output_tokens") or usage_out
+                        yield _sse({"event": "delta", "data": text})
+                    async with async_session_factory() as ss:
+                        asst = Message(
+                            conversation_id=conv.id,
+                            role="assistant",
+                            content=buffer,
+                            is_complete=True,
+                            from_memory=False,
+                            kb_id=body.kb_id,
+                            doc_scope=None,
+                            style=style,
+                            usage_input_tokens=usage_in,
+                            usage_output_tokens=usage_out,
+                        )
+                        ss.add(asst)
+                        conv2 = await ss.get(Conversation, conv.id)
+                        if conv2:
+                            conv2.last_message_at = _now()
+                        await ss.commit()
+                        asst_id = asst.id
+                    yield _sse({"event": "done", "data": {"message_id": asst_id}})
+                    return
+
                 # 3) 问答记忆（用户背书，先于检索）：命中即秒回，不浪费检索
                 #    good → 直接复用记忆答案；bad → 强制跳过语义缓存重新检索
                 subject = rag.focus_rerank_query(body.content)

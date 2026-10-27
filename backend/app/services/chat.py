@@ -246,3 +246,36 @@ def build_prompt(
             messages.append((role, text[:1000]))
     messages.append(("human", "\n\n".join(parts)))
     return messages
+
+
+def build_catalog_prompt(
+    query: str,
+    catalog_text: str,
+    history: list[tuple[str, str]] | None = None,
+    style: str = DEFAULT_STYLE,
+) -> list[tuple[str, str]]:
+    """知识库文件清单专用 prompt（G7）。
+
+    与 build_prompt 的区别：这里没有「检索片段」，只有文档表清单。
+    必须明确告诉模型这是「库内文件清单」而非「参考资料片段」，
+    否则模型会沿用 RAG 话术回答「参考资料仅覆盖……」——用户实测的答非所问。
+    """
+    style_block = ANSWER_STYLES.get(style, ANSWER_STYLES[DEFAULT_STYLE])
+    task_hint = (
+        "【任务类型】用户在询问知识库收录了哪些文件/文档，不是在查具体条文。\n"
+        "请直接依据下方【知识库文件清单】用自然语言如实介绍；"
+        "不要声称「只能看到参考资料」或「资料未覆盖」；"
+        "不要编造清单之外的文件；清单为空就如实说暂无文档。"
+    )
+    parts = [
+        "【知识库文件清单】",
+        catalog_text,
+        f"【当前问题】\n{query}",
+    ]
+    system = BASE_PROMPT + "\n\n" + style_block + "\n\n" + task_hint
+    messages: list[tuple[str, str]] = [("system", system)]
+    if history:
+        for role, text in history:
+            messages.append((role, text[:1000]))
+    messages.append(("human", "\n\n".join(parts)))
+    return messages
