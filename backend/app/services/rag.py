@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.metrics import metrics
-from app.db.models import Chunk, Document, IndexVersion, KnowledgeBase
+from app.db.models import Chunk, Document
 from app.schemas import CitationOut
 from app.services import bm25, vecmath, vector_store
 from app.services.embedding import embed_query
@@ -28,400 +28,29 @@ from app.services.query_expand import expand_query
 
 logger = logging.getLogger(__name__)
 
-# G4：rerank 复用连接池。每次问答最多 3 次 rerank 调用，若每次新建 AsyncClient
-# 就要重复 3 次 TCP+TLS 握手（数百 ms）。单例客户端复用连接，显著降首 token 延迟。
-_rerank_client: "httpx.AsyncClient | None" = None
-
-
-async def _active_version_ids(
-    db: AsyncSession, kb_id: int | None = None, doc_ids: list[int] | None = None
-) -> set[int]:
-    """当前 active 的文档版本 id 集合（检索 DB 直接查询时过滤 retired 用）。
-
-    P0-8：DB 同时存 active + retired 版本的 chunks；向量/BM25 索引只含 active，
-    但**直接查 DB** 的路径（doc_chunk_ids 解析、章节/枚举扩展、整文档补全）必须
-    显式过滤 retired，否则会把不可查的旧版切片混进证据。
-    """
-    stmt = select(Document.active_version_id).where(Document.active_version_id.is_not(None))
-    if kb_id is not None:
-        stmt = stmt.where(Document.kb_id == kb_id)
-    if doc_ids:
-        stmt = stmt.where(Document.id.in_(doc_ids))
-    rows = (await db.execute(stmt)).all()
-    return {r[0] for r in rows}
-
-
-async def _active_collection_names(
-    db: AsyncSession, kb_id: int | None = None
-) -> list[str]:
-    """当前 active 索引版本对应的 Chroma collection 名列表。
-
-    P1-1/P1-2 软切换：检索不再读单一 collection，而是按 kb 的
-    active_index_version_id → IndexVersion.physical_name 路由到对应 collection。
-    kb_id 给定 → 该库一个名字；kb_id=None → 所有库的 active collection 名（跨库检索）。
-    指针为 NULL（无索引）的库跳过。
-    """
-    stmt = (
-        select(IndexVersion.physical_name)
-        .join(KnowledgeBase, KnowledgeBase.active_index_version_id == IndexVersion.id)
-    )
-    if kb_id is not None:
-        stmt = stmt.where(KnowledgeBase.id == kb_id)
-    rows = (await db.execute(stmt)).scalars().all()
-    return [r for r in rows if r]
-
-
-# 中文问句的提问词（用于提取 rerank 核心主题词）
-# 单元 C 方向1：补「是多少」「分为」「有几级/几种/几类」等此前未识别的问法——
-# 否则整句原样拿去 rerank，被「哪几个」「是多少」等噪声稀释（实测「预警信息分为哪几个等级」
-# 整句 0.046，聚焦「预警信息」后可命中「3.4 预警分级」）。
-_QUESTION_PATTERN = re.compile(
-    r"(.{2,30}?)(?:是什么|是多少|有哪些|有几级|有几种|有几类|分为|有什么要求|有什么规定|"
-    r"有何要求|包括哪些|包含哪些|指什么|是什么样的|如何)"
+# G6-2：作用域/聚焦词/文档名/章节/扩展已拆到 retrieval/ 子包。
+# 这里 re-export 保持既有调用方（含测试）的 import 路径不变。
+from app.services.retrieval.doc_scope import (  # noqa: F401
+    doc_name_candidates as _doc_name_candidates,
+    match_document as _match_document,
+    resolve_documents_by_title,
 )
-_QUESTION_PRE = re.compile(r"^(请问|你好|帮我|我想知道|麻烦问下|想了解下|麻烦查下)+")
-# 泛词：切分后跳过（如「关于公式的要求」不能取末尾的「要求」）
-# 单元 C 方向1：补入「关系词」——「X的定义/依据/步骤/数量/等级」的 X 才是检索核心，
-# 单独取「定义/依据/构建」当聚焦词是噪声（实测「水力半径的定义」只剩「定义」→ 搜不到「水力半径」）。
-# 这类词作为「X的{词}」末尾时跳过，从后往前取到真正主体 X。
-_GENERIC_WORDS = {
-    "要求", "规定", "内容", "情况", "方法", "原则", "事项", "问题", "标准", "条款", "方面", "部分",
-    "定义", "依据", "步骤", "目的", "意义", "作用", "职责", "原理", "数量", "等级", "类别", "计算", "构建",
-}
-# 泛词前的修饰前缀：「具体要求」「主要规定」仍是泛词，须跳过（否则「组织指挥体系的具体要求」
-# 会取「具体要求」当主题词，rerank 全排成噪声；「引用标准」的「引用」不是修饰词，不受影响）
-_GENERIC_MODIFIERS = ("具体", "主要", "基本", "相关", "一般", "重要", "相应", "有关", "详细")
-# 动词前缀（「引用标准的编写要求」里「编写要求」是追问内容，主体是「引用标准」，
-# 不能取「编写要求」当主题词——否则 reranker 搜不到「3.2 引用标准」章节）。
-_GENERIC_VERB_PREFIX = ("编写", "编制")
-
-
-def _is_generic_part(part: str) -> bool:
-    """段是否为泛词：精确匹配，或「修饰词/动词+泛词」（具体/主要/基本…要求/规定…，
-    编写/编制…要求/格式…）。「编写要求」是追问内容，应跳过取前面的主体词。"""
-    if part in _GENERIC_WORDS:
-        return True
-    prefix = rf"^(?:{'|'.join(_GENERIC_MODIFIERS + _GENERIC_VERB_PREFIX)})"
-    base = re.sub(prefix, "", part)
-    return base in _GENERIC_WORDS
-
-
-def focus_rerank_query(query: str) -> str:
-    """提取 rerank 用核心主题词；提取失败/不聚焦时回退原查询。
-
-    BGE 系列模型对长查询会稀释关键项（实测：完整长问题下 reranker 把「前言列出的
-    引用标准清单」排到「3.2 引用标准规则节」之前；聚焦「引用标准」后规则节 0.98+）。
-    仅用于 rerank 打分；向量/BM25 召回仍用原查询（保证候选池不变）。
-    """
-    s = query.strip().strip("？?。！!，,；; \t")
-    s = _QUESTION_PRE.sub("", s)
-    m = _QUESTION_PATTERN.search(s)
-    if not m:
-        return query
-    raw = m.group(1)
-    # 按「的/中/关于/对于/、/和」切段，从后往前找第一个非泛词段。
-    # 例「…中规定的关于公式的要求」→ 切出 […, 规定, 关于公式, 要求] → 取「关于公式」→ 去「关于」→「公式」。
-    # 不能直接取最后一段：会拿到「要求」这类泛词（实测 rerank 用「要求」全排成噪声）。
-    parts = [p.strip() for p in re.split(r"(?:的|中|关于|对于|、|及|和|与|，)", raw) if p.strip()]
-    subj = None
-    for p in reversed(parts):
-        p2 = re.sub(r"^(?:关于|对于|对)", "", p).strip()
-        if p2 and not _is_generic_part(p2):
-            subj = p2
-            break
-    if not subj or len(subj) < 2:
-        return query
-    # 提取的仍很长（含文档标题等）→ 保持原查询
-    if len(subj) * 2 > len(query) and len(query) > 10:
-        return query
-    # 等级量词信号：问「分几级/有几级」时，答案通常落在「XX分级」章节（如 4.1 响应分级、
-    # 3.4 预警分级）。focus 只留主体词会丢量词，reranker 排不到「分级」块，反被「响应措施」
-    # 等长块压过。subj 不含「级」时追加「分级」补回信号（只加词不改词）。
-    # 放在「太长回退」守卫之后，避免追加后变长误触发回退。
-    if re.search(r"分几级|有几级|分为几级|几级|分级|等级", s) and "级" not in subj:
-        subj = f"{subj} 分级"
-    return subj
-
-
-# ---- 问题中「点名文档」→ 检索限定（BUG-A）----
-# 《书名号》引用；「XXX中」引用（XXX 在「中」前，如「重庆市防汛抗旱应急预案中后期处置…」）
-_DOC_TITLE_RE = re.compile(r"《([^《》]{2,80})》")
-# 文档泛指词：中分句里若是这类泛词（规范/标准/预案…）不当作点名文档
-_DOC_GENERIC = {"规范", "标准", "预案", "文件", "文档", "规定", "指南", "导则", "资料", "制度", "办法", "规程", "要求", "内容"}
-_DOC_EXT = (".pdf", ".docx", ".md", ".markdown", ".txt", ".xlsx", ".csv")
-
-
-def _strip_ext(name: str) -> str:
-    for ext in _DOC_EXT:
-        if name.lower().endswith(ext):
-            return name[: -len(ext)]
-    return name
-
-
-def _doc_name_candidates(query: str) -> list[str]:
-    """提取问题中点名的文档名候选：《…》内容 + 「XXX中」的 XXX（去在/关于前缀）。"""
-    cands: list[str] = []
-    for t in _DOC_TITLE_RE.findall(query):
-        cands.append(t.strip())
-    for seg in query.split("中"):
-        s = re.sub(r"^(在|关于|对于|就)\s*", "", seg.strip())
-        s = s.replace("《", "").replace("》", "")
-        if 2 <= len(s) <= 40 and s not in _DOC_GENERIC:
-            cands.append(s)
-    return cands
-
-
-def _match_document(docs, cand: str):
-    """候选名匹配文档：精确优先；子串匹配要求「长短比 ≥ 0.4」防泛词误中（如「预案」命中整份预案名）。"""
-    exact = [d for d in docs if _strip_ext(d.filename) == cand]
-    if exact:
-        return exact[0]
-    best, best_ratio = None, 0.0
-    for d in docs:
-        fn = _strip_ext(d.filename)
-        if cand in fn or fn in cand:
-            short, long = min(len(cand), len(fn)), max(len(cand), len(fn))
-            ratio = short / long if long else 0.0
-            if ratio >= 0.4 and ratio > best_ratio:
-                best, best_ratio = d, ratio
-    return best
-
-
-async def resolve_documents_by_title(
-    db: AsyncSession, query: str, kb_id: int | None = None
-) -> list[int]:
-    """从问题中提取书名/文档名（《…》或「XXX中」），匹配知识库文档，返回 doc_id 列表。
-
-    kb_id 非空时只匹配该库文档（P0-2 scope 隔离：KB-A 里点名 KB-B 的同名文档 → 返回空，
-    检索回退当前库，杜绝跨库污染）。kb_id=None（跨全部库模式）匹配全库。
-    匹配不到（宽泛问法如「在数字孪生工程中…」、泛词如「标准中规定…」）返回空列表，
-    检索回退跨库。支持多书名（对比两份规范 → 返回多个 doc_id）。
-    """
-    from app.db.models import Document
-
-    stmt = select(Document)
-    if kb_id is not None:
-        stmt = stmt.where(Document.kb_id == kb_id)
-    docs = (await db.scalars(stmt)).all()
-    if not docs:
-        return []
-    result: list[int] = []
-    for cand in _doc_name_candidates(query):
-        best = _match_document(docs, cand)
-        if best and best.id not in result:
-            result.append(best.id)
-    return result
-
-
-def _section_no(comp: str) -> str:
-    """去掉章节组件里的编号前缀：「5 应急保障」→「应急保障」，「3.2 引用标准」→「引用标准」。"""
-    return re.sub(r"^[\d.]+\.?\s*", "", comp)
-
-
-def _match_section_component(focused: str, section: str | None) -> str | None:
-    """在 top1 的章节路径里找与聚焦主题词匹配的组件（越深越具体）。
-
-    例：聚焦「应急保障」+ 路径「5 应急保障 / 5.1 制度保障」→「5 应急保障」（整章范围）；
-        聚焦「引用标准」+ 路径「3 正文部分 / 3.2 引用标准」→「3.2 引用标准」（窄组件，不扩全章）。
-    """
-    if not focused or not section:
-        return None
-    best: str | None = None
-    best_depth = -1
-    for i, comp in enumerate(p.strip() for p in section.split("/")):
-        if not comp:
-            continue
-        if focused in _section_no(comp) or _section_no(comp) in focused:
-            if i > best_depth:
-                best, best_depth = comp, i
-    return best
-
-
-def _under_component(sec: str | None, comp: str) -> bool:
-    """章节路径是否「直接归属」指定组件（组件级匹配，防「5 应急保障」误中「15 应急保障」；
-    且组件之后不再嵌套更深「附件N」——避免把嵌套的附件5 等子列表混入当前列表，造成来源混乱）。"""
-    if not sec:
-        return False
-    parts = [p.strip() for p in sec.split("/") if p.strip()]
-    idx = -1
-    for j, p in enumerate(parts):
-        if p == comp or p.startswith(comp):
-            idx = j
-            break
-    if idx < 0:
-        return False
-    for p in parts[idx + 1:]:
-        if re.match(r"附件\d", p):
-            return False
-    return True
-
-
-# 枚举/概述类问题检测（跨库通用问句，不依赖知识库内容：台账/名单/章节等任何结构都适用）
-_ENUMERATION_RE = re.compile(
-    r"有哪些|包含哪些|包括哪些|都有哪些|哪几个|哪几类|哪几级|哪几种|多少|所有|全部|完整|完整的|列出来|列出|"
-    r"概述|介绍|一览|全貌|总结|汇总|清单|一览表|都要|都有|还有|其他|其余|别的"
+from app.services.retrieval.expand import (  # noqa: F401
+    expand_chapter_sections as _expand_chapter_sections,
+    expand_enumeration_sections as _expand_enumeration_sections,
 )
-
-
-async def _expand_enumeration_sections(
-    db: AsyncSession,
-    query: str,
-    cand_sorted: list[tuple[int, float]],
-    section_by_id: dict[int, str | None],
-    top_k: int,
-    kb_id: int | None = None,
-    candidates_full: dict[int, float] | None = None,
-) -> list[tuple[int, float]] | None:
-    """枚举/概述类问题的证据完备检索：纳入查询最可能指向的章节单元的**全部切片**。
-
-    取代按内容关键词（台账/名单）猜列表的正则补丁，纯结构判定，对任何知识库通用：
-    - 看 top-K 候选切片归属哪些「章节单元」（完整章节路径），取出现最多者
-      ——「这个问题最关心哪个章节」由检索结果投票，不依赖章节叫什么名；
-    - 平局时选库里切片数多的章节（更可能是清单/台账类大单元）。
-    再从 DB 拉该章节全部切片（直接归属、排除嵌套附件），保证枚举类回答不遗漏任何成员。
-    扩展上限 complete_expansion_cap（默认 40）。
-    """
-    if not cand_sorted:
-        return None
-    if not _ENUMERATION_RE.search(query):
-        return None
-    # P0-2 scope 隔离：扩展只在本库内拉取（kb_id=None 跨全部库时不过滤）
-    kb_cond = Chunk.kb_id == kb_id if kb_id is not None else None
-    # P0-8 active 过滤：DB 同时存 active+retired 版本，扩展只拉 active 版本切片
-    active_ids = await _active_version_ids(db, kb_id=kb_id)
-    # 取候选集：优先 rerank 排序后的候选（cand_sorted 已是 [(cid, rerank_score)] 降序）——
-    # rerank 认得正确答案，比融合分投票准。融合分对「数据底板/预警分级/技术保障」等词
-    # 区分度差，会把隔壁章（如「5 系统体系架构」「1 总则」）误选成 best_unit。
-    # 仅当主流程没产出 rerank 排序结果时才回退融合分（candidates_full）。
-    if cand_sorted:
-        ranked_pool = list(cand_sorted)[:200]
-    elif candidates_full:
-        ranked_pool = sorted(candidates_full.items(), key=lambda x: x[1], reverse=True)[:200]
-    else:
-        return None
-    if not ranked_pool:
-        return None
-    # 补齐章节信息（候选可能超出 top-100 的 section_by_id 范围）
-    sec_map: dict[int, str | None] = dict(section_by_id)
-    missing = [cid for cid, _ in ranked_pool if cid not in sec_map]
-    if missing:
-        stmt = select(Chunk.id, Chunk.section).where(Chunk.id.in_(missing))
-        if kb_cond is not None:
-            stmt = stmt.where(kb_cond)
-        if active_ids:
-            stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
-        rows = (await db.execute(stmt)).all()
-        sec_map.update({cid: sec for cid, sec in rows})
-    # 全量章节-切片结构表（统计章节大小 + 拉取全量用）；只含 active 版本
-    all_stmt = select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
-    if kb_cond is not None:
-        all_stmt = all_stmt.where(kb_cond)
-    if active_ids:
-        all_stmt = all_stmt.where(Chunk.document_version_id.in_(active_ids))
-    all_chunks = (await db.execute(all_stmt)).all()
-    # 章节单元：按「章前缀」（section 首段）聚合——OCR 噪声子节分散不影响判定。
-    # 例：`4 流动阻力与水头损失 / 将J=气代入上式` → `4 流动阻力与水头损失`。
-    def _chapter_of(sec: str) -> str:
-        parts = [p.strip() for p in sec.split("/") if p.strip()]
-        return parts[0] if parts else sec
-
-    size_by_sec: dict[str, int] = {}
-    chapter_sizes: dict[str, int] = {}
-    for c, _ in all_chunks:
-        if not c.section:
-            continue
-        ch = _chapter_of(c.section)
-        chapter_sizes[ch] = chapter_sizes.get(ch, 0) + 1
-    # 候选归属的章节，取其章前缀的大小（容忍子节分散）
-    for sec in {s for s in sec_map.values() if s}:
-        size_by_sec[sec] = chapter_sizes.get(_chapter_of(sec), 0)
-    # P1-9 章节相关性：RRF 融合后分数尺度接近，纯计数投票会让「块多但无关」的章节
-    # （如预案附则下大量子节）喧宾夺主。改为**排名加权投票**——候选排名越靠前，
-    # 对该章节的投票权重越高（top1 权重 1.0，top10 权重 ~0.1）：
-    #   score(章节) = Σ 1/(1+rank)  仅候选排名，不依赖分数尺度。
-    vote_by_sec: dict[str, float] = {}
-    for rank, (cid, _sc) in enumerate(ranked_pool):
-        sec = sec_map.get(cid)
-        if not sec:
-            continue
-        unit = _chapter_of(sec)  # 章前缀（容 OCR 噪声子节分散）
-        vote_by_sec[unit] = vote_by_sec.get(unit, 0.0) + 1.0 / (1.0 + rank)
-    if not vote_by_sec:
-        return None
-    # 选「加权投票最高」的单元；平局取块数多者
-    best_unit = max(vote_by_sec, key=lambda s: (vote_by_sec[s], chapter_sizes.get(s, 0)))
-    if chapter_sizes.get(best_unit, 0) < 4:
-        logger.debug("枚举扩展：单元 %s 块数 %s < 4，不扩展", best_unit, chapter_sizes.get(best_unit, 0))
-        return None  # 单元块太少（≤3）不扩展，top_k 已覆盖
-    # 拉取该单元下全部切片（含子节）。枚举扩展要全量列表（含「附件N」子节），
-    # 不用 `_under_component` 排除附件（那是章节扩展的防混入逻辑，枚举需完整）。
-    members = [
-        (c, d)
-        for c, d in all_chunks
-        if c.section and _chapter_of(c.section) == best_unit
-    ]
-    members = members[: settings.complete_expansion_cap * 2]
-    ids = [c.id for c, _ in members]
-    if settings.rerank_enabled:
-        docs = [c.content for c, _ in members]
-        try:
-            scores = await rerank(focus_rerank_query(query), docs)
-            ranked = sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)
-        except Exception:
-            logger.warning("枚举扩展 rerank 失败，按原文顺序", exc_info=True)
-            ranked = sorted(zip(ids, [0.0] * len(ids)), key=lambda x: x[0])
-    else:
-        # 离线/降级：按原文顺序（chunk.id），保证列表不乱序
-        ranked = sorted(zip(ids, [0.0] * len(ids)), key=lambda x: x[0])
-    return ranked[: settings.complete_expansion_cap]
-
-
-async def _expand_chapter_sections(
-    db: AsyncSession,
-    query: str,
-    cand_sorted: list[tuple[int, float]],
-    section_by_id: dict[int, str | None],
-    top_k: int,
-    kb_id: int | None = None,
-) -> list[tuple[int, float]] | None:
-    """综合型问题：主题词命中章节的多个子节时，把整章子节纳入最终引用。
-
-    规范类章节横跨多子节多页（如重庆预案「5 应急保障」5.1~5.12），top_k=5 只覆盖
-    一小部分 → LLM 必然答不完整。按「与聚焦主题词匹配的章节组件」扩展：
-    - 命中整章组件（「5 应急保障」）→ 覆盖该章全部子节；
-    - 命中窄组件（「3.2 引用标准」）→ 只扩该组件，不扩大章节；
-    - 命中子节数不足 top_k → 维持原 top_k。
-    直接从 DB 取该组件下全部切片再 rerank 排序（不受 rerank 候选池限制，
-    跨库检索时也不会因候选被挤占而丢子节）。P0-2 scope 隔离：只在本库内扩展。
-    返回最多 15 条。
-    """
-    if not cand_sorted:
-        return None
-    if not settings.rerank_enabled:
-        return None  # 章节扩展依赖 rerank 排序；离线/未开启时跳过，避免无意义网络调用
-    top1 = cand_sorted[0][0]
-    comp = _match_section_component(focus_rerank_query(query), section_by_id.get(top1))
-    if not comp:
-        return None
-    stmt = select(Chunk, Document).join(Document, Chunk.doc_id == Document.id)
-    if kb_id is not None:
-        stmt = stmt.where(Chunk.kb_id == kb_id)
-    # P0-8 active 过滤：扩展只拉 active 版本切片
-    active_ids = await _active_version_ids(db, kb_id=kb_id)
-    if active_ids:
-        stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
-    rows = (await db.execute(stmt)).all()
-    members = [(c, d) for c, d in rows if _under_component(c.section, comp)]
-    if len(members) < 4:
-        return None  # 章节块太少（≤3）不扩展；≥4 则全部纳入，防 top_k 截断漏块（如名单章节 5 块只取 5 块=top_k 也会被旧守卫拦掉）
-    ids = [c.id for c, _ in members]
-    docs = [c.content for c, _ in members]
-    try:
-        scores = await rerank(focus_rerank_query(query), docs)
-    except Exception:
-        logger.warning("章节扩展 rerank 失败，维持原 top_k", exc_info=True)
-        return None
-    return sorted(zip(ids, scores), key=lambda x: x[1], reverse=True)[:15]
+from app.services.retrieval.focus import focus_rerank_query  # noqa: F401
+from app.services.retrieval.rerank import close_rerank_client, rerank  # noqa: F401
+from app.services.retrieval.scope import (  # noqa: F401
+    active_collection_names as _active_collection_names,
+    active_version_ids as _active_version_ids,
+)
+from app.services.retrieval.section import (  # noqa: F401
+    ENUMERATION_RE as _ENUMERATION_RE,
+    match_section_component as _match_section_component,
+    section_no as _section_no,
+    under_component as _under_component,
+)
 
 
 def judge_evidence_level(scores: list[float]) -> str:
@@ -514,54 +143,6 @@ class RetrievedResult:
     trace: RetrievalTrace | None = None
 
 
-async def rerank(query: str, documents: list[str]) -> list[float]:
-    """硅基流动 bge-reranker API 重排，返回与 documents 对齐的相关性分数（0~1）。
-
-    G4：复用模块级 AsyncClient 连接池（懒加载，进程退出时由 close_rerank_client 关闭）。
-    """
-    global _rerank_client
-    import httpx
-
-    if _rerank_client is None:
-        # 连接池：keepalive 复用 TCP 连接，避免每次调用重复握手。
-        # 单进程内并发安全（httpx 内部调度），多 worker 各自持有一个实例。
-        _rerank_client = httpx.AsyncClient(
-            timeout=30,
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-
-    payload = {
-        "model": settings.rerank_model,
-        "query": query,
-        "documents": documents,
-        "top_n": len(documents),
-        "return_documents": False,
-    }
-    headers = {
-        "Authorization": f"Bearer {settings.embedding_api_key}",
-        "Content-Type": "application/json",
-    }
-    resp = await _rerank_client.post(
-        f"{settings.embedding_base_url.rstrip('/')}/rerank", json=payload, headers=headers
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    scores = [0.0] * len(documents)
-    for item in data.get("results", []):
-        idx = item.get("index")
-        if idx is not None and 0 <= idx < len(scores):
-            scores[idx] = item.get("relevance_score", 0.0)
-    return scores
-
-
-async def close_rerank_client() -> None:
-    """关闭 rerank 连接池（应用优雅退出时调用；测试可调用重置）。"""
-    global _rerank_client
-    if _rerank_client is not None:
-        await _rerank_client.aclose()
-        _rerank_client = None
-
-
 def _table_citation(ans) -> RetrievedChunk | None:
     """把精确读表答案转成一条检索引用（snippet=格式化答案正文，带出处）。
 
@@ -586,67 +167,59 @@ def _table_citation(ans) -> RetrievedChunk | None:
     )
 
 
-async def retrieve(
+async def _try_table_channel(
     db: AsyncSession,
     query: str,
-    kb_id: int | None = None,
-    doc_ids: list[int] | None = None,
-    top_k: int | None = None,
-    include_snippet: bool = True,
-    return_trace: bool = False,
-) -> list[RetrievedChunk] | RetrievedResult:
-    """检索主入口。kb_id=None 跨全库（按库归一化 BM25 加权）；doc_ids 限定只搜点名文档。
+    kb_id: int | None,
+    doc_ids: list[int] | None,
+    return_trace: bool,
+) -> list[RetrievedChunk] | RetrievedResult | None:
+    """阶段0：精确读表通道（先于向量检索）。
 
-    final = RRF 等权融合（向量名次 + 本库 BM25 归一化名次）
-    - 向量为主（真实余弦，区分度好）
-    - BM25 精确关键词兜底：解决 BGE-M3 对「计算公式/推求步骤」等查询区分度不足，
-      以及长问题下关键词被稀释的问题（如「请问…通信网络体系有什么要求呢？」）
-    - 跨库时各库 BM25 按**该库自身 top1 归一化**，无关库（BM25 近 0）不会产生噪声
-    - doc_ids 非空：只搜这些文档的切片（问题点名《书名》或「XXX中」时），BM25 按文档后过滤
-
-    P1-1 评测门禁：return_trace=True 时返回 RetrievedResult（cites + trace）。
-    默认 False 返回 list[RetrievedChunk]，零影响现有调用。
+    命中「计数/枚举/查值」且库里能精确定位到一张表、读出确切答案时，直接返回该表引用。
+    任何一步不确定都返回 None → 回退向量检索（非表格问题零回归）。
+    点名文档限定（doc_ids）时暂不走精确通道（语义不同：可能只要某文档里的表）。
     """
-    # P2 单元3：检索范围指标（scoped=点名文档限定，global=跨全库）
-    metrics["retrieval_requests_total"].labels("scoped" if doc_ids else "global").inc()
-    top_k = top_k or settings.top_k_final
+    if doc_ids:
+        return None
+    try:
+        from app.services.table_query import query_table
 
-    # 单元二 2-4：读表问题走精确结构化通道（先于向量检索）。命中「计数/枚举/查值」且
-    # 库里能精确定位到一张表、读出确切答案时，直接返回该表的引用（不走向量/BM25/rerank）；
-    # 任何一步不确定都返回 None → 原样回退下方向量检索，保证非表格问题零回归。
-    # 点名文档限定（doc_ids）时暂不走精确通道（语义不同：可能只要某文档里的表）。
-    if not doc_ids:
-        try:
-            from app.services.table_query import query_table
+        table_ans = await query_table(db, query, kb_id)
+    except Exception:
+        logger.warning("精确读表通道失败，回退向量检索", exc_info=True)
+        table_ans = None
+    if table_ans is None:
+        return None
+    cite = _table_citation(table_ans)
+    if cite is None:
+        return None
+    if return_trace:
+        trace = RetrievalTrace(
+            query=query,
+            candidates=[],
+            rerank_ok=False,
+            rerank_status="disabled",
+            expanded_type="table",
+            vector_hits=0,
+            bm25_hits=0,
+        )
+        return RetrievedResult(cites=[cite], trace=trace)
+    return [cite]
 
-            table_ans = await query_table(db, query, kb_id)
-        except Exception:
-            logger.warning("精确读表通道失败，回退向量检索", exc_info=True)
-            table_ans = None
-        if table_ans is not None:
-            cite = _table_citation(table_ans)
-            if cite is not None:
-                if return_trace:
-                    trace = RetrievalTrace(
-                        query=query,
-                        candidates=[],
-                        rerank_ok=False,
-                        rerank_status="disabled",
-                        expanded_type="table",
-                        vector_hits=0,
-                        bm25_hits=0,
-                    )
-                    return RetrievedResult(cites=[cite], trace=trace)
-                return [cite]
 
-    # 单元 N 口语→术语 查询扩展：口语/宽泛问法追加规范术语（只加词不删词），
-    # 仅作用于检索查询（向量/BM25/rerank），语义缓存/记忆库/用户可见提问仍用原 query。
-    rq = expand_query(query)
+async def _vector_candidates(
+    db: AsyncSession,
+    rq: str,
+    kb_id: int | None,
+    doc_ids: list[int] | None,
+    return_trace: bool,
+    trace_cands: dict[int, CandidateTrace],
+) -> tuple[list[float], list, dict[int, float], set[int], set[int]]:
+    """阶段1：向量检索（真实余弦）；按 kb 路由到 active collection（软切换）。
 
-    # P1-1 评测门禁：收集各阶段分数供 trace
-    trace_cands: dict[int, CandidateTrace] = {}
-
-    # 1) 向量检索（真实余弦相似度）；按 kb 路由到对应 active collection（软切换）
+    返回 (qvec, vec_hits, candidates, doc_chunk_ids, doc_kb_ids)。
+    """
     qvec = await embed_query(rq)
     doc_chunk_ids: set[int] = set()
     doc_kb_ids: set[int] = set()
@@ -668,10 +241,6 @@ async def retrieve(
             # 兜底：kb_id 未给但 doc_ids 给了 → 跨全库的 collection 名
             doc_collections = await _active_collection_names(db)
         where = {"doc_id": doc_ids[0]} if len(doc_ids) == 1 else {"doc_id": {"$in": doc_ids}}
-    else:
-        where = {"kb_id": kb_id} if kb_id else None
-    # 路由：单库读该库 active collection；跨库（kb_id=None 且无 doc_ids）遍历全部库
-    if doc_ids:
         vec_hits = await asyncio.to_thread(
             vector_store.query_many, doc_collections, qvec, where, settings.top_k_vector
         )
@@ -689,8 +258,19 @@ async def retrieve(
     if return_trace:
         for h in vec_hits:
             trace_cands.setdefault(h.chunk_id, CandidateTrace(chunk_id=h.chunk_id)).vector_score = h.score
+    return qvec, vec_hits, candidates, doc_chunk_ids, doc_kb_ids
 
-    # 2) BM25 加权（单库或跨库均生效；跨库按库归一化；doc_ids 限定 → 放大候选后按文档过滤）
+
+async def _bm25_candidates(
+    rq: str,
+    kb_id: int | None,
+    doc_ids: list[int] | None,
+    doc_chunk_ids: set[int],
+    doc_kb_ids: set[int],
+    return_trace: bool,
+    trace_cands: dict[int, CandidateTrace],
+) -> dict[int, float]:
+    """阶段2：BM25 检索 + 库内归一化（跨库按各库 top1 归一，无关库不产生噪声）。"""
     bm25_norm: dict[int, float] = {}
     if doc_ids:
         kb_ids: list[int] = list(doc_kb_ids)
@@ -714,36 +294,65 @@ async def retrieve(
             bm25_norm[cid] = s / max_s  # 该库内归一化到 0~1
             if return_trace:
                 trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).bm25_score = s / max_s
+    return bm25_norm
 
-    # 3) BM25 补召回：向量 top50 未出现的 chunk，实时算真实余弦
+
+async def _backfill_bm25_vectors(
+    db: AsyncSession,
+    kb_id: int | None,
+    qvec: list[float],
+    candidates: dict[int, float],
+    bm25_norm: dict[int, float],
+    return_trace: bool,
+    trace_cands: dict[int, CandidateTrace],
+) -> None:
+    """阶段3：BM25 独有候选补真实余弦（原地更新 candidates）。"""
     extra_ids = [cid for cid in bm25_norm if cid not in candidates]
-    if extra_ids:
-        # 软切换：按 active collection 取向量（跨库合并）
-        all_names = await _active_collection_names(db, kb_id=kb_id) or await _active_collection_names(db)
-        embeddings = await asyncio.to_thread(vector_store.get_embeddings_by_ids_many, all_names, extra_ids)
-        # P1-3：补召回余弦是纯 CPU 密集活，放线程池批量算，不在事件循环里逐条跑。
-        sims = await asyncio.to_thread(
-            vecmath.cosine_batch, qvec, [embeddings[cid] for cid in extra_ids]
-        )
-        for cid, sim in zip(extra_ids, sims):
-            candidates[cid] = sim
-            if return_trace:
-                trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).vector_score = sim
+    if not extra_ids:
+        return
+    # 软切换：按 active collection 取向量（跨库合并）
+    all_names = await _active_collection_names(db, kb_id=kb_id) or await _active_collection_names(db)
+    embeddings = await asyncio.to_thread(vector_store.get_embeddings_by_ids_many, all_names, extra_ids)
+    # P1-3：补召回余弦是纯 CPU 密集活，放线程池批量算，不在事件循环里逐条跑。
+    sims = await asyncio.to_thread(
+        vecmath.cosine_batch, qvec, [embeddings[cid] for cid in extra_ids]
+    )
+    for cid, sim in zip(extra_ids, sims):
+        candidates[cid] = sim
+        if return_trace:
+            trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).vector_score = sim
 
-    # 4) P1-9 RRF 融合（替代 0.7v+0.3bm25 线性加权——两分数不同标度，线性会失真）。
-    #    向量命中按 score 降序；BM25 按库内归一化分降序。
+
+def _fuse_candidates(
+    candidates: dict[int, float],
+    bm25_norm: dict[int, float],
+    return_trace: bool,
+    trace_cands: dict[int, CandidateTrace],
+) -> dict[int, float]:
+    """阶段4：RRF 等权融合（向量名次 + 本库 BM25 归一化名次）。"""
     from app.services.retrieval.fusion import rrf_fuse
 
     vec_sorted = sorted(candidates.items(), key=lambda x: x[1], reverse=True)
     bm25_sorted = sorted(bm25_norm.items(), key=lambda x: x[1], reverse=True)
     fused = rrf_fuse(vec_sorted, bm25_sorted)
-    # 候选池 = 融合结果（含 BM25 独有补召回）；保留向量分用于后续余弦对照
-    candidates = fused
     if return_trace:
         for cid, fs in fused.items():
             trace_cands.setdefault(cid, CandidateTrace(chunk_id=cid)).fusion_score = fs
+    return fused
 
-    # 5) 送入 reranker 重排（cross-encoder，纠正向量对部分查询的区分度不足）
+
+async def _select_and_rerank(
+    db: AsyncSession,
+    rq: str,
+    candidates: dict[int, float],
+    top_k: int,
+    return_trace: bool,
+    trace_cands: dict[int, CandidateTrace],
+) -> tuple[list[tuple[int, float]], dict[int, str | None], bool, str]:
+    """阶段5：加载候选内容 → 短块过滤/回补 → rerank 重排。
+
+    返回 (cand_sorted, section_by_id, rerank_ok, rerank_status)。
+    """
     cand_sorted = sorted(candidates.items(), key=lambda x: x[1], reverse=True)[
         : settings.rerank_candidates
     ]
@@ -752,56 +361,73 @@ async def retrieve(
     if not settings.rerank_enabled:
         metrics["rerank_requests_total"].labels("disabled").inc()
     section_by_id: dict[int, str | None] = {}
-    if cand_sorted:
-        # 预先取候选的章节信息：rerank 与两种扩展共用；rerank 关闭时扩展仍可用
-        ids = [cid for cid, _ in cand_sorted]
-        rows = (
-            await db.execute(
-                select(Chunk, Document)
-                .join(Document, Chunk.doc_id == Document.id)
-                .where(Chunk.id.in_(ids))
-            )
-        ).all()
-        content_by_id = {c.id: c.content for c, _ in rows}
-        section_by_id = {c.id: c.section for c, _ in rows}
-        # P1-9：min_content_len 提前到候选池阶段过滤（短块不参与 rerank/扩展），
-        # 被过滤的从候选池回补 top_k（防 final hydrate 缩水）。
-        cand_sorted = [
-            (cid, sc) for cid, sc in cand_sorted
-            if len((content_by_id.get(cid) or "").strip()) >= settings.min_content_len
-        ]
-        if len(cand_sorted) < settings.top_k_final:
-            # 回补：从原候选池按融合分补足 top_k_final
-            for cid, sc in sorted(candidates.items(), key=lambda x: x[1], reverse=True):
-                if len(cand_sorted) >= settings.top_k_final:
-                    break
-                if cid not in {c for c, _ in cand_sorted} and cid not in content_by_id:
-                    # 未加载内容的候选也保留（防全滤空）
-                    cand_sorted.append((cid, sc))
-        ids = [cid for cid, _ in cand_sorted]
-        docs = [content_by_id.get(cid, "") for cid in ids]
-        if settings.rerank_enabled:
-            try:
-                # 用聚焦主题词重排：长查询会稀释关键项（BGE 局限），
-                # 聚焦「引用标准」后正确规则节 0.98+（原文案仅 0.81 被前言压过）
-                _t0 = perf_counter()
-                r_scores = await rerank(focus_rerank_query(rq), docs)
-                metrics["chat_stage_seconds"].labels("rerank").observe(perf_counter() - _t0)
-                cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
-                rerank_ok = True
-                rerank_status = "ok"
-                metrics["rerank_requests_total"].labels("ok").inc()
-                if return_trace:
-                    for cid, rs in zip(ids, r_scores):
-                        if cid in trace_cands:
-                            trace_cands[cid].rerank_score = rs
-            except Exception:
-                logger.warning("rerank 失败，回退到混合排序", exc_info=True)
-                rerank_status = "failed"
-                metrics["rerank_requests_total"].labels("failed").inc()
-                cand_sorted = cand_sorted[:top_k]
+    if not cand_sorted:
+        return cand_sorted, section_by_id, rerank_ok, rerank_status
 
-    # 6) 取 top_k；先章节扩展（综合型问题整章覆盖），再枚举扩展（枚举/清单类问题拉全量章节）
+    # 预先取候选的章节信息：rerank 与两种扩展共用；rerank 关闭时扩展仍可用
+    ids = [cid for cid, _ in cand_sorted]
+    rows = (
+        await db.execute(
+            select(Chunk, Document)
+            .join(Document, Chunk.doc_id == Document.id)
+            .where(Chunk.id.in_(ids))
+        )
+    ).all()
+    content_by_id = {c.id: c.content for c, _ in rows}
+    section_by_id = {c.id: c.section for c, _ in rows}
+    # P1-9：min_content_len 提前到候选池阶段过滤（短块不参与 rerank/扩展），
+    # 被过滤的从候选池回补 top_k（防 final hydrate 缩水）。
+    cand_sorted = [
+        (cid, sc) for cid, sc in cand_sorted
+        if len((content_by_id.get(cid) or "").strip()) >= settings.min_content_len
+    ]
+    if len(cand_sorted) < settings.top_k_final:
+        # 回补：从原候选池按融合分补足 top_k_final
+        for cid, sc in sorted(candidates.items(), key=lambda x: x[1], reverse=True):
+            if len(cand_sorted) >= settings.top_k_final:
+                break
+            if cid not in {c for c, _ in cand_sorted} and cid not in content_by_id:
+                # 未加载内容的候选也保留（防全滤空）
+                cand_sorted.append((cid, sc))
+    ids = [cid for cid, _ in cand_sorted]
+    docs = [content_by_id.get(cid, "") for cid in ids]
+    if settings.rerank_enabled:
+        try:
+            # 用聚焦主题词重排：长查询会稀释关键项（BGE 局限），
+            # 聚焦「引用标准」后正确规则节 0.98+（原文案仅 0.81 被前言压过）
+            _t0 = perf_counter()
+            r_scores = await rerank(focus_rerank_query(rq), docs)
+            metrics["chat_stage_seconds"].labels("rerank").observe(perf_counter() - _t0)
+            cand_sorted = sorted(zip(ids, r_scores), key=lambda x: x[1], reverse=True)
+            rerank_ok = True
+            rerank_status = "ok"
+            metrics["rerank_requests_total"].labels("ok").inc()
+            if return_trace:
+                for cid, rs in zip(ids, r_scores):
+                    if cid in trace_cands:
+                        trace_cands[cid].rerank_score = rs
+        except Exception:
+            logger.warning("rerank 失败，回退到混合排序", exc_info=True)
+            rerank_status = "failed"
+            metrics["rerank_requests_total"].labels("failed").inc()
+            cand_sorted = cand_sorted[:top_k]
+    return cand_sorted, section_by_id, rerank_ok, rerank_status
+
+
+async def _expand_and_hydrate(
+    db: AsyncSession,
+    rq: str,
+    cand_sorted: list[tuple[int, float]],
+    section_by_id: dict[int, str | None],
+    candidates: dict[int, float],
+    top_k: int,
+    kb_id: int | None,
+    include_snippet: bool,
+) -> tuple[list[RetrievedChunk], str | None]:
+    """阶段6：章节/枚举扩展 → hydrate → scope 不变量校验。
+
+    返回 (hydrated, expanded_type)。
+    """
     ranked = cand_sorted[:top_k]
     expanded_type: str | None = None
     expanded = await _expand_chapter_sections(
@@ -828,8 +454,67 @@ async def retrieve(
                 kb_id, [c.chunk_id for c in leaked],
             )
             hydrated = [c for c in hydrated if c.kb_id == kb_id]
+    return hydrated, expanded_type
 
-    # P1-1 评测门禁：return_trace=True 时返回 RetrievedResult（cites + trace）
+
+async def retrieve(
+    db: AsyncSession,
+    query: str,
+    kb_id: int | None = None,
+    doc_ids: list[int] | None = None,
+    top_k: int | None = None,
+    include_snippet: bool = True,
+    return_trace: bool = False,
+) -> list[RetrievedChunk] | RetrievedResult:
+    """检索主入口。kb_id=None 跨全库（按库归一化 BM25 加权）；doc_ids 限定只搜点名文档。
+
+    final = RRF 等权融合（向量名次 + 本库 BM25 归一化名次）
+    - 向量为主（真实余弦，区分度好）
+    - BM25 精确关键词兜底：解决 BGE-M3 对「计算公式/推求步骤」等查询区分度不足，
+      以及长问题下关键词被稀释的问题（如「请问…通信网络体系有什么要求呢？」）
+    - 跨库时各库 BM25 按**该库自身 top1 归一化**，无关库（BM25 近 0）不会产生噪声
+    - doc_ids 非空：只搜这些文档的切片（问题点名《书名》或「XXX中」时），BM25 按文档后过滤
+
+    G6-2：本函数只做编排，各阶段见 _try_table_channel / _vector_candidates /
+    _bm25_candidates / _backfill_bm25_vectors / _fuse_candidates /
+    _select_and_rerank / _expand_and_hydrate。
+
+    P1-1 评测门禁：return_trace=True 时返回 RetrievedResult（cites + trace）。
+    默认 False 返回 list[RetrievedChunk]，零影响现有调用。
+    """
+    # P2 单元3：检索范围指标（scoped=点名文档限定，global=跨全库）
+    metrics["retrieval_requests_total"].labels("scoped" if doc_ids else "global").inc()
+    top_k = top_k or settings.top_k_final
+
+    # 阶段0：读表问题走精确结构化通道；命中直接返回
+    early = await _try_table_channel(db, query, kb_id, doc_ids, return_trace)
+    if early is not None:
+        return early
+
+    # 单元 N 口语→术语 查询扩展：口语/宽泛问法追加规范术语（只加词不删词），
+    # 仅作用于检索查询（向量/BM25/rerank），语义缓存/记忆库/用户可见提问仍用原 query。
+    rq = expand_query(query)
+
+    # P1-1 评测门禁：收集各阶段分数供 trace
+    trace_cands: dict[int, CandidateTrace] = {}
+
+    qvec, vec_hits, candidates, doc_chunk_ids, doc_kb_ids = await _vector_candidates(
+        db, rq, kb_id, doc_ids, return_trace, trace_cands
+    )
+    bm25_norm = await _bm25_candidates(
+        rq, kb_id, doc_ids, doc_chunk_ids, doc_kb_ids, return_trace, trace_cands
+    )
+    await _backfill_bm25_vectors(
+        db, kb_id, qvec, candidates, bm25_norm, return_trace, trace_cands
+    )
+    candidates = _fuse_candidates(candidates, bm25_norm, return_trace, trace_cands)
+    cand_sorted, section_by_id, rerank_ok, rerank_status = await _select_and_rerank(
+        db, rq, candidates, top_k, return_trace, trace_cands
+    )
+    hydrated, expanded_type = await _expand_and_hydrate(
+        db, rq, cand_sorted, section_by_id, candidates, top_k, kb_id, include_snippet
+    )
+
     if return_trace:
         trace = RetrievalTrace(
             query=query,
