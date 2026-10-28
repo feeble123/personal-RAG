@@ -1,11 +1,13 @@
-"""FastAPI 依赖注入：数据库会话 / 当前用户 / 管理员权限。"""
+"""FastAPI 依赖注入：数据库会话 / 当前用户 / 管理员权限 / 外部 API Key。"""
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.exceptions import BizError
 from app.core.security import decode_token
 from app.db.models import User
@@ -83,3 +85,21 @@ async def get_client_ip(request: Request) -> str:
     if request.client:
         return request.client.host
     return "unknown"
+
+
+async def verify_external_api_key(
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> None:
+    """外部检索 API 鉴权：校验 X-API-Key（服务间调用，不复用用户 JWT）。
+
+    - 未配置 EXTERNAL_API_KEY → 503（功能未启用，避免空 key 被误用）
+    - key 缺失/错误 → 401
+    - 用 compare_digest 防时序攻击
+    """
+    expected = settings.external_api_key
+    if not expected:
+        raise BizError(
+            "外部检索 API 未启用（未配置 EXTERNAL_API_KEY）", 503, "EXTERNAL_API_DISABLED"
+        )
+    if not x_api_key or not secrets.compare_digest(x_api_key, expected):
+        raise BizError("无效的 API Key", 401, "UNAUTHORIZED")

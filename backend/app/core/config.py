@@ -192,6 +192,12 @@ class Settings(BaseSettings):
     chat_rate_limit: str = "60/minute"    # 问答（按用户）
     feedback_rate_limit: str = "30/minute"  # 反馈点赞/踩（按用户）
 
+    # ---- 对外检索 API（业务系统集成，单元 1）----
+    # 服务间调用用 API Key（不复用用户 JWT）；空 = 未启用外部 API。
+    # 生产部署时在 .env 配置 EXTERNAL_API_KEY=<足够长的随机串>。
+    external_api_key: str = ""
+    external_rate_limit: str = "120/minute"
+
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"
     # OCR 渲染分辨率：200dpi 对印刷中文足够，速度约为 300dpi 的 2 倍
