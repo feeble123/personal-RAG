@@ -45,6 +45,7 @@ DEFAULT_QUESTION = "明渠均匀流的形成条件是什么"
 # 证据等级的人话解释（对外契约里的 evidence_level 字段）
 EVIDENCE_TEXT = {
     "sufficient": "证据充分（可以放心采信）",
+    "partial": "证据部分（有依据但可能不完整）",
     "weak": "证据偏弱（建议人工复核）",
     "none": "没检到相关资料（模型会说明资料不足，别硬信）",
 }
