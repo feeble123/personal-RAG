@@ -48,7 +48,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
 
       - name: 运行 pytest（全离线：fake embedding/LLM、临时 SQLite/Chroma）
-        run: pytest -q
+        # -rf：失败时在日志末尾输出「FAILED tests/...」清单，方便云端排查
+        # （完整 traceback 仍会打印在失败详情里）
+        run: pytest -q -rf
 
       # PG 集成测试将来单独开 job（需 postgres 服务容器 + RUN_PG_TESTS=1），
       # 见 docs/P2-PG-MIGRATION.md。默认离线测试不依赖真实 PG。
@@ -78,6 +80,9 @@ jobs:
           rm -f .npmrc
           sed -i 's#registry.npmmirror.com#registry.npmjs.org#g' package-lock.json
           npm ci
+          # lockfile 在本机 Windows 生成，可能缺 Linux 平台的 Rollup 可选二进制；
+          # npm rebuild 补齐，避免 vite build 报 "Cannot find module @rollup/rollup-linux-x64-gnu"
+          npm rebuild
 
       - name: ESLint（零告警红线）
         run: npm run lint
