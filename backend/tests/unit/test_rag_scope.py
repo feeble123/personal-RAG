@@ -169,6 +169,12 @@ class TestChapterExpansionScoped:
             async def _stub_rerank(_q, docs):
                 return [0.9] * len(docs)
 
+            # G6-2：rerank 已移到 retrieval/rerank.py，expand.py 里是「from ... import rerank」
+            # 直接绑定，patch rag_mod 不会生效（会打真实 API；CI 无 key → 返回 None）。
+            # 必须 patch 实际引用位置。
+            import app.services.retrieval.expand as expand_mod
+
+            monkeypatch.setattr(expand_mod, "rerank", _stub_rerank)
             monkeypatch.setattr(rag_mod, "rerank", _stub_rerank)
             section_by_id = {cid: "5 应急保障" for cid in a_chunks + b_chunks}
             cand = [(a_chunks[0], 0.9)]
