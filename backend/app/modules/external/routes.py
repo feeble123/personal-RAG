@@ -18,9 +18,18 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.deps import DbSession, verify_external_api_key
+from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
 from app.db.models import KnowledgeBase
-from app.services import retriever
+from app.db.session import async_session_factory
+from app.services import rag, retriever
+from app.services.chat import (
+    ANSWER_STYLES,
+    DEFAULT_STYLE,
+    STYLE_CONFIG,
+    build_chat_model,
+    build_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,4 +88,76 @@ async def list_knowledge_bases(db: DbSession) -> dict:
             }
             for kb in rows
         ]
+    }
+
+
+class ChatIn(BaseModel):
+    """对外问答请求。"""
+
+    question: str = Field(..., min_length=1, max_length=500, description="问题")
+    kb_id: int | None = Field(None, description="限定知识库 id；缺省跨全库")
+    top_k: int = Field(5, ge=1, le=10, description="送入生成的知识片段数（1~10）")
+    style: str = Field(
+        DEFAULT_STYLE,
+        description="回答风格：standard/logical/summary/expanded/tutorial；非法值回退 standard",
+    )
+
+
+@router.post("/chat")
+@limiter.limit(settings.external_chat_rate_limit)
+async def external_chat(request: Request, body: ChatIn) -> dict:
+    """对外问答：问题 → 完整回答 + 引用（非流式）。
+
+    - 不写用户会话/消息（外部调用没有用户身份），只记调用日志
+    - 不读写问答记忆/语义缓存，避免跨调用污染
+    - 返回证据等级，调用方可据此决定是否采信
+    """
+    t0 = perf_counter()
+
+    async with async_session_factory() as db:
+        cites = await rag.retrieve(db, body.question, kb_id=body.kb_id, top_k=body.top_k)
+    scores = [c.score for c in cites if c.score is not None]
+    evidence_level = rag.judge_evidence_level(scores)
+
+    style = body.style if body.style in ANSWER_STYLES else DEFAULT_STYLE
+    temperature = float(STYLE_CONFIG[style]["temperature"])
+    llm = build_chat_model(temperature)
+    messages = build_prompt(
+        body.question,
+        cites,
+        history=None,
+        style=style,
+        evidence_weak=(evidence_level in ("weak", "none")),
+    )
+
+    pieces: list[str] = []
+    usage_in = usage_out = None
+    try:
+        async for chunk in llm.astream(messages):
+            text = chunk.content
+            if isinstance(text, list):
+                text = "".join(x.get("text", "") for x in text if isinstance(x, dict))
+            if text:
+                pieces.append(text)
+            usage = getattr(chunk, "usage_metadata", None)
+            if usage:
+                usage_in = usage.get("input_tokens") or usage_in
+                usage_out = usage.get("output_tokens") or usage_out
+    except Exception:
+        logger.exception("外部问答生成失败")
+        raise BizError("生成失败，请稍后重试", 502, "GENERATION_FAILED")
+
+    answer = "".join(pieces)
+    results = retriever.results_from_chunks(cites)
+    elapsed_ms = (perf_counter() - t0) * 1000
+    logger.info(
+        "外部问答 question_len=%s kb_id=%s hits=%s evidence=%s in=%s out=%s elapsed_ms=%.1f",
+        len(body.question), body.kb_id, len(cites), evidence_level,
+        usage_in, usage_out, elapsed_ms,
+    )
+    return {
+        "answer": answer,
+        "citations": [r.to_dict() for r in results],
+        "evidence_level": evidence_level,
+        "usage": {"input_tokens": usage_in, "output_tokens": usage_out},
     }

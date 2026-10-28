@@ -115,7 +115,7 @@ async def run() -> None:
     )
 
     print("=" * 62)
-    print("单元 1 端到端验收：对外检索 API")
+    print("单元 1 端到端验收：对外检索 + 问答 API")
     print("=" * 62)
     print(f"临时数据目录: {tmp}")
 
@@ -231,7 +231,28 @@ async def run() -> None:
             _ok(f"命中片段: {item['text'][:60]}...")
             _ok(f"出处: {item['source']['document_name']} / {item['source']['section']}")
 
-            # 6) 知识库列表接口
+            # 6) 对外问答：完整回答 + 引用
+            r = await client.post(
+                f"{BASE}/api/v1/chat",
+                json={"question": "明渠均匀流的形成条件是什么", "kb_id": kb_id, "top_k": 5},
+                headers={"X-API-Key": API_KEY},
+            )
+            if r.status_code != 200:
+                _fail(f"对外问答应 200，实际 {r.status_code}: {r.text}")
+            chat = r.json()
+            if set(chat.keys()) != {"answer", "citations", "evidence_level", "usage"}:
+                _fail(f"问答契约字段不符: {sorted(chat.keys())}")
+            if not chat.get("answer"):
+                _fail("问答 answer 为空")
+            if not chat.get("citations"):
+                _fail("问答 citations 为空")
+            if "明渠均匀流" not in chat["answer"]:
+                _fail(f"问答内容不符: {chat['answer'][:80]}")
+            _ok(f"对外问答 → 200，回答 {len(chat['answer'])} 字")
+            _ok(f"证据等级: {chat['evidence_level']}，引用 {len(chat['citations'])} 条")
+            _ok(f"回答片段: {chat['answer'][:60]}...")
+
+            # 7) 知识库列表接口
             r = await client.get(f"{BASE}/api/v1/knowledge-bases", headers={"X-API-Key": API_KEY})
             if r.status_code != 200 or not r.json().get("items"):
                 _fail(f"知识库列表失败: {r.status_code}")
@@ -239,7 +260,8 @@ async def run() -> None:
 
             print()
             print("=" * 62)
-            print("验收通过：对外检索 API 可用")
+            print("验收通过：对外检索 + 问答 API 可用")
+            print("  （本脚本用离线模拟模型验证链路；真实模型已在内部问答验证）")
             print("=" * 62)
 
     finally:

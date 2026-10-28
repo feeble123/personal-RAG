@@ -122,6 +122,11 @@ async def retrieve(
             top_k=top_k,
             include_snippet=True,
         )
+    return results_from_chunks(chunks)
+
+
+def results_from_chunks(chunks: list[rag.RetrievedChunk]) -> list[RetrievalResult]:
+    """把内部检索结果转成对外契约（问答接口复用，避免两套映射）。"""
     return [
         RetrievalResult(
             text=chunk.snippet,

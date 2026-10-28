@@ -197,6 +197,8 @@ class Settings(BaseSettings):
     # 生产部署时在 .env 配置 EXTERNAL_API_KEY=<足够长的随机串>。
     external_api_key: str = ""
     external_rate_limit: str = "120/minute"
+    # 对外问答比检索贵（要调用 LLM），单独限流
+    external_chat_rate_limit: str = "20/minute"
 
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"
