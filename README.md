@@ -89,6 +89,19 @@ npm run build
 └── deploy/                 # Nginx 反代 / Docker（升级路径）
 ```
 
+## 📚 文档导航
+
+| 文档 | 看什么 |
+|---|---|
+| **[docs/功能地图.md](docs/功能地图.md)** | **功能 → 接口 → 代码文件 → 数据表**，含对外 API 契约与变更记录。交接/扩功能先看这个 |
+| [docs/PROJECT_RECORD.md](docs/PROJECT_RECORD.md) | 技术档案：架构、历史 BUG 根因与修复 |
+| [docs/agent-vision.md](docs/agent-vision.md) | 未来 Agent 知识底座愿景 |
+| [docs/P2-PG-MIGRATION.md](docs/P2-PG-MIGRATION.md) | PostgreSQL 升级/迁移路径 |
+| [docs/P2-BACKUP.md](docs/P2-BACKUP.md) | 数据备份方案 |
+| [docs/P2-DEPLOYMENT.md](docs/P2-DEPLOYMENT.md) | 部署形态（单机 → Docker → 云） |
+
+> 维护约定：每完成一个功能单元，同步更新 `docs/功能地图.md` 第 2 章（功能表）与第 9 章（变更记录）。
+
 ## 🔍 系统架构
 
 ```
