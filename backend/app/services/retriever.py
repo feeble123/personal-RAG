@@ -106,12 +106,16 @@ async def retrieve(
     top_k: int = 5,
     kb_id: int | None = None,
     doc_ids: list[int] | None = None,
+    business_domain: str | None = None,
+    doc_type: str | None = None,
 ) -> list[RetrievalResult]:
     """对外检索：query → 相关片段 + 出处（稳定契约）。
 
     - top_k：返回条数（默认 5，与现有问答一致）
     - kb_id：限定知识库（未来 DSH 可传）；缺省跨全库
     - doc_ids：限定文档（内部/未来扩展用）
+    - business_domain：限定业务域（单元 2，见 taxonomy；缺省不限）
+    - doc_type：限定文档类型（单元 2，如只看「规范」）
     """
     async with async_session_factory() as db:
         chunks = await rag.retrieve(
@@ -121,6 +125,8 @@ async def retrieve(
             doc_ids=doc_ids,
             top_k=top_k,
             include_snippet=True,
+            business_domain=business_domain,
+            doc_type=doc_type,
         )
     return results_from_chunks(chunks)
 

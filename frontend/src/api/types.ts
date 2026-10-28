@@ -34,6 +34,8 @@ export interface KnowledgeBase {
   chunk_count: number
   status: string
   answer_style: string
+  // 单元 2 业务域：general/flood/water/construction/operation/ecology（见 constants/taxonomy.ts）
+  business_domain: string
   created_at: string
 }
 

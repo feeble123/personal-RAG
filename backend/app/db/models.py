@@ -156,6 +156,12 @@ class KnowledgeBase(Base):
     # 回答风格（单元 F）：standard 规范条文 / logical 专业论证 / summary 要点摘要 /
     # expanded 拓展延伸 / tutorial 通俗讲解。问答时按此风格组装 SYSTEM_PROMPT
     answer_style: Mapped[str] = mapped_column(String(30), default="standard", nullable=False)
+    # 单元 2 知识分类：业务域挂在**库**上（一个库一个域），文档继承所在库的域。
+    # 取值见 app/core/taxonomy.py（general/flood/water/construction/operation/ecology）。
+    # 旧数据默认 general（综合与基础），由 scripts/backfill_classification.py 重新归类。
+    business_domain: Mapped[str] = mapped_column(
+        String(30), default="general", server_default="general", nullable=False, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

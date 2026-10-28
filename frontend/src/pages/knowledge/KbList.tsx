@@ -3,9 +3,10 @@
  *
  * 只负责展示与触发回调；选中/新建/编辑/删除的真实逻辑在父组件。
  */
-import { Button, Card, List, Popconfirm, Space, Tooltip, Typography } from 'antd'
+import { Button, Card, List, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd'
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import type { KnowledgeBase } from '@/api/types'
+import { BUSINESS_DOMAINS, domainColor, domainLabel } from '@/constants/taxonomy'
 
 interface Props {
   kbs: KnowledgeBase[]
@@ -14,15 +15,36 @@ interface Props {
   onCreate: () => void
   onEdit: (kb: KnowledgeBase) => void
   onDelete: (id: number) => void
+  // 单元 2：按业务域筛选（空 = 全部）
+  domainFilter?: string
+  onDomainFilterChange: (domain?: string) => void
 }
 
-export default function KbList({ kbs, activeKb, onSelect, onCreate, onEdit, onDelete }: Props) {
+export default function KbList({
+  kbs,
+  activeKb,
+  onSelect,
+  onCreate,
+  onEdit,
+  onDelete,
+  domainFilter,
+  onDomainFilterChange,
+}: Props) {
   return (
     <Card size="small" title="知识库" style={{ width: 280, flexShrink: 0 }} styles={{ body: { padding: 8 } }}>
       <Space direction="vertical" style={{ width: '100%' }}>
         <Button type="primary" block icon={<PlusOutlined />} onClick={onCreate}>
           新建知识库
         </Button>
+        <Select
+          size="small"
+          allowClear
+          style={{ width: '100%' }}
+          placeholder="按业务域筛选"
+          value={domainFilter || undefined}
+          onChange={(v) => onDomainFilterChange(v || undefined)}
+          options={BUSINESS_DOMAINS.map((d) => ({ value: d.value, label: d.label }))}
+        />
         <List
           dataSource={kbs}
           style={{ maxHeight: 'calc(100vh - 260px)', overflowY: 'auto' }}
@@ -43,9 +65,17 @@ export default function KbList({ kbs, activeKb, onSelect, onCreate, onEdit, onDe
             >
               <div style={{ minWidth: 0 }}>
                 <Typography.Text ellipsis style={{ display: 'block', fontSize: 13 }}>{kb.name}</Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {kb.doc_count} 文档 · {kb.chunk_count} chunks
-                </Typography.Text>
+                <Space size={4} wrap>
+                  <Tag
+                    color={domainColor(kb.business_domain)}
+                    style={{ marginInlineEnd: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}
+                  >
+                    {domainLabel(kb.business_domain)}
+                  </Tag>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {kb.doc_count} 文档 · {kb.chunk_count} chunks
+                  </Typography.Text>
+                </Space>
               </div>
               <Space size={0}>
                 <Tooltip title="编辑">

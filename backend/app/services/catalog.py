@@ -9,14 +9,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.taxonomy import doc_type_label, domain_label
 from app.db.models import Document, KnowledgeBase
-
-_DOC_TYPE_ZH = {
-    "textbook": "教材",
-    "standard": "规范",
-    "manual": "手册",
-    "other": "其他",
-}
 _STATUS_ZH = {
     "pending": "排队中",
     "parsing": "解析中",
@@ -39,7 +33,7 @@ async def load_catalog(db: AsyncSession, kb_id: int | None = None) -> dict:
             {
                 "filename": d.filename,
                 "file_type": d.file_type,
-                "doc_type": _DOC_TYPE_ZH.get(d.doc_type, d.doc_type or "其他"),
+                "doc_type": doc_type_label(d.doc_type),
                 "page_count": d.page_count,
                 "chunk_count": d.chunk_count,
                 "status": d.status,
@@ -57,6 +51,8 @@ async def load_catalog(db: AsyncSession, kb_id: int | None = None) -> dict:
             "mode": "kb",
             "kb_id": kb_id,
             "kb_name": kb.name if kb else f"知识库 #{kb_id}",
+            # 单元 2：业务域随知识库返回，清单回答里会带上
+            "business_domain": domain_label(kb.business_domain if kb else None),
             "items": items,
             "counts": counts,
         }
@@ -69,6 +65,7 @@ async def load_catalog(db: AsyncSession, kb_id: int | None = None) -> dict:
             "name": k.name,
             "doc_count": k.doc_count,
             "chunk_count": k.chunk_count,
+            "business_domain": domain_label(k.business_domain),
         }
         for k in rows
     ]
@@ -79,6 +76,8 @@ def format_catalog(catalog: dict) -> str:
     """把结构化清单转成给 LLM 的纯文本（不暴露内部 id/字段名）。"""
     if catalog["mode"] == "kb":
         lines = [f"当前知识库：{catalog['kb_name']}"]
+        if catalog.get("business_domain"):
+            lines.append(f"业务域：{catalog['business_domain']}")
         c = catalog["counts"]
         extra = []
         if c["parsing"]:
@@ -101,6 +100,9 @@ def format_catalog(catalog: dict) -> str:
     if not catalog["items"]:
         lines.append("（暂无知识库）")
     for idx, it in enumerate(catalog["items"], 1):
-        lines.append(f"{idx}. {it['name']}｜{it['doc_count']} 份文档｜{it['chunk_count']} 个切片")
+        lines.append(
+            f"{idx}. {it['name']}｜{it['doc_count']} 份文档｜{it['chunk_count']} 个切片"
+            f"｜{it.get('business_domain') or '综合与基础'}"
+        )
     lines.append("如需查看某个知识库的具体文件，请先选择该知识库再提问。")
     return "\n".join(lines)

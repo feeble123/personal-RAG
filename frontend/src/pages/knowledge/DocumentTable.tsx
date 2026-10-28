@@ -9,6 +9,7 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import { DeleteOutlined, FileOutlined, RedoOutlined } from '@ant-design/icons'
 import type { DocumentItem } from '@/api/types'
+import { docTypeColor, docTypeLabel } from '@/constants/taxonomy'
 import {
   STAGE_PCT,
   STATUS_META,
@@ -40,7 +41,15 @@ export function buildDocumentColumns({ onOpenDetail, onReparse, onDelete }: Prop
         </Space>
       ),
     },
-    { title: '类型', dataIndex: 'file_type', key: 'file_type', width: 80 },
+    { title: '格式', dataIndex: 'file_type', key: 'file_type', width: 70 },
+    {
+      // 单元 2：文档分类（10 类），字典见 constants/taxonomy.ts
+      title: '分类',
+      dataIndex: 'doc_type',
+      key: 'doc_type',
+      width: 80,
+      render: (v: string) => <Tag color={docTypeColor(v)}>{docTypeLabel(v)}</Tag>,
+    },
     {
       title: '大小',
       dataIndex: 'file_size',

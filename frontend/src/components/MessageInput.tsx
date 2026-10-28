@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Select, Space, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { kbPublicApi } from '@/api/modules'
 import { ANSWER_STYLE_OPTIONS, type KnowledgeBase } from '@/api/types'
+import { domainLabel } from '@/constants/taxonomy'
 import { useChatStore } from '@/stores/chat'
 import PromptInput from './PromptInput'
 
@@ -28,6 +29,17 @@ export default function MessageInput() {
     }
   }
 
+  // 单元 2：知识库下拉按「业务域」分组，资料多时更好找
+  const kbOptions = useMemo(() => {
+    const groups = new Map<string, { value: number; label: string }[]>()
+    for (const k of kbs) {
+      const key = domainLabel(k.business_domain)
+      if (!groups.has(key)) groups.set(key, [])
+      groups.get(key)!.push({ value: k.id, label: `${k.name} (${k.doc_count} 文档)` })
+    }
+    return [...groups.entries()].map(([label, options]) => ({ label, options }))
+  }, [kbs])
+
   const doSend = (text: string) => {
     send(text, kbId, style)
   }
@@ -41,7 +53,7 @@ export default function MessageInput() {
           style={{ minWidth: 'clamp(150px, 22vw, 260px)' }}
           allowClear
           placeholder="全部知识库"
-          options={kbs.map((k) => ({ value: k.id, label: `${k.name} (${k.doc_count} 文档)` }))}
+          options={kbOptions}
         />
         <Space size={4}>
           <Typography.Text type="secondary" style={{ fontSize: 'var(--font-xs)' }}>

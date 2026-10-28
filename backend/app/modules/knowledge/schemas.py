@@ -14,12 +14,32 @@ class KBCreate(BaseModel):
     description: str | None = Field(None, max_length=500)
     # 回答风格（单元 F）：standard/logical/summary/expanded/tutorial
     answer_style: str = Field("standard", max_length=30)
+    # 单元 2 业务域：取值见 app/core/taxonomy.py；非法值统一回退 general（不报 422，
+    # 兼容旧前端与历史调用方）
+    business_domain: str = Field("general", max_length=30)
+
+    @field_validator("business_domain", mode="before")
+    @classmethod
+    def _normalize_domain(cls, v: object) -> str:
+        from app.core.taxonomy import normalize_domain
+
+        return normalize_domain(v if isinstance(v, str) else None)
 
 
 class KBUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=100)
     description: str | None = None
     answer_style: str | None = Field(None, max_length=30)
+    business_domain: str | None = Field(None, max_length=30)
+
+    @field_validator("business_domain", mode="before")
+    @classmethod
+    def _normalize_domain(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        from app.core.taxonomy import normalize_domain
+
+        return normalize_domain(v if isinstance(v, str) else None)
 
 
 class KBOut(ORMModel):
@@ -30,6 +50,8 @@ class KBOut(ORMModel):
     chunk_count: int
     status: str
     answer_style: str
+    # 单元 2：业务域（general/flood/water/construction/operation/ecology）
+    business_domain: str = "general"
     created_at: datetime
 
     @field_validator("answer_style", mode="before")
@@ -37,6 +59,14 @@ class KBOut(ORMModel):
     def _fill_answer_style(cls, v: object) -> object:
         """历史行（迁移加列未回填）answer_style 为 NULL/'' → 归一为 'standard'，避免列表接口 500。"""
         return v or "standard"
+
+    @field_validator("business_domain", mode="before")
+    @classmethod
+    def _fill_domain(cls, v: object) -> str:
+        """历史行 business_domain 为 NULL/''/非法 → general，避免列表接口 500。"""
+        from app.core.taxonomy import normalize_domain
+
+        return normalize_domain(v if isinstance(v, str) else None)
 
 
 class DocumentVersionOut(ORMModel):

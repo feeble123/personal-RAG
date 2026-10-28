@@ -60,7 +60,7 @@ class TestExternalSearch:
 
     async def test_contract(self, client, external_key, monkeypatch):
         """返回结构必须与冻结契约完全一致。"""
-        async def _fake_retrieve(query, top_k=5, kb_id=None, doc_ids=None):
+        async def _fake_retrieve(query, top_k=5, kb_id=None, doc_ids=None, **kw):
             return [
                 retriever.RetrievalResult(
                     text="明渠均匀流的形成条件包括：……",
@@ -105,7 +105,7 @@ class TestExternalSearch:
         }
 
     async def test_empty_results(self, client, external_key, monkeypatch):
-        async def _empty(query, top_k=5, kb_id=None, doc_ids=None):
+        async def _empty(query, top_k=5, kb_id=None, doc_ids=None, **kw):
             return []
 
         monkeypatch.setattr(retriever, "retrieve", _empty)
@@ -116,6 +116,24 @@ class TestExternalSearch:
         )
         assert r.status_code == 200
         assert r.json() == {"results": []}
+
+
+    async def test_classification_filters_passed_through(self, client, external_key, monkeypatch):
+        """单元 2：业务域 / 文档类型过滤要透传到检索层。"""
+        seen = {}
+
+        async def _fake_retrieve(query, top_k=5, kb_id=None, doc_ids=None, **kw):
+            seen.update({"business_domain": kw.get("business_domain"), "doc_type": kw.get("doc_type")})
+            return []
+
+        monkeypatch.setattr(retriever, "retrieve", _fake_retrieve)
+        r = await client.post(
+            "/api/v1/search",
+            json={"query": "洪水风险图", "business_domain": "flood", "doc_type": "standard"},
+            headers={"X-API-Key": external_key},
+        )
+        assert r.status_code == 200
+        assert seen == {"business_domain": "flood", "doc_type": "standard"}
 
 
 class TestExternalChat:

@@ -44,6 +44,7 @@ import {
   type ParseMode,
   type UploadTask,
 } from './knowledge/documentMeta'
+import { BUSINESS_DOMAINS, DEFAULT_DOMAIN } from '@/constants/taxonomy'
 import { buildDocumentColumns } from './knowledge/DocumentTable'
 import UploadProgress from './knowledge/UploadProgress'
 import SearchPreview from './knowledge/SearchPreview'
@@ -63,7 +64,14 @@ export default function KnowledgeBase() {
   const [docType, setDocType] = useState<DocType>('other')
   const [parseMode, setParseMode] = useState<ParseMode>('fast')
   const [kbModal, setKbModal] = useState<{ open: boolean; editing?: KnowledgeBase }>({ open: false })
-  const [kbForm, setKbForm] = useState({ name: '', description: '', answer_style: 'standard' })
+  const [kbForm, setKbForm] = useState({
+    name: '',
+    description: '',
+    answer_style: 'standard',
+    business_domain: DEFAULT_DOMAIN,
+  })
+  // 单元 2：按业务域筛选左侧知识库列表
+  const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined)
   const [detailDoc, setDetailDoc] = useState<DocumentItem | null>(null)
   // 批量上传任务列表（per-file 进度）
   const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([])
@@ -177,6 +185,7 @@ export default function KnowledgeBase() {
         name: kbForm.name,
         description: kbForm.description,
         answer_style: kbForm.answer_style,
+        business_domain: kbForm.business_domain,
       })
       message.success('已更新')
       setKbModal({ open: false })
@@ -204,7 +213,7 @@ export default function KnowledgeBase() {
   })
 
   const openCreateKb = () => {
-    setKbForm({ name: '', description: '', answer_style: 'standard' })
+    setKbForm({ name: '', description: '', answer_style: 'standard', business_domain: DEFAULT_DOMAIN })
     setKbModal({ open: true })
   }
 
@@ -213,6 +222,7 @@ export default function KnowledgeBase() {
       name: kb.name,
       description: kb.description || '',
       answer_style: kb.answer_style || 'standard',
+      business_domain: kb.business_domain || DEFAULT_DOMAIN,
     })
     setKbModal({ open: true, editing: kb })
   }
@@ -244,12 +254,14 @@ export default function KnowledgeBase() {
         <div style={{ display: 'flex', gap: 16 }}>
           {/* 左：知识库列表 */}
           <KbList
-            kbs={kbs}
+            kbs={domainFilter ? kbs.filter((k) => k.business_domain === domainFilter) : kbs}
             activeKb={activeKb}
             onSelect={setActiveKb}
             onCreate={openCreateKb}
             onEdit={openEditKb}
             onDelete={deleteKb}
+            domainFilter={domainFilter}
+            onDomainFilterChange={setDomainFilter}
           />
 
           {/* 右：文档 + 检索预览 + 切片 */}
@@ -378,6 +390,17 @@ export default function KnowledgeBase() {
             value={kbForm.description}
             onChange={(e) => setKbForm({ ...kbForm, description: e.target.value })}
           />
+          <div>
+            <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              业务域（决定该库资料归哪类业务，检索时可按域筛选）
+            </Typography.Text>
+            <Select
+              value={kbForm.business_domain}
+              onChange={(v) => setKbForm({ ...kbForm, business_domain: v })}
+              style={{ width: '100%', marginTop: 4 }}
+              options={BUSINESS_DOMAINS.map((d) => ({ value: d.value, label: d.label }))}
+            />
+          </div>
           <div>
             <Typography.Text type="secondary" style={{ fontSize: 13 }}>
               回答风格

@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.metrics import metrics
-from app.db.models import Chunk, Document
+from app.db.models import Chunk, Document, KnowledgeBase
 from app.schemas import CitationOut
 from app.services import bm25, vecmath, vector_store
 from app.services.embedding import embed_query
@@ -457,6 +457,36 @@ async def _expand_and_hydrate(
     return hydrated, expanded_type
 
 
+async def _scope_doc_ids_by_classification(
+    db: AsyncSession,
+    kb_id: int | None,
+    business_domain: str | None,
+    doc_type: str | None,
+) -> list[int] | None:
+    """单元 2：把「业务域 / 文档类型」解析成文档 id 白名单。
+
+    - 业务域挂在知识库上（一个库一个域），文档类型挂在文档上（上传时选）
+    - 两者都没传 → None（不限制，走原有检索路径）
+    - 传了但一份文档都不命中 → []（调用方直接返回空，不查向量库、不调模型）
+    - 传了 kb_id → 再收窄到该库（域/类型与库取交集）
+    """
+    if not business_domain and not doc_type:
+        return None
+
+    from app.core.taxonomy import DOC_TYPE_VALUES, normalize_domain
+
+    stmt = select(Document.id)
+    if business_domain:
+        stmt = stmt.join(KnowledgeBase, Document.kb_id == KnowledgeBase.id).where(
+            KnowledgeBase.business_domain == normalize_domain(business_domain)
+        )
+    if doc_type and doc_type in DOC_TYPE_VALUES:
+        stmt = stmt.where(Document.doc_type == doc_type)
+    if kb_id is not None:
+        stmt = stmt.where(Document.kb_id == kb_id)
+    return list((await db.execute(stmt)).scalars().all())
+
+
 async def retrieve(
     db: AsyncSession,
     query: str,
@@ -465,6 +495,8 @@ async def retrieve(
     top_k: int | None = None,
     include_snippet: bool = True,
     return_trace: bool = False,
+    business_domain: str | None = None,
+    doc_type: str | None = None,
 ) -> list[RetrievedChunk] | RetrievedResult:
     """检索主入口。kb_id=None 跨全库（按库归一化 BM25 加权）；doc_ids 限定只搜点名文档。
 
@@ -485,6 +517,19 @@ async def retrieve(
     # P2 单元3：检索范围指标（scoped=点名文档限定，global=跨全库）
     metrics["retrieval_requests_total"].labels("scoped" if doc_ids else "global").inc()
     top_k = top_k or settings.top_k_final
+
+    # 单元 2：业务域 / 文档类型过滤 → 文档白名单（与问题点名的 doc_ids 取交集）。
+    # 走 doc_ids 通道复用现有过滤能力，**不需要重灌文档**（向量库里按 doc_id 过滤）。
+    scope_doc_ids = await _scope_doc_ids_by_classification(db, kb_id, business_domain, doc_type)
+    if scope_doc_ids is not None:
+        if doc_ids:
+            allowed = set(scope_doc_ids)
+            doc_ids = [d for d in doc_ids if d in allowed]
+        else:
+            doc_ids = scope_doc_ids
+        if not doc_ids:
+            # 该域/类型下没有可用文档：直接空结果（不查向量库、不调模型）
+            return RetrievedResult(cites=[], trace=None) if return_trace else []
 
     # 阶段0：读表问题走精确结构化通道；命中直接返回
     early = await _try_table_channel(db, query, kb_id, doc_ids, return_trace)

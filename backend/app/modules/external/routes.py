@@ -48,6 +48,14 @@ class SearchIn(BaseModel):
     top_k: int = Field(5, ge=1, le=20, description="返回条数（1~20）")
     kb_id: int | None = Field(None, description="限定知识库 id；缺省跨全库")
     doc_ids: list[int] | None = Field(None, description="限定文档 id 列表（可选）")
+    business_domain: str | None = Field(
+        None,
+        description="限定业务域：general/flood/water/construction/operation/ecology；缺省不限",
+    )
+    doc_type: str | None = Field(
+        None,
+        description="限定文档类型：standard/regulation/textbook/manual/emergency_plan/scheme/report/case/ledger/other",
+    )
 
 
 @router.post("/search")
@@ -63,11 +71,14 @@ async def external_search(request: Request, body: SearchIn) -> dict:
         top_k=body.top_k,
         kb_id=body.kb_id,
         doc_ids=body.doc_ids,
+        business_domain=body.business_domain,
+        doc_type=body.doc_type,
     )
     elapsed_ms = (perf_counter() - t0) * 1000
     logger.info(
-        "外部检索 query_len=%s kb_id=%s top_k=%s hits=%s elapsed_ms=%.1f",
-        len(body.query), body.kb_id, body.top_k, len(results), elapsed_ms,
+        "外部检索 query_len=%s kb_id=%s domain=%s doc_type=%s top_k=%s hits=%s elapsed_ms=%.1f",
+        len(body.query), body.kb_id, body.business_domain, body.doc_type,
+        body.top_k, len(results), elapsed_ms,
     )
     return retriever.results_to_dict(results)
 
@@ -85,6 +96,8 @@ async def list_knowledge_bases(db: DbSession) -> dict:
                 "name": kb.name,
                 "doc_count": kb.doc_count,
                 "chunk_count": kb.chunk_count,
+                # 单元 2：业务域（新增字段，向后兼容；业务系统可据此分组/筛选）
+                "business_domain": kb.business_domain,
             }
             for kb in rows
         ]
@@ -97,6 +110,10 @@ class ChatIn(BaseModel):
     question: str = Field(..., min_length=1, max_length=500, description="问题")
     kb_id: int | None = Field(None, description="限定知识库 id；缺省跨全库")
     top_k: int = Field(5, ge=1, le=10, description="送入生成的知识片段数（1~10）")
+    business_domain: str | None = Field(
+        None, description="限定业务域（同 /search）；缺省不限"
+    )
+    doc_type: str | None = Field(None, description="限定文档类型（同 /search）；缺省不限")
     style: str = Field(
         DEFAULT_STYLE,
         description="回答风格：standard/logical/summary/expanded/tutorial；非法值回退 standard",
@@ -115,7 +132,14 @@ async def external_chat(request: Request, body: ChatIn) -> dict:
     t0 = perf_counter()
 
     async with async_session_factory() as db:
-        cites = await rag.retrieve(db, body.question, kb_id=body.kb_id, top_k=body.top_k)
+        cites = await rag.retrieve(
+            db,
+            body.question,
+            kb_id=body.kb_id,
+            top_k=body.top_k,
+            business_domain=body.business_domain,
+            doc_type=body.doc_type,
+        )
     scores = [c.score for c in cites if c.score is not None]
     evidence_level = rag.judge_evidence_level(scores)
 

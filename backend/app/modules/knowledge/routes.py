@@ -11,6 +11,12 @@ from sqlalchemy import func, select
 from app.core.config import settings
 from app.core.deps import AdminUser, CurrentUser, DbSession, get_client_ip
 from app.core.exceptions import BizError
+from app.core.taxonomy import (
+    DOC_TYPE_VALUES,
+    as_options as taxonomy_options,
+    normalize_doc_type,
+    normalize_domain,
+)
 from app.db.models import Chunk, Document, KnowledgeBase
 from app.modules.ingestion import manager as ingestion
 from app.modules.knowledge.schemas import (
@@ -33,17 +39,48 @@ public_router = APIRouter(prefix="/knowledge-bases", tags=["knowledge"])
 
 
 @public_router.get("", response_model=list[KBOut])
-async def list_public_kbs(db: DbSession, _user: CurrentUser) -> list[KnowledgeBase]:
-    result = await db.execute(
-        select(KnowledgeBase).where(KnowledgeBase.status != "empty").order_by(KnowledgeBase.created_at.desc())
+async def list_public_kbs(
+    db: DbSession,
+    _user: CurrentUser,
+    business_domain: str | None = Query(None, description="按业务域筛选"),
+) -> list[KnowledgeBase]:
+    stmt = (
+        select(KnowledgeBase)
+        .where(KnowledgeBase.status != "empty")
+        .order_by(KnowledgeBase.created_at.desc())
     )
+    if business_domain:
+        stmt = stmt.where(KnowledgeBase.business_domain == normalize_domain(business_domain))
+    result = await db.execute(stmt)
     return list(result.scalars().all())
+
+
+@public_router.get("/taxonomy")
+async def get_taxonomy(_user: CurrentUser) -> dict:
+    """分类字典（业务域 + 文档类型），供前端下拉与标签展示。
+
+    前端也有一份镜像常量（frontend/src/constants/taxonomy.ts）用于离线渲染；
+    两边值必须一致，以本接口为准（后端 taxonomy.py 是唯一权威）。
+    """
+    from app.core.taxonomy import BUSINESS_DOMAINS, DOC_TYPES
+
+    return {
+        "business_domains": taxonomy_options(BUSINESS_DOMAINS),
+        "doc_types": taxonomy_options(DOC_TYPES),
+    }
 
 
 # ---------------- 知识库 ----------------
 @router.get("/kbs", response_model=list[KBOut])
-async def list_kbs(db: DbSession, _admin: AdminUser) -> list[KnowledgeBase]:
-    result = await db.execute(select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc()))
+async def list_kbs(
+    db: DbSession,
+    _admin: AdminUser,
+    business_domain: str | None = Query(None, description="按业务域筛选（见 taxonomy）"),
+) -> list[KnowledgeBase]:
+    stmt = select(KnowledgeBase).order_by(KnowledgeBase.created_at.desc())
+    if business_domain:
+        stmt = stmt.where(KnowledgeBase.business_domain == normalize_domain(business_domain))
+    result = await db.execute(stmt)
     return list(result.scalars().all())
 
 
@@ -58,6 +95,7 @@ async def create_kb(
         name=body.name,
         description=body.description,
         answer_style=body.answer_style,
+        business_domain=body.business_domain,
         created_by=admin.id,
     )
     db.add(kb)
@@ -90,6 +128,8 @@ async def update_kb(kb_id: int, body: KBUpdate, db: DbSession, _admin: AdminUser
         kb.description = body.description
     if body.answer_style is not None:
         kb.answer_style = body.answer_style
+    if body.business_domain is not None:
+        kb.business_domain = normalize_domain(body.business_domain)
     await db.commit()
     await db.refresh(kb)
     return kb
@@ -136,9 +176,8 @@ async def upload_document(
     if chunk_strategy not in ("old", "new"):
         chunk_strategy = settings.chunk_strategy_default
 
-    # P0-11 文档类型（未来 DSH 引用来源判断）：textbook/standard/manual/other；非法值回退 other
-    if doc_type not in ("textbook", "standard", "manual", "other"):
-        doc_type = "other"
+    # 单元 2 文档类型：10 类（见 app/core/taxonomy.py）；非法值回退 other
+    doc_type = normalize_doc_type(doc_type)
 
     # 单元 S 解析模式：fast=快速（pipeline 老后端）/ high=高精度（hybrid-engine 新后端）；非法值回退 fast
     if parse_mode not in ("fast", "high"):
@@ -222,11 +261,19 @@ async def list_documents(
     _admin: AdminUser,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    doc_type: str | None = Query(None, description="按文档类型筛选（见 taxonomy 10 类）"),
 ) -> DocumentListOut:
-    total = (await db.scalar(select(func.count()).select_from(Document).where(Document.kb_id == kb_id))) or 0
+    # 单元 2：文档类型筛选（文档清单页用）；非法值视为不筛选
+    conditions = [Document.kb_id == kb_id]
+    if doc_type and doc_type in DOC_TYPE_VALUES:
+        conditions.append(Document.doc_type == doc_type)
+
+    total = (
+        await db.scalar(select(func.count()).select_from(Document).where(*conditions))
+    ) or 0
     rows = await db.execute(
         select(Document)
-        .where(Document.kb_id == kb_id)
+        .where(*conditions)
         .order_by(Document.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
@@ -326,6 +373,8 @@ async def search_preview(
     q: str = Query(..., min_length=1, max_length=500),
     kb_id: int | None = Query(None),
     top_k: int = Query(5, ge=1, le=20),
+    business_domain: str | None = Query(None, description="限定业务域（不传=不限）"),
+    doc_type: str | None = Query(None, description="限定文档类型（不传=不限）"),
 ) -> SearchResult:
     # 预览与问答一致：问题点名《书名》/「XXX中」时限定到该文档
     # P0-2 scope 隔离：书名解析限定当前库
@@ -334,7 +383,14 @@ async def search_preview(
     from app.services import retriever
 
     doc_ids = await rag.resolve_documents_by_title(db, q, kb_id=kb_id)
-    results = await retriever.retrieve(q, top_k=top_k, kb_id=kb_id, doc_ids=doc_ids or None)
+    results = await retriever.retrieve(
+        q,
+        top_k=top_k,
+        kb_id=kb_id,
+        doc_ids=doc_ids or None,
+        business_domain=business_domain,
+        doc_type=doc_type,
+    )
     hits = [
         CitationOut(
             chunk_id=r.source.chunk_id,

@@ -176,10 +176,16 @@ export async function streamOptimize(opts: {
 // ===== 知识库 / 文档（管理员）=====
 export const kbApi = {
   list: () => api.get('/admin/kbs').then((r) => r.data),
-  create: (data: { name: string; description?: string; answer_style?: string }) =>
-    api.post('/admin/kbs', data).then((r) => r.data),
-  update: (id: number, data: { name?: string; description?: string; answer_style?: string }) =>
-    api.patch(`/admin/kbs/${id}`, data).then((r) => r.data),
+  create: (data: {
+    name: string
+    description?: string
+    answer_style?: string
+    business_domain?: string
+  }) => api.post('/admin/kbs', data).then((r) => r.data),
+  update: (
+    id: number,
+    data: { name?: string; description?: string; answer_style?: string; business_domain?: string },
+  ) => api.patch(`/admin/kbs/${id}`, data).then((r) => r.data),
   remove: (id: number) => api.delete(`/admin/kbs/${id}`).then((r) => r.data),
   documents: (kbId: number, params?: Record<string, unknown>) =>
     api.get(`/admin/kbs/${kbId}/documents`, { params }).then((r) => r.data),

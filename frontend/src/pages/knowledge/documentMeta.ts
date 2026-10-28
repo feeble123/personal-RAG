@@ -5,6 +5,7 @@
  * 组件拆分见同目录 DocumentTable / UploadProgress / SearchPreview / ChunkBrowser。
  */
 import type { DocumentItem } from '@/api/types'
+import { DOC_TYPES } from '@/constants/taxonomy'
 
 // 文档状态 → 展示文案/颜色
 export const STATUS_META: Record<string, { text: string; color: string }> = {
@@ -40,14 +41,12 @@ export interface UploadTask {
   error?: string
 }
 
-// P0-11 文档类型（未来 DSH 引用来源判断）：textbook 教材 / standard 规范 / manual 手册 / other 其他
-export type DocType = 'textbook' | 'standard' | 'manual' | 'other'
-export const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = [
-  { value: 'textbook', label: '教材' },
-  { value: 'standard', label: '规范' },
-  { value: 'manual', label: '手册' },
-  { value: 'other', label: '其他' },
-]
+// 单元 2：文档类型扩到 10 类（教材/规范/规程/手册/预案/方案/报告/案例/台账/其他），
+// 字典唯一来源是 constants/taxonomy.ts（与后端 app/core/taxonomy.py 同名同值）。
+export type DocType = string
+export const DOC_TYPE_OPTIONS: { value: DocType; label: string }[] = DOC_TYPES.map(
+  ({ value, label }) => ({ value, label }),
+)
 
 // 单元 S：解析模式（上传时用户自选）。fast=快速（pipeline 老后端）/ high=高精度（hybrid-engine）
 export type ParseMode = 'fast' | 'high'
