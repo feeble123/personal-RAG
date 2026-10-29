@@ -200,6 +200,22 @@ class Settings(BaseSettings):
     # 对外问答比检索贵（要调用 LLM），单独限流
     external_chat_rate_limit: str = "20/minute"
 
+    # ---- 知识图谱（防洪链，第一期；默认关闭）----
+    # 关闭时：入库不抽取、检索不查图、管理接口返回 503，**主链路零影响**。
+    graph_enabled: bool = False
+    # 图存储后端：memory（进程内，测试/离线试用）/ neo4j（生产）
+    graph_backend: str = "memory"
+    graph_neo4j_uri: str = "bolt://localhost:7687"
+    graph_neo4j_user: str = "neo4j"
+    graph_neo4j_password: str = ""
+    graph_neo4j_database: str = "neo4j"
+    # 入库后同步图谱的总超时：超时只放弃同步，不影响入库
+    graph_sync_timeout_s: float = 30.0
+    # 检索时图查询超时（毫秒）：超时回退到向量+BM25，用户无感
+    graph_query_timeout_ms: int = 800
+    # 图候选进入融合的条数上限
+    graph_top_k: int = 30
+
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"
     # OCR 渲染分辨率：200dpi 对印刷中文足够，速度约为 300dpi 的 2 倍
@@ -248,6 +264,13 @@ class Settings(BaseSettings):
         # P2 单元2：LOG_LEVEL 只允许标准级别（默认 INFO 不触发，不影响现有测试）
         if (self.log_level or "").upper() not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
             raise ValueError(f"LOG_LEVEL 仅支持 DEBUG/INFO/WARNING/ERROR/CRITICAL，收到: {self.log_level!r}")
+
+        # 知识图谱：只在真的启用且用 neo4j 时才要求密码，避免默认关闭的部署受影响
+        backend_kind = (self.graph_backend or "").strip().lower()
+        if backend_kind not in ("memory", "neo4j"):
+            raise ValueError(f"GRAPH_BACKEND 仅支持 memory/neo4j，收到: {self.graph_backend!r}")
+        if self.graph_enabled and backend_kind == "neo4j" and not self.graph_neo4j_password:
+            raise ValueError("启用 Neo4j 图谱时必须配置 GRAPH_NEO4J_PASSWORD")
 
         if env == "production":
             if not self.jwt_secret:

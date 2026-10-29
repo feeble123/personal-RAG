@@ -63,6 +63,11 @@ services:
       USE_CELERY: "true"          # 领活交给 celery-worker；本进程只做 reaper
       UPLOAD_DIR: /app/data/uploads
       CHROMA_DIR: /app/data/.chroma
+      # 知识图谱（第一期防洪链）：默认关闭；启用需 --profile graph 起 neo4j
+      GRAPH_ENABLED: "${GRAPH_ENABLED:-false}"
+      GRAPH_BACKEND: "${GRAPH_BACKEND:-memory}"
+      GRAPH_NEO4J_URI: bolt://neo4j:7687
+      GRAPH_NEO4J_PASSWORD: "${GRAPH_NEO4J_PASSWORD:-}"
     volumes:
       - uploads:/app/data/uploads
       - chroma:/app/data/.chroma
@@ -97,6 +102,11 @@ services:
       USE_CELERY: "true"
       UPLOAD_DIR: /app/data/uploads
       CHROMA_DIR: /app/data/.chroma
+      # 知识图谱（第一期防洪链）：默认关闭；启用需 --profile graph 起 neo4j
+      GRAPH_ENABLED: "${GRAPH_ENABLED:-false}"
+      GRAPH_BACKEND: "${GRAPH_BACKEND:-memory}"
+      GRAPH_NEO4J_URI: bolt://neo4j:7687
+      GRAPH_NEO4J_PASSWORD: "${GRAPH_NEO4J_PASSWORD:-}"
     volumes:
       - uploads:/app/data/uploads
       - chroma:/app/data/.chroma
@@ -125,7 +135,33 @@ services:
     depends_on:
       - backend
 
+  # ---- 6. Neo4j 知识图谱（可选服务，默认不启动）----
+  # 启动：docker compose --profile graph up -d
+  # 未启动时 backend 的图通道直接降级，不影响问答/入库（GRAPH_ENABLED=false 时可完全不启用）
+  neo4j:
+    image: neo4j:5-community
+    profiles: ["graph"]
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${GRAPH_NEO4J_PASSWORD:-change-me}
+      # 小库够用；不限制时默认堆可能吃掉大量内存
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    volumes:
+      - neo4jdata:/data
+    ports:
+      # 只监听本机，避免图库直接暴露到网络；远程看图谱请用 SSH 隧道
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${GRAPH_NEO4J_PASSWORD:-change-me} 'RETURN 1' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 40s
+
 volumes:
   pgdata:
   uploads:
   chroma:
+  neo4jdata:

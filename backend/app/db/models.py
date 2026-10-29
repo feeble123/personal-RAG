@@ -1,10 +1,13 @@
 """全部 ORM 模型（SQLAlchemy 2.0，Mapped 声明式）。
 
-12 张表：users / conversations / messages / knowledge_bases / documents
+15 张表：users / conversations / messages / knowledge_bases / documents
         / document_versions / index_versions / chunks / citations
         / embedding_cache / semantic_cache / qa_memory
+        / graph_sync_runs / graph_edge_evidence / graph_entity_aliases
 
 关系统一 lazy="selectin"，避免 async 会话序列化时 MissingGreenlet。
+图谱三张表只存「运行状态 / 证据 / 别名」——节点与关系本身在 Neo4j，
+PG 始终是真相源，图库丢了也能从 chunks 重建。
 """
 from __future__ import annotations
 
@@ -495,3 +498,98 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     __table_args__ = (Index("ix_audit_logs_created", "created_at"),)
+
+
+# ---------------- 知识图谱（第一期：防洪链）----------------
+# 设计原则：PG 是真相源，Neo4j 只存节点/关系/路径（可重建）。
+# 这三张表分别负责「跑没跑成功」「每条事实的原文证据」「查询时怎么把词对到实体」。
+
+class GraphSyncRun(Base):
+    """一次图谱同步/导入的运行记录（可审计、可重试）。
+
+    mode：rules（规则抽取）/ llm（兜底抽取）/ manual（人工台账）/ import（批量导入）
+    doc_id/version_id 为空表示台账导入（不绑定某份文档）。
+    """
+
+    __tablename__ = "graph_sync_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kb_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    doc_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mode: Mapped[str] = mapped_column(String(20), default="rules", nullable=False)
+    # running / succeeded / failed / partial（部分行被拒）
+    status: Mapped[str] = mapped_column(String(20), default="running", nullable=False)
+    entity_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    relation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # 被拒/告警明细（如「第 5 行：安全泄量缺单位」），便于排查
+    warnings: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_graph_sync_runs_kb_doc", "kb_id", "doc_id"),)
+
+
+class GraphEdgeEvidence(Base):
+    """一条图事实对应的原文证据：答案里每条结论都能点回原文。
+
+    edge_key 不带版本（subject|predicate|object），跨版本按 version_id 区分；
+    chunk_id 可为空（人工台账没有原文切片），此时靠 doc_name/section 标注来源。
+    """
+
+    __tablename__ = "graph_edge_evidence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    edge_key: Mapped[str] = mapped_column(String(400), index=True, nullable=False)
+    kb_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    doc_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    chunk_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    doc_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    section: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    clause_no: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    snippet: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # rule / llm / manual
+    extractor: Mapped[str] = mapped_column(String(20), default="rule", nullable=False)
+    rule_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    # auto（抽取默认）/ confirmed（人工确认）/ rejected（人工驳回，检索不用）
+    status: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)
+    run_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_graph_evidence_version", "kb_id", "version_id"),)
+
+
+class GraphEntityAlias(Base):
+    """实体别名表：查询侧「问题里的词 → 图节点」的唯一权威来源。
+
+    kb_id = 0 表示全局实体（行政区/河流/条款/指标/术语），否则为该知识库私有实体
+    （工程对象/管理单位/事件）。用 0 而不是 NULL，是为了让唯一约束真正生效
+    （PG 中 NULL 互不相等，会让重复别名插进去）。
+    """
+
+    __tablename__ = "graph_entity_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    node_uid: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)  # 主名称
+    alias: Mapped[str] = mapped_column(String(200), nullable=False)  # 本条别名（主名称也插一条）
+    normalized_alias: Mapped[str] = mapped_column(String(200), index=True, nullable=False)
+    kb_id: Mapped[int] = mapped_column(Integer, default=0, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "normalized_alias", "kb_id", "node_uid", name="uq_graph_alias_normalized_kb_uid"
+        ),
+    )

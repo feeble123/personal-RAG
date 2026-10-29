@@ -1,0 +1,141 @@
+"""进程内图存储（InMemoryGraphStore）：写入合并、删除、邻居、搜索、统计。"""
+from __future__ import annotations
+
+import pytest
+
+from app.services.graph.schema import Edge, EntityType, Node, RelationType, uid_for
+from app.services.graph.store import InMemoryGraphStore
+
+
+def _node(entity_type: EntityType, name: str, kb_id: int = 1, **props) -> Node:
+    return Node(
+        uid=uid_for(entity_type, name, kb_id),
+        entity_type=entity_type,
+        name=name,
+        props=props,
+        kb_ids=[kb_id],
+    )
+
+
+def _edge(subject: Node, predicate: RelationType, obj: Node, kb_id: int = 1, **kw) -> Edge:
+    return Edge(
+        subject_uid=subject.uid,
+        predicate=predicate,
+        object_uid=obj.uid,
+        kb_id=kb_id,
+        doc_id=kw.get("doc_id"),
+        version_id=kw.get("version_id"),
+        chunk_ids=kw.get("chunk_ids", []),
+        status=kw.get("status", "auto"),
+        confidence=kw.get("confidence", 1.0),
+    )
+
+
+@pytest.fixture
+def store() -> InMemoryGraphStore:
+    return InMemoryGraphStore()
+
+
+async def _seed(store: InMemoryGraphStore) -> dict[str, Node]:
+    reservoir = _node(EntityType.ENGINEERING_OBJECT, "鲤鱼塘水库")
+    reach = _node(EntityType.RIVER, "下游河段1")
+    town = _node(EntityType.ADMIN_REGION, "XX镇")
+    measure = _node(EntityType.MEASURE, "XX镇·预警发布")
+    await store.upsert(
+        [reservoir, reach, town, measure],
+        [
+            _edge(reservoir, RelationType.DOWNSTREAM_OF, reach, chunk_ids=[101]),
+            _edge(reach, RelationType.DOWNSTREAM_OF, town, chunk_ids=[102]),
+            _edge(town, RelationType.NEEDS_WARNING, measure, chunk_ids=[103]),
+        ],
+    )
+    return {"reservoir": reservoir, "reach": reach, "town": town, "measure": measure}
+
+
+class TestUpsert:
+    async def test_merges_duplicate_edges(self, store):
+        reservoir = _node(EntityType.ENGINEERING_OBJECT, "鲤鱼塘水库")
+        reach = _node(EntityType.RIVER, "下游河段1")
+        await store.upsert([reservoir, reach], [_edge(reservoir, RelationType.DOWNSTREAM_OF, reach, chunk_ids=[1])])
+        await store.upsert([], [_edge(reservoir, RelationType.DOWNSTREAM_OF, reach, chunk_ids=[2], confidence=0.8)])
+
+        stats = await store.stats(kb_id=1)
+        assert stats["edges"]["total"] == 1
+        slice_ = await store.neighbors(reservoir.uid)
+        assert slice_.edges[0].chunk_ids == [1, 2]
+
+    async def test_rejected_status_wins_over_auto(self, store):
+        reservoir = _node(EntityType.ENGINEERING_OBJECT, "鲤鱼塘水库")
+        reach = _node(EntityType.RIVER, "下游河段1")
+        await store.upsert([reservoir, reach], [_edge(reservoir, RelationType.DOWNSTREAM_OF, reach, status="auto")])
+        await store.upsert([], [_edge(reservoir, RelationType.DOWNSTREAM_OF, reach, status="rejected")])
+        slice_ = await store.neighbors(reservoir.uid)
+        assert slice_.edges == []  # 被驳回的边不参与查询
+
+
+class TestDelete:
+    async def test_delete_version(self, store):
+        nodes = await _seed(store)
+        assert (await store.stats())["edges"]["total"] == 3
+        reservoir, reach = nodes["reservoir"], nodes["reach"]
+        await store.upsert([], [_edge(reservoir, RelationType.DOWNSTREAM_OF, reach, doc_id=7, version_id=3, chunk_ids=[9])])
+        await store.delete_version(doc_id=7, version_id=3)
+        slice_ = await store.neighbors(reservoir.uid)
+        assert all(e.version_id != 3 for e in slice_.edges)
+
+    async def test_delete_document(self, store):
+        reservoir = _node(EntityType.ENGINEERING_OBJECT, "鲤鱼塘水库")
+        reach = _node(EntityType.RIVER, "下游河段1")
+        await store.upsert([reservoir, reach], [_edge(reservoir, RelationType.DOWNSTREAM_OF, reach, doc_id=5, version_id=1)])
+        await store.delete_document(5)
+        assert (await store.stats())["edges"]["total"] == 0
+
+    async def test_delete_kb(self, store):
+        await _seed(store)
+        await store.delete_kb(1)
+        stats = await store.stats()
+        assert stats["nodes"]["total"] == 0
+        assert stats["edges"]["total"] == 0
+
+
+class TestQuery:
+    async def test_neighbors_depth_1(self, store):
+        nodes = await _seed(store)
+        slice_ = await store.neighbors(nodes["reach"].uid, depth=1)
+        names = {n.name for n in slice_.nodes}
+        assert names == {"鲤鱼塘水库", "下游河段1", "XX镇"}
+
+    async def test_neighbors_depth_2(self, store):
+        """水库 →(1跳) 河段 →(2跳) 乡镇；措施在第 3 跳，不应出现。"""
+        nodes = await _seed(store)
+        slice_ = await store.neighbors(nodes["reservoir"].uid, depth=2)
+        names = {n.name for n in slice_.nodes}
+        assert "XX镇" in names
+        assert "XX镇·预警发布" not in names
+
+    async def test_neighbors_unknown_uid(self, store):
+        slice_ = await store.neighbors("eo:not-exist")
+        assert slice_.nodes == [] and slice_.edges == []
+
+    async def test_rel_type_filter(self, store):
+        nodes = await _seed(store)
+        slice_ = await store.neighbors(nodes["town"].uid, rel_types=[RelationType.NEEDS_WARNING])
+        assert {e.predicate for e in slice_.edges} == {RelationType.NEEDS_WARNING}
+
+    async def test_search_exact_and_partial(self, store):
+        await _seed(store)
+        exact = await store.search("鲤鱼塘水库", kb_id=1)
+        assert exact and exact[0].name == "鲤鱼塘水库"
+        partial = await store.search("下游", kb_id=1)
+        assert any(n.name == "下游河段1" for n in partial)
+        assert await store.search("不存在的东西", kb_id=1) == []
+
+    async def test_search_kb_scope(self, store):
+        await _seed(store)
+        assert await store.search("鲤鱼塘水库", kb_id=2) == []
+
+    async def test_stats_by_type(self, store):
+        await _seed(store)
+        stats = await store.stats(kb_id=1)
+        assert stats["nodes"]["by_type"]["engineering_object"] == 1
+        assert stats["edges"]["by_type"]["downstream_of"] == 2

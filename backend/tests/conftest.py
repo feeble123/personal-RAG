@@ -15,6 +15,9 @@ os.environ["EMBEDDING_PROVIDER"] = "fake"
 os.environ["LLM_PROVIDER"] = "fake"
 os.environ["RERANK_ENABLED"] = "false"  # 集成测试离线，不走 rerank API
 os.environ["DEBUG"] = "false"
+# 知识图谱：测试默认关闭且用内存实现，CI 不依赖 Neo4j 容器
+os.environ["GRAPH_ENABLED"] = "false"
+os.environ["GRAPH_BACKEND"] = "memory"
 # P0-1：测试用固定密钥/密码（而非随机 fallback），保证 token/登录测试稳定可复现
 os.environ["JWT_SECRET"] = "test-secret-for-unit-tests-not-production"
 os.environ["ADMIN_PASSWORD"] = "123456"
