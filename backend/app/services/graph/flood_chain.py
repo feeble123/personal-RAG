@@ -32,6 +32,7 @@ from app.services.graph.schema import (
     Node,
     RelationType,
     endpoints_allowed,
+    type_value,
     uid_for,
 )
 
@@ -118,11 +119,11 @@ class _Builder:
             return
         if not endpoints_allowed(predicate, subject.entity_type, obj.entity_type):
             self.warnings.append(
-                f"关系端点非法，已跳过：{subject.name}({subject.entity_type.value}) "
-                f"-{predicate.value}-> {obj.name}({obj.entity_type.value})"
+                f"关系端点非法，已跳过：{subject.name}({type_value(subject.entity_type)}) "
+                f"-{type_value(predicate)}-> {obj.name}({type_value(obj.entity_type)})"
             )
             return
-        key = (subject.uid, predicate.value, obj.uid, None)
+        key = (subject.uid, type_value(predicate), obj.uid, None)
         existing = self.edges.get(key)
         if existing is not None:
             if evidence_text and evidence_text not in existing.evidence_text:
@@ -319,10 +320,12 @@ def summarize(result: ExtractionResult) -> dict[str, Any]:
     """给 CLI 打印用的小结。"""
     by_entity: dict[str, int] = {}
     for node in result.nodes:
-        by_entity[node.entity_type.value] = by_entity.get(node.entity_type.value, 0) + 1
+        et = type_value(node.entity_type)
+        by_entity[et] = by_entity.get(et, 0) + 1
     by_rel: dict[str, int] = {}
     for edge in result.edges:
-        by_rel[edge.predicate.value] = by_rel.get(edge.predicate.value, 0) + 1
+        pred = type_value(edge.predicate)
+        by_rel[pred] = by_rel.get(pred, 0) + 1
     return {
         "nodes": len(result.nodes),
         "edges": len(result.edges),

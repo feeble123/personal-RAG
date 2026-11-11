@@ -62,3 +62,5 @@ tenacity>=8.3
 # ===== 知识图谱（第一期防洪链）=====
 # Neo4j 官方 Python 驱动（纯 Python，无系统库依赖；GRAPH_ENABLED=false 时不会连接）
 neo4j>=5.20
+# 本体 TBox 用 YAML 定义（引擎不写死任何模型知识）
+PyYAML>=6.0

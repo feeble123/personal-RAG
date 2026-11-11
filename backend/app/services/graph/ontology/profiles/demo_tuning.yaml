@@ -1,0 +1,113 @@
+# ============================================================
+# 通用调参本体（示例 profile）
+# ------------------------------------------------------------
+# 这份文件只描述“调参这件事里有哪些概念、怎么连”，不含任何具体模型或参数。
+# 具体领域的 profile 通过 extends 叠加在它之上，只写增量。
+# ============================================================
+version: 1
+profile_id: demo_tuning
+domain: model_tuning
+
+entity_types:
+  # ---------- 调参域 ----------
+  - name: Parameter
+    display_name: 参数
+    uid_prefix: pn
+    scope: global
+    attributes:
+      - { name: group, type: enum, values: [蒸散发, 产流, 水源划分, 汇流, 其他], required: true }
+      - { name: unit, type: string, description: "物理单位；无量纲填 -" }
+      - { name: physical_low, type: number, description: "物理合理下限（可空，待确认）" }
+      - { name: physical_high, type: number, description: "物理合理上限（可空，待确认）" }
+      - { name: sensitivity, type: enum, values: [高, 中, 低] }
+      - { name: note, type: text }
+
+  - name: Basin
+    display_name: 流域
+    uid_prefix: bn
+    scope: global
+    attributes:
+      - { name: climate, type: enum, values: [湿润, 半湿润, 半干旱, 干旱] }
+      - { name: flood_type, type: enum, values: [单峰, 多峰] }
+      - { name: area_km2, type: number }
+
+  - name: Strategy
+    display_name: 率定策略
+    uid_prefix: sg
+    scope: local
+    attributes:
+      - { name: objectives, type: list, description: "目标函数，如 [NSE, KGE, 洪峰相对误差]" }
+      - { name: algorithm, type: enum, values: [SCE-UA, PSO, GA, 手动] }
+      - { name: note, type: text }
+
+  - name: Metric
+    display_name: 指标
+    uid_prefix: mc
+    scope: global
+    attributes:
+      - { name: direction, type: enum, values: [越大越好, 越小越好] }
+      - { name: unit, type: string }
+
+  - name: Run
+    display_name: 运行记录
+    uid_prefix: rn
+    scope: local
+    attributes:
+      - { name: started_at, type: string }
+      - { name: objective_text, type: text }
+      - { name: note, type: text }
+
+  - name: FailureMode
+    display_name: 失效模式
+    uid_prefix: fm
+    scope: global
+    attributes:
+      - { name: detect, type: text, description: "可判定的判据描述" }
+      - { name: action, type: enum, values: [reject, warn] }
+
+  # ---------- 流程骨架（首期只定义，不填实例）----------
+  - name: Stage
+    display_name: 阶段
+    uid_prefix: st
+    scope: global
+    attributes:
+      - { name: order, type: number }
+      - { name: note, type: text }
+
+  - name: Action
+    display_name: 动作
+    uid_prefix: ac
+    scope: global
+    attributes:
+      - { name: tool_hint, type: string, description: "建议调用的工具名（可空）" }
+      - { name: note, type: text }
+
+  - name: Tool
+    display_name: 工具
+    uid_prefix: tl
+    scope: global
+    attributes:
+      - { name: kind, type: string, description: "internal / external / mcp" }
+
+  - name: DataAsset
+    display_name: 数据资产
+    uid_prefix: da
+    scope: global
+    attributes:
+      - { name: format, type: string }
+      - { name: note, type: text }
+
+relation_types:
+  - { name: PART_OF, source: Parameter, target: Parameter, description: "参数分组归属" }
+  - { name: AFFECTS, source: Parameter, target: Metric, description: "参数影响某指标" }
+  - { name: APPLIES_TO, source: Strategy, target: Basin, description: "策略适用于某类流域" }
+  - { name: USED, source: Run, target: Parameter, description: "运行使用了某参数" }
+  - { name: ACHIEVED, source: Run, target: Metric, description: "运行达到的指标" }
+  - { name: TRIGGERED_BY, source: FailureMode, target: Parameter, description: "失效由某参数触发" }
+  - { name: NEXT_STAGE, source: Stage, target: Stage, description: "流程的下一阶段" }
+  - { name: PERFORMED_BY, source: Stage, target: Action, description: "阶段包含的动作" }
+  - { name: USES_TOOL, source: Action, target: Tool, description: "动作用到的工具" }
+  - { name: REQUIRES_DATA, source: Action, target: DataAsset, description: "动作需要的数据" }
+
+constraints:
+  - { type: required_attribute, entity: Parameter, attribute: group, severity: error }

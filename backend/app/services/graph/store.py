@@ -12,7 +12,7 @@ import logging
 from typing import Protocol
 
 from app.core.config import settings
-from app.services.graph.schema import Edge, GraphSlice, Node, RelationType
+from app.services.graph.schema import Edge, GraphSlice, Node, RelationType, type_value
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +93,7 @@ class InMemoryGraphStore:
     def _merge_edge(self, incoming: Edge) -> None:
         key = (
             incoming.subject_uid,
-            incoming.predicate.value,
+            type_value(incoming.predicate),
             incoming.object_uid,
             incoming.version_id,
         )
@@ -157,7 +157,7 @@ class InMemoryGraphStore:
         for edge in self._edges.values():
             if edge.status == "rejected":
                 continue
-            if rel_types and edge.predicate not in {RelationType(r) for r in rel_types}:
+            if rel_types and type_value(edge.predicate) not in {type_value(r) for r in rel_types}:
                 continue
             out.append(edge)
         return out
@@ -184,7 +184,7 @@ class InMemoryGraphStore:
                     if len(seen_edges) >= limit:
                         truncated = True
                         break
-                    seen_edges[(edge.subject_uid, edge.predicate.value, edge.object_uid, edge.version_id)] = edge
+                    seen_edges[(edge.subject_uid, type_value(edge.predicate), edge.object_uid, edge.version_id)] = edge
                     for endpoint in (edge.subject_uid, edge.object_uid):
                         if endpoint not in visited:
                             visited.add(endpoint)
@@ -219,10 +219,12 @@ class InMemoryGraphStore:
         edges = [e for e in self._edges.values() if kb_id is None or e.kb_id == kb_id]
         by_type: dict[str, int] = {}
         for n in nodes:
-            by_type[n.entity_type.value] = by_type.get(n.entity_type.value, 0) + 1
+            tv = type_value(n.entity_type)
+            by_type[tv] = by_type.get(tv, 0) + 1
         by_rel: dict[str, int] = {}
         for e in edges:
-            by_rel[e.predicate.value] = by_rel.get(e.predicate.value, 0) + 1
+            pred = type_value(e.predicate)
+            by_rel[pred] = by_rel.get(pred, 0) + 1
         return {
             "nodes": {"total": len(nodes), "by_type": by_type},
             "edges": {"total": len(edges), "by_type": by_rel},

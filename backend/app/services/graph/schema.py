@@ -167,6 +167,91 @@ _UID_PREFIX: dict[EntityType, str] = {
     EntityType.MEASURE: "ms",
 }
 
+
+# ---------------- 动态本体（ontology profile）注册 ----------------
+# 引擎与具体模型解耦：领域知识由 YAML profile 提供，加载时把类型元数据注册到这里，
+# schema.py 本身不出现任何模型名。防洪链的枚举保持原样，两套类型体系共存。
+_DYNAMIC_LABELS: dict[str, str] = {}          # 实体类型值 → Neo4j label
+_DYNAMIC_LABELS_ZH: dict[str, str] = {}       # 实体类型值 → 中文名
+_DYNAMIC_UID_META: dict[str, tuple[str, bool]] = {}  # 类型值 → (uid 前缀, 是否全局)
+_DYNAMIC_REL_LABELS: dict[str, str] = {}      # 关系值 → Neo4j 关系类型
+_DYNAMIC_REL_LABELS_ZH: dict[str, str] = {}   # 关系值 → 中文名
+_DYNAMIC_ENDPOINTS: dict[str, dict[str, set[str]]] = {}  # 关系 → 主体类型 → {客体类型}
+
+
+def type_value(value: Any) -> str:
+    """统一取字符串值：枚举取 .value，普通字符串原样返回。"""
+    return value.value if isinstance(value, Enum) else str(value)
+
+
+def register_dynamic_types(
+    entity_labels: dict[str, str] | None = None,
+    entity_labels_zh: dict[str, str] | None = None,
+    uid_meta: dict[str, tuple[str, bool]] | None = None,
+    relation_labels: dict[str, str] | None = None,
+    relation_labels_zh: dict[str, str] | None = None,
+    endpoints: dict[str, dict[str, set[str]]] | None = None,
+) -> None:
+    """注册一个 ontology profile 的类型元数据（由 registry 加载 YAML 后调用）。"""
+    _DYNAMIC_LABELS.update(entity_labels or {})
+    _DYNAMIC_LABELS_ZH.update(entity_labels_zh or {})
+    _DYNAMIC_UID_META.update(uid_meta or {})
+    _DYNAMIC_REL_LABELS.update(relation_labels or {})
+    _DYNAMIC_REL_LABELS_ZH.update(relation_labels_zh or {})
+    _DYNAMIC_ENDPOINTS.update(endpoints or {})
+
+
+def reset_dynamic_types() -> None:
+    """测试用：清空动态注册，避免用例之间串数据。"""
+    _DYNAMIC_LABELS.clear()
+    _DYNAMIC_LABELS_ZH.clear()
+    _DYNAMIC_UID_META.clear()
+    _DYNAMIC_REL_LABELS.clear()
+    _DYNAMIC_REL_LABELS_ZH.clear()
+    _DYNAMIC_ENDPOINTS.clear()
+
+
+def entity_label(value: Any) -> str:
+    """实体类型 → Neo4j label（动态优先，其次防洪链枚举，最后原字符串）。"""
+    tv = type_value(value)
+    if tv in _DYNAMIC_LABELS:
+        return _DYNAMIC_LABELS[tv]
+    try:
+        return ENTITY_LABELS[EntityType(tv)]
+    except ValueError:
+        return tv
+
+
+def entity_label_zh(value: Any) -> str:
+    tv = type_value(value)
+    if tv in _DYNAMIC_LABELS_ZH:
+        return _DYNAMIC_LABELS_ZH[tv]
+    try:
+        return ENTITY_LABELS_ZH[EntityType(tv)]
+    except ValueError:
+        return tv
+
+
+def relation_label(value: Any) -> str:
+    """关系 → Neo4j 关系类型（动态优先，其次枚举表，最后大写）。"""
+    tv = type_value(value)
+    if tv in _DYNAMIC_REL_LABELS:
+        return _DYNAMIC_REL_LABELS[tv]
+    try:
+        return RELATION_LABELS[RelationType(tv)]
+    except ValueError:
+        return tv.upper()
+
+
+def relation_label_zh(value: Any) -> str:
+    tv = type_value(value)
+    if tv in _DYNAMIC_REL_LABELS_ZH:
+        return _DYNAMIC_REL_LABELS_ZH[tv]
+    try:
+        return RELATION_LABELS_ZH[RelationType(tv)]
+    except ValueError:
+        return tv
+
 _QUOTES_RE = re.compile(r"[《》\"'“”‘’\s]+")
 _SPACE_RE = re.compile(r"\s+")
 
@@ -185,15 +270,23 @@ def normalize_name(text: str | None) -> str:
     return s.lower()
 
 
-def uid_for(entity_type: EntityType, name: str, kb_id: int = 0) -> str:
+def uid_for(entity_type: EntityType | str, name: str, kb_id: int = 0) -> str:
     """生成稳定 uid。
 
     - 全局实体（行政区/河流/条款/指标/响应等级/术语）：只看名称，跨库共享
     - 库内实体（工程/单位/事件/工况/措施）：把 kb_id 编进去，同名不同库不串
+    - 动态本体类型：前缀与全局/私有由 profile 注册（`register_dynamic_types`）决定
     """
-    prefix = _UID_PREFIX[EntityType(entity_type)]
+    tv = type_value(entity_type)
+    meta = _DYNAMIC_UID_META.get(tv)
+    if meta is not None:
+        prefix, is_global = meta
+    else:
+        et = EntityType(tv)  # 未知类型直接报错，避免悄悄生成错误 uid
+        prefix = _UID_PREFIX[et]
+        is_global = et in GLOBAL_ENTITY_TYPES
     norm = normalize_name(name)
-    key = norm if entity_type in GLOBAL_ENTITY_TYPES else f"{kb_id}|{norm}"
+    key = norm if is_global else f"{kb_id}|{norm}"
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
     return f"{prefix}:{digest}"
 
@@ -204,12 +297,38 @@ def edge_key(subject_uid: str, predicate: RelationType | str, object_uid: str) -
     return f"{subject_uid}|{pred}|{object_uid}"
 
 
-def endpoints_allowed(predicate: RelationType, subject_type: EntityType, object_type: EntityType) -> bool:
-    """端点合法性校验（抽取/导入都必须过这一关）。"""
-    allowed = RELATION_ENDPOINTS.get(RelationType(predicate))
+def endpoints_allowed(
+    predicate: RelationType | str,
+    subject_type: EntityType | str,
+    object_type: EntityType | str,
+    registry: Any | None = None,
+) -> bool:
+    """端点合法性校验（抽取/导入都必须过这一关）。
+
+    - 动态本体：优先查 profile 注册的端点表；传 registry 时以 registry 为准
+    - 防洪链：不传 registry 且未注册时，走原枚举矩阵（行为完全不变）
+    """
+    pred = type_value(predicate)
+    subj = type_value(subject_type)
+    obj = type_value(object_type)
+
+    if registry is not None:
+        return bool(registry.endpoints_ok(pred, subj, obj))
+
+    dynamic = _DYNAMIC_ENDPOINTS.get(pred)
+    if dynamic is not None:
+        return obj in dynamic.get(subj, set())
+
+    try:
+        rel = RelationType(pred)
+        subj_enum = EntityType(subj)
+        obj_enum = EntityType(obj)
+    except ValueError:
+        return False
+    allowed = RELATION_ENDPOINTS.get(rel)
     if not allowed:
         return False
-    return EntityType(object_type) in allowed.get(EntityType(subject_type), set())
+    return obj_enum in allowed.get(subj_enum, set())
 
 
 @dataclass
@@ -217,7 +336,7 @@ class Node:
     """图节点。数值一律放 props（如 safe_discharge_m3s），便于精确筛选。"""
 
     uid: str
-    entity_type: EntityType
+    entity_type: EntityType | str
     name: str
     props: dict[str, Any] = field(default_factory=dict)
     aliases: list[str] = field(default_factory=list)
@@ -226,13 +345,18 @@ class Node:
     version_ids: list[int] = field(default_factory=list)
 
     @property
+    def type_name(self) -> str:
+        """类型字符串（枚举或动态字符串统一出口）。"""
+        return type_value(self.entity_type)
+
+    @property
     def label(self) -> str:
-        return ENTITY_LABELS[self.entity_type]
+        return entity_label(self.entity_type)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "uid": self.uid,
-            "entity_type": self.entity_type.value,
+            "entity_type": self.type_name,
             "name": self.name,
             "props": dict(self.props),
             "aliases": list(self.aliases),
@@ -247,7 +371,7 @@ class Edge:
     """图关系。每条边必须能回溯到原文（chunk_ids 或人工来源说明）。"""
 
     subject_uid: str
-    predicate: RelationType
+    predicate: RelationType | str
     object_uid: str
     kb_id: int
     doc_id: int | None = None
@@ -265,14 +389,19 @@ class Edge:
         return edge_key(self.subject_uid, self.predicate, self.object_uid)
 
     @property
+    def predicate_name(self) -> str:
+        """关系字符串（枚举或动态字符串统一出口）。"""
+        return type_value(self.predicate)
+
+    @property
     def rel_label(self) -> str:
-        return RELATION_LABELS[self.predicate]
+        return relation_label(self.predicate)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "key": self.key,
             "subject": self.subject_uid,
-            "predicate": self.predicate.value,
+            "predicate": self.predicate_name,
             "predicate_label": self.rel_label,
             "object": self.object_uid,
             "kb_id": self.kb_id,

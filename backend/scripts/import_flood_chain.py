@@ -40,6 +40,7 @@ from app.services.graph.schema import (  # noqa: E402
     GLOBAL_ENTITY_TYPES,
     ExtractionResult,
     normalize_name,
+    type_value,
 )
 from app.services.graph.store import get_graph_store  # noqa: E402
 from app.services.graph.template_io import read_template  # noqa: E402
@@ -84,7 +85,7 @@ def print_report(result: ExtractionResult, kb_label: str, apply: bool) -> None:
 
     print("\n抽样（前 8 条关系）：")
     for edge in result.edges[:8]:
-        print(f"  {edge.subject_uid} -[{edge.predicate.value}]-> {edge.object_uid}   （{edge.evidence_text}）")
+        print(f"  {edge.subject_uid} -[{type_value(edge.predicate)}]-> {edge.object_uid}   （{edge.evidence_text}）")
 
     if summary["warnings"]:
         print(f"\n告警 {len(summary['warnings'])} 条：")
@@ -160,7 +161,7 @@ async def persist(kb_id: int, result: ExtractionResult) -> None:
                 db.add(
                     GraphEntityAlias(
                         node_uid=node.uid,
-                        entity_type=node.entity_type.value,
+                        entity_type=type_value(node.entity_type),
                         name=node.name,
                         alias=alias,
                         normalized_alias=normalized,
