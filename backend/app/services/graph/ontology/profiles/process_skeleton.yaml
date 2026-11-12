@@ -1,0 +1,51 @@
+# ============================================================
+# 流程骨架本体（TBox）
+# ------------------------------------------------------------
+# 描述「数据下载 → 处理 → 建模 → 率定 → 输出」这条流水线本身。
+# 首期只定义骨架，不填实例；O8 起用真实步骤和率定记录填充。
+#
+# 和 tuning.yaml 的关系：两份可以同时加载（类型注册是合并的），
+# 流程里的 Action 用到的参数仍由 tuning 的 Parameter 表示，二者通过 MCP 工具衔接。
+# ============================================================
+version: 1
+profile_id: process_skeleton
+domain: modeling_process
+
+entity_types:
+  - name: Stage
+    display_name: 阶段
+    uid_prefix: st
+    scope: global
+    attributes:
+      - { name: order, type: number, description: "阶段序号，从 1 开始" }
+      - { name: note, type: text }
+
+  - name: Action
+    display_name: 动作
+    uid_prefix: ac
+    scope: global
+    attributes:
+      - { name: tool_hint, type: string, description: "建议调用的工具名（可空）" }
+      - { name: note, type: text }
+
+  - name: Tool
+    display_name: 工具
+    uid_prefix: tl
+    scope: global
+    attributes:
+      - { name: kind, type: enum, values: [internal, external, mcp], description: "工具来源" }
+      - { name: note, type: text }
+
+  - name: DataAsset
+    display_name: 数据资产
+    uid_prefix: da
+    scope: global
+    attributes:
+      - { name: format, type: string, description: "如 csv / shp / xlsx / tif" }
+      - { name: note, type: text }
+
+relation_types:
+  - { name: NEXT_STAGE, source: Stage, target: Stage, description: "流程的下一阶段" }
+  - { name: PERFORMED_BY, source: Stage, target: Action, description: "阶段包含的动作" }
+  - { name: USES_TOOL, source: Action, target: Tool, description: "动作用到的工具" }
+  - { name: REQUIRES_DATA, source: Action, target: DataAsset, description: "动作需要的数据" }

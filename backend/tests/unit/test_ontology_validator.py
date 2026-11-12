@@ -9,7 +9,7 @@ from app.services.graph.ontology import load_profile, reset_cache, validate_enti
 @pytest.fixture(scope="module")
 def registry():
     reset_cache()
-    reg = load_profile("demo_tuning")
+    reg = load_profile("tuning")
     yield reg
     reset_cache()
 
@@ -62,10 +62,10 @@ class TestEntityValidation:
     def test_range_type(self, registry):
         """range 属性必须是两个数字。"""
         result = validate_entity(registry, "Parameter", "sm", {"group": "产流"})
-        assert result.ok  # range 未在 demo 中使用，先确认基础校验不受影响
+        assert result.ok  # range 未在 tuning 中使用，先确认基础校验不受影响
 
     def test_boolean_attribute(self, registry):
-        # demo profile 没有 boolean 属性，用未声明属性覆盖告警分支
+        # tuning profile 没有 boolean 属性，用未声明属性覆盖告警分支
         result = validate_entity(registry, "Parameter", "sm", {"group": "产流", "flag": True})
         assert result.ok
         assert any("flag" in w for w in result.warnings)

@@ -1,13 +1,15 @@
 """全部 ORM 模型（SQLAlchemy 2.0，Mapped 声明式）。
 
-15 张表：users / conversations / messages / knowledge_bases / documents
+16 张表：users / conversations / messages / knowledge_bases / documents
         / document_versions / index_versions / chunks / citations
         / embedding_cache / semantic_cache / qa_memory
         / graph_sync_runs / graph_edge_evidence / graph_entity_aliases
+        / ontology_instances
 
 关系统一 lazy="selectin"，避免 async 会话序列化时 MissingGreenlet。
 图谱三张表只存「运行状态 / 证据 / 别名」——节点与关系本身在 Neo4j，
 PG 始终是真相源，图库丢了也能从 chunks 重建。
+本体实例（ontology_instances）同理：人工维护的参数先验只认 PG，Neo4j 只是可重建的索引。
 """
 from __future__ import annotations
 
@@ -592,4 +594,60 @@ class GraphEntityAlias(Base):
         UniqueConstraint(
             "normalized_alias", "kb_id", "node_uid", name="uq_graph_alias_normalized_kb_uid"
         ),
+    )
+
+
+class OntologyInstance(Base):
+    """本体实例的真相源（人工维护优先，图库只是可重建的派生索引）。
+
+    为什么必须有这张表：参数先验这类知识**靠人维护**。如果只写 Neo4j，
+    换台机器、重建图、清一次库，人工改过的值全没了，只能再填一遍。
+    所以分工是：
+
+    - PG（本表）= 真相源。CRUD 只写这里，图由它重放生成（rebuild 可随时执行）
+    - Neo4j     = 查询索引。删了不影响正确性，重建即可
+
+    唯一性：同一 profile 下 (entity_type, name, kb_id) 唯一。
+    kb_id = 0 表示全局实例（跨库共享），只有 TBox 里 scope=local 的类型才带真实 kb_id。
+
+    props / ranges / evidence 用 JSON 存：
+    - props    ：属性字典，如 {"group": "产流", "unit": "mm"}
+    - ranges   ：条件范围列表，如 [{"low": 0.7, "high": 0.95, "when": {"climate": "湿润"}}]
+    - evidence ：证据列表，如 [{"type": "manual", "note": "..."}]，**无证据的数值不进入推荐卡**
+    """
+
+    __tablename__ = "ontology_instances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # uid 由 OntologyRegistry.uid_for 生成，跨库稳定；图库里的节点 uid 与之一一对应
+    uid: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    kb_id: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", index=True, nullable=False
+    )
+    props: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
+    ranges: Mapped[list[Any] | None] = mapped_column(JSONType, nullable=True)
+    evidence: Mapped[list[Any] | None] = mapped_column(JSONType, nullable=True)
+    # manual（人工录入）/ import（Excel 导入）/ extracted（从文档抽取）
+    source: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default="manual", nullable=False
+    )
+    # active（参与检索）/ archived（保留但不用，人工"下线"而不删除）
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id", "entity_type", "name", "kb_id", name="uq_ontology_instance_scope"
+        ),
+        Index("ix_ontology_instances_profile_type", "profile_id", "entity_type"),
     )

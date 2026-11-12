@@ -24,7 +24,8 @@ from app.services.graph import schema as graph_schema
 logger = logging.getLogger(__name__)
 
 PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
-DEFAULT_PROFILE = "demo_tuning"
+# 默认调参本体；流程骨架（process_skeleton）按需再加载，类型注册会自动合并
+DEFAULT_PROFILE = "tuning"
 
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PREFIX_RE = re.compile(r"^[a-z]{2,4}$")

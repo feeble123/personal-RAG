@@ -215,6 +215,17 @@ class Settings(BaseSettings):
     graph_query_timeout_ms: int = 800
     # 图候选进入融合的条数上限
     graph_top_k: int = 30
+    # Neo4j 驱动连接参数：连不上就快速失败并降级，不要拖住主链路
+    graph_neo4j_connect_timeout_s: float = 5.0
+    graph_neo4j_pool_size: int = 20
+
+    # ---- 本体（Ontology RAG，O2 起）----
+    # 默认关闭：不加载 YAML、不做本体路由，行为与未接入时完全一致
+    ontology_enabled: bool = False
+    # TBox profile id，对应 app/services/graph/ontology/profiles/<id>.yaml
+    ontology_profile: str = "tuning"
+    # 事实条数达到该值才用本体结果，不足则回退到向量+BM25
+    ontology_min_facts: int = 3
 
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"
@@ -271,6 +282,10 @@ class Settings(BaseSettings):
             raise ValueError(f"GRAPH_BACKEND 仅支持 memory/neo4j，收到: {self.graph_backend!r}")
         if self.graph_enabled and backend_kind == "neo4j" and not self.graph_neo4j_password:
             raise ValueError("启用 Neo4j 图谱时必须配置 GRAPH_NEO4J_PASSWORD")
+
+        # 本体：启用时必须指定 profile，否则启动后所有本体接口都无类型可用
+        if self.ontology_enabled and not (self.ontology_profile or "").strip():
+            raise ValueError("启用本体（ONTOLOGY_ENABLED=true）时必须配置 ONTOLOGY_PROFILE")
 
         if env == "production":
             if not self.jwt_secret:

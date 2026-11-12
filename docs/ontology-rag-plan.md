@@ -40,7 +40,11 @@ TBox（profiles/*.yaml）→ OntologyRegistry → 校验
 |---|---|
 | TBox | YAML（随代码版本化） |
 | 实体/关系实例 | Neo4j（可重建的派生索引） |
+| **本体实例（人工维护的参数先验）** | **PostgreSQL `ontology_instances` —— 真相源** |
 | 证据 / 别名 / 运行记录 | PostgreSQL |
+
+> 为什么人工实例必须落 PG：图是「可重建」的派生索引，一旦重建/换机器，
+> 只存在 Neo4j 里的手工修改就没了。所以 CRUD 只写 `ontology_instances`，图由它重放生成。
 
 ---
 
@@ -68,7 +72,12 @@ constraints:
 - 属性类型：`string/text/number/range/enum/list/boolean`。
 - 加载即注册到 `graph.schema`，`Node/Edge/GraphStore` 自动识别动态类型。
 
-当前 profile：`app/services/graph/ontology/profiles/demo_tuning.yaml`（10 类实体 / 10 种关系）。
+当前 profile（两份，可同时加载，类型注册自动合并）：
+
+| 文件 | 内容 |
+|---|---|
+| `profiles/tuning.yaml` | 调参域：参数 / 流域 / 率定策略 / 指标 / 运行记录 / 失效模式（6 类实体、6 种关系） |
+| `profiles/process_skeleton.yaml` | 流程骨架：阶段 / 动作 / 工具 / 数据资产（4 类实体、4 种关系），首期只定义不填实例 |
 
 ---
 
@@ -118,9 +127,9 @@ constraints:
 | 单元 | 内容 | 状态 |
 |---|---|---|
 | O1 | 动态类型兼容层 + Registry/Validator + demo profile | ✅ 已完成 |
-| O2 | Neo4jGraphStore（连接/schema/CRUD/查询/降级） | 待做 |
-| O3 | 调参+流程 profile、参数表模板与导入 | 待做 |
-| O4 | 推荐卡 + 实例 CRUD + 管理 API | 待做 |
+| O2 | Neo4jGraphStore（连接/schema/CRUD/查询/降级）+ `ontology_instances` 真相源表 | ✅ 已完成 |
+| O3 | 调参+流程 profile、参数表模板与导入 | ✅ 已完成 |
+| O4 | 推荐卡 + 实例 CRUD + 管理 API | ✅ 已完成 |
 | O5 | 检索编排 + 对外 API + 指标 | 待做 |
 | O6 | MCP 薄封装 | 待做 |
 | O7 | 前端图谱浏览页 | 后续 |
@@ -134,8 +143,24 @@ constraints:
 cd backend
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+# 跑测试还要装（pytest 不在运行时依赖里）
+.venv\Scripts\pip install -r requirements-dev.txt -i https://mirrors.aliyun.com/pypi/simple/
 ```
 
-`.env`：`GRAPH_ENABLED=true`、`GRAPH_BACKEND=neo4j`、`GRAPH_NEO4J_URI=bolt://localhost:7687`、`GRAPH_NEO4J_PASSWORD=<Neo4j Desktop 设置的密码>`。
+`.env`：`GRAPH_ENABLED=true`、`GRAPH_BACKEND=neo4j`、`GRAPH_NEO4J_URI=bolt://localhost:7687`、`GRAPH_NEO4J_PASSWORD=<已写入 backend/.env>`。
 
-验证：`pytest -q` 全绿；Neo4j 启动后跑通实例写入与邻居查询；停库时主链路不受影响；`grep -ri xaj backend/app/services/graph/ontology/*.py` 零命中。
+### 7.1 本机已装好的环境（2026-11-11 实测跑通）
+
+| 组件 | 位置 / 说明 |
+|---|---|
+| **Neo4j 5.26.0 社区版服务端** | `E:\GPT-Codex\neo4j\neo4j-community-5.26.0`（ZIP 解压，无 Docker、无管理员权限） |
+| **Java 21（Temurin）** | `E:\GPT-Codex\tools\jdk\jdk-21.0.13+9`（Neo4j 5 必需；本机原本没有 Java） |
+| 启动数据库 | 双击 `E:\GPT-Codex\neo4j\启动Neo4j.bat`（关闭窗口即停止） |
+| 看图界面 | 浏览器打开 `http://localhost:7474`，账号 `neo4j`，密码见 `backend\.env` 的 `GRAPH_NEO4J_PASSWORD` |
+| 监听范围 | `server.default_listen_address=localhost`（只本机可连，不对局域网开放） |
+| 内存 | 堆 1~2G、页缓存 512M（避免和 BGE 向量模型抢内存） |
+| **Neo4j Desktop 2.2.1** | 也装了，**只当看图客户端用**：Desktop → Add → Remote connection → `bolt://localhost:7687`。**不要再在本机起第二个数据库**，会和服务端抢 7687 端口 |
+
+> 密码是脚本随机生成的 24 位，只存在于 `backend\.env`（已 gitignore），不进代码、不进文档、不进提交。
+
+验证：`pytest -q` 全绿；`python -m scripts.ontology_smoke` 通过；`pytest tests/integration -q`（设 `NEO4J_TEST_URI` + `NEO4J_TEST_PASSWORD`）8 个用例全过；停库时主链路不受影响；`grep -ri xaj backend/app/services/graph/ontology/*.py` 零命中。

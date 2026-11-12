@@ -186,6 +186,32 @@ def _page_needs_ocr(page) -> bool:
     return False
 
 
+# 一页正文不该出现这么多标题：超过就说明大概率是表格单元格被按字号误判了
+_MAX_HEADINGS_PER_PAGE = 8
+# 表格里的数值行：小数位 ≥2（如「0.30 表层自由水蓄水容量」「53.59 张力水…」），
+# 而章节号是「4.2」这种一位小数，不会被误伤
+_VALUE_LIKE_PREFIX_RE = re.compile(r"^\s*\d+\.\d{2,}\s*\S")
+
+
+def _demote_table_like_headings(blocks: list[ParsedBlock]) -> list[ParsedBlock]:
+    """把「表格单元格被误判成标题」的块降级为段落，保住内容。
+
+    背景（实测）：扫描件里的参数表，每个单元格单独成行且字号比正文大，
+    `detect_heading` 会把它当标题；而 parent-child 切分方案里**标题不进切片正文**
+    （只作章节前缀），结果是整张表的数值在知识库里检索不到。
+
+    护栏：只有整页标题数明显异常（> 8）时才动手，且只降级「数值开头」或
+    「非编号」的标题，正常章节标题（如「4.2 最优预报结果」）不受影响。
+    """
+    headings = [b for b in blocks if b.block_type == "heading"]
+    if len(headings) <= _MAX_HEADINGS_PER_PAGE:
+        return blocks
+    for block in headings:
+        if heading_level(block.text) == 0 or _VALUE_LIKE_PREFIX_RE.match(block.text):
+            block.block_type = "paragraph"
+    return blocks
+
+
 class PDFParser(DocumentParser):
     extensions = ("pdf",)
 
@@ -344,6 +370,9 @@ class PDFParser(DocumentParser):
                 page_blocks = self._blocks_from_ocr(result, page_no, current_section)
             else:
                 page_blocks, _ = self._parse_page_text(page, page_no, current_section)
+
+            # 表格单元格被误判成标题时会把内容挤出切片，这里做页面级纠正
+            page_blocks = _demote_table_like_headings(page_blocks)
 
             for b in page_blocks:
                 if b.block_type == "table":

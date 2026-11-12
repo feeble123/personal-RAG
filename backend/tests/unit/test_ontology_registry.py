@@ -29,15 +29,15 @@ def _clean():
 
 class TestLoadDemoProfile:
     def test_structure(self):
-        reg = load_profile("demo_tuning")
-        assert reg.profile_id == "demo_tuning"
+        reg = load_profile("tuning")
+        assert reg.profile_id == "tuning"
         assert reg.domain == "model_tuning"
-        # 调参域 6 类 + 流程骨架 4 类
-        assert len(reg.entity_types) == 10
-        assert len(reg.relation_types) == 10
+        # 调参域：6 类实体 / 6 种关系（流程骨架在 process_skeleton.yaml）
+        assert len(reg.entity_types) == 6
+        assert len(reg.relation_types) == 6
 
     def test_entity_definition(self):
-        reg = load_profile("demo_tuning")
+        reg = load_profile("tuning")
         param = reg.entity("Parameter")
         assert param is not None
         assert param.display_name == "参数"
@@ -47,14 +47,14 @@ class TestLoadDemoProfile:
         assert param.attributes["group"].values == ("蒸散发", "产流", "水源划分", "汇流", "其他")
 
     def test_endpoints(self):
-        reg = load_profile("demo_tuning")
+        reg = load_profile("tuning")
         assert reg.endpoints_ok("PART_OF", "Parameter", "Parameter")
         assert reg.endpoints_ok("AFFECTS", "Parameter", "Metric")
         assert not reg.endpoints_ok("AFFECTS", "Metric", "Parameter")
         assert not reg.endpoints_ok("NOT_EXIST", "Parameter", "Metric")
 
     def test_uid_scope(self):
-        reg = load_profile("demo_tuning")
+        reg = load_profile("tuning")
         p1 = reg.uid_for("Parameter", "sm", kb_id=1)
         p2 = reg.uid_for("Parameter", "sm", kb_id=2)
         assert p1 == p2, "global 类型的 uid 不应随知识库变化"
@@ -64,26 +64,26 @@ class TestLoadDemoProfile:
         assert s1 != s2, "local 类型的 uid 必须按库隔离"
 
     def test_unknown_type_raises(self):
-        reg = load_profile("demo_tuning")
+        reg = load_profile("tuning")
         with pytest.raises(ProfileError, match="未定义实体类型"):
             reg.uid_for("NotAType", "x")
 
 
 class TestRegistration:
     def test_dynamic_types_registered_in_schema(self):
-        load_profile("demo_tuning")
+        load_profile("tuning")
         node = graph_schema.Node(uid="pn:1", entity_type="Parameter", name="sm")
         assert node.to_dict()["entity_type"] == "Parameter"
         assert node.label == "Parameter"
 
     def test_schema_endpoints_use_dynamic_table(self):
-        load_profile("demo_tuning")
+        load_profile("tuning")
         assert graph_schema.endpoints_allowed("AFFECTS", "Parameter", "Metric")
         assert not graph_schema.endpoints_allowed("AFFECTS", "Metric", "Parameter")
 
     def test_flood_chain_enum_still_works(self):
         """动态注册不能影响防洪链枚举。"""
-        load_profile("demo_tuning")
+        load_profile("tuning")
         assert graph_schema.endpoints_allowed(
             graph_schema.RelationType.PART_OF,
             graph_schema.EntityType.ENGINEERING_OBJECT,
@@ -96,15 +96,38 @@ class TestRegistration:
         assert node.to_dict()["entity_type"] == "engineering_object"
 
 
+class TestProcessSkeleton:
+    def test_structure(self):
+        reg = load_profile("process_skeleton")
+        assert set(reg.entity_types) == {"Stage", "Action", "Tool", "DataAsset"}
+        assert set(reg.relation_types) == {"NEXT_STAGE", "PERFORMED_BY", "USES_TOOL", "REQUIRES_DATA"}
+
+    def test_endpoints(self):
+        reg = load_profile("process_skeleton")
+        assert reg.endpoints_ok("NEXT_STAGE", "Stage", "Stage")
+        assert reg.endpoints_ok("PERFORMED_BY", "Stage", "Action")
+        assert not reg.endpoints_ok("PERFORMED_BY", "Action", "Stage")
+
+    def test_two_profiles_coexist(self):
+        """调参本体与流程骨架同时注册，类型互不覆盖（uid 前缀不冲突）。"""
+        load_profile("tuning")
+        load_profile("process_skeleton")
+        assert graph_schema.uid_for("Parameter", "sm", 0) != graph_schema.uid_for("Stage", "数据下载", 0)
+        node = graph_schema.Node(uid="st:1", entity_type="Stage", name="数据下载")
+        assert node.label == "Stage"
+        assert graph_schema.endpoints_allowed("AFFECTS", "Parameter", "Metric")
+        assert graph_schema.endpoints_allowed("PERFORMED_BY", "Stage", "Action")
+
+
 class TestCache:
     def test_cached_instance(self):
-        first = get_registry("demo_tuning")
-        second = get_registry("demo_tuning")
+        first = get_registry("tuning")
+        second = get_registry("tuning")
         assert first is second
 
     def test_reload_returns_new_instance(self):
-        first = get_registry("demo_tuning")
-        second = get_registry("demo_tuning", reload=True)
+        first = get_registry("tuning")
+        second = get_registry("tuning", reload=True)
         assert second is not first
         assert second.profile_id == first.profile_id
 

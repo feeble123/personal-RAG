@@ -1,7 +1,7 @@
 """图存储抽象 + 进程内实现（第一期 U1）。
 
 设计要点：
-- 只用协议（Protocol）约束能力，Neo4j 实现在 U3 补上，业务代码不需要改；
+- 只用协议（Protocol）约束能力，Neo4j 实现见 `neo4j_store.py`，业务代码不需要改；
 - `get_graph_store()` 在 `GRAPH_ENABLED=false` 时返回 None —— 主链路必须先判空，
   这样「关掉图谱」就是真正的零成本；
 - 进程内实现用于离线测试、dry-run 和本机试用（重启即丢，符合「图是派生索引」的定位）。
@@ -257,8 +257,12 @@ def get_graph_store() -> GraphStore | None:
         return _store
 
     if backend == "neo4j":
-        # U3 提供 Neo4jGraphStore；此处显式失败，避免「以为启用了其实没写进去」
-        raise NotImplementedError("Neo4j 图存储将在后续单元提供；当前请使用 GRAPH_BACKEND=memory")
+        # 构造时不连接（懒加载），图库没起来也不会让进程启动失败
+        from app.services.graph.neo4j_store import Neo4jGraphStore
+
+        _store = Neo4jGraphStore()
+        logger.info("图谱存储：Neo4j（%s）", settings.graph_neo4j_uri)
+        return _store
 
     raise ValueError(f"未知的 GRAPH_BACKEND: {settings.graph_backend!r}")
 
