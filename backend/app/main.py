@@ -160,6 +160,7 @@ def create_app() -> FastAPI:
     from app.modules.external.routes import router as external_router
     from app.modules.memory.routes import kb_memories_router as kb_memories_router
     from app.modules.memory.routes import router as memory_router
+    from app.modules.ontology.routes import public_router as ontology_public_router
     from app.modules.ontology.routes import router as ontology_router
 
     api_prefix = "/api"
@@ -176,6 +177,8 @@ def create_app() -> FastAPI:
     app.include_router(external_router, prefix=api_prefix)
     # 本体管理（/api/admin/ontology/*，管理员 JWT）
     app.include_router(ontology_router, prefix=api_prefix)
+    # 本体对外接口（/api/v1/ontology/*，X-API-Key，给自动建模 agent 用）
+    app.include_router(ontology_public_router, prefix=api_prefix)
 
     # 健康检查（P2 单元2 真探活）：摸数据库脉搏；可选探 Chroma（默认关保持快）
     @app.get("/api/health")

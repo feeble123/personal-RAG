@@ -24,13 +24,15 @@ import logging
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, File, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.deps import AdminUser, DbSession, get_client_ip
+from app.core.deps import AdminUser, DbSession, get_client_ip, verify_external_api_key
 from app.core.exceptions import BizError
+from app.core.ratelimit import limiter
 from app.modules.ontology.schemas import (
+    AskIn,
     CardOut,
     ImportResult,
     InstanceCreate,
@@ -41,12 +43,20 @@ from app.modules.ontology.schemas import (
 from app.services import audit
 from app.services.graph.ontology import instances as inst_mod
 from app.services.graph.ontology.cards import recommend
+from app.services.graph.ontology.linking import link_graph_entities, link_instances
 from app.services.graph.ontology.params import load_prior_excel, resolve_evidence
 from app.services.graph.ontology.registry import get_registry
+from app.services.graph.ontology.retrieval import retrieve_with_ontology
 from app.services.graph.ontology.validator import validate_entity
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/ontology", tags=["ontology"])
+# 对外接口（agent 用）：X-API-Key 鉴权，与 /api/v1/search 同一套密钥
+public_router = APIRouter(
+    prefix="/v1/ontology",
+    tags=["ontology"],
+    dependencies=[Depends(verify_external_api_key)],
+)
 
 _MAX_IMPORT_BYTES = 10 * 1024 * 1024  # 10MB，参数表远小于这个
 _ENTITY_TYPE_DEFAULT = "Parameter"
@@ -343,3 +353,157 @@ async def import_params(
             client_ip=await get_client_ip(request),
         )
     return result
+
+
+# ==================== 对外接口（agent 用，X-API-Key） ====================
+
+
+@public_router.get("/types")
+async def public_types(db: DbSession, profile: str | None = Query(None)) -> dict:
+    """本体里有哪些实体类型、关系类型、各自属性（agent 用来规划调用）。"""
+    return _registry(profile).to_dict()
+
+
+@public_router.get("/params", response_model=list[CardOut])
+async def public_params(
+    db: DbSession,
+    profile: str | None = Query(None),
+    name: list[str] | None = Query(None, description="参数名，可重复传"),
+    group: str | None = Query(None),
+    kb_id: int = Query(0, ge=0),
+    climate: str | None = Query(None),
+    flood_type: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+) -> list[CardOut]:
+    """参数推荐卡：条件收窄 → 冲突并列 → 无依据不出数。"""
+    reg = _registry(profile)
+    cards = await recommend(
+        db,
+        profile_id=reg.profile_id,
+        names=name,
+        conditions={"climate": climate, "flood_type": flood_type},
+        kb_id=kb_id,
+        limit=limit,
+    )
+    if group:
+        cards = [c for c in cards if c.group == group]
+    return [CardOut(**card.to_dict()) for card in cards]
+
+
+@public_router.get("/search")
+async def public_search(
+    db: DbSession,
+    q: str = Query(..., min_length=1, max_length=200),
+    kb_id: int | None = Query(None),
+    profile: str | None = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+) -> list[dict]:
+    """实体链接：问题里的词 → 本体实例 / 图节点。"""
+    reg = _registry(profile)
+    rows = await inst_mod.list_instances(
+        db, profile_id=reg.profile_id, status="active", limit=500
+    )
+    hits = link_instances(rows, q)
+    hits += await link_graph_entities(db, q, kb_id=kb_id, limit=limit)
+    hits.sort(key=lambda x: -x.score)
+    return [h.to_dict() for h in hits[:limit]]
+
+
+@public_router.get("/entities/{uid}")
+async def public_entity(
+    uid: str,
+    db: DbSession,
+    depth: int = Query(1, ge=1, le=2),
+    include_evidence: bool = Query(True),
+) -> dict:
+    """实体详情 + 邻居（本体实例优先，找不到再查图）。"""
+    from app.services.graph.store import get_graph_store
+
+    row = await inst_mod.get_instance_by_uid(db, uid)
+    store = get_graph_store()
+    node = await store.get_node(uid) if store is not None else None
+    if row is None and node is None:
+        raise BizError("实体不存在", 404, "ONTOLOGY_ENTITY_NOT_FOUND")
+
+    detail: dict = {
+        "uid": uid,
+        "instance": InstanceOut.model_validate(row).model_dump() if row else None,
+        "node": {"name": node.name, "entity_type": node.type_name, "props": node.props}
+        if node
+        else None,
+    }
+    if include_evidence and row is not None:
+        detail["evidence"] = row.evidence or []
+    if store is not None:
+        slice_ = await store.neighbors(uid, depth=depth)
+        names = {n.uid: n.name for n in slice_.nodes}
+        detail["neighbors"] = [
+            {
+                "uid": n.uid,
+                "name": n.name,
+                "entity_type": n.type_name,
+            }
+            for n in slice_.nodes
+        ]
+        detail["edges"] = [
+            {
+                "subject": names.get(e.subject_uid, e.subject_uid),
+                "predicate": e.predicate_name,
+                "object": names.get(e.object_uid, e.object_uid),
+                "evidence_text": e.evidence_text,
+                "chunk_ids": e.chunk_ids,
+            }
+            for e in slice_.edges
+        ]
+    return detail
+
+
+@public_router.get("/neighbors/{uid}")
+async def public_neighbors(
+    uid: str,
+    depth: int = Query(1, ge=1, le=2),
+    limit: int = Query(100, ge=1, le=200),
+) -> dict:
+    """纯图查询：某个节点周围 1~2 跳的子图。"""
+    from app.services.graph.store import get_graph_store
+
+    store = get_graph_store()
+    if store is None:
+        raise BizError("图库未启用（GRAPH_ENABLED=false）", 503, "GRAPH_DISABLED")
+    slice_ = await store.neighbors(uid, depth=depth, limit=limit)
+    names = {n.uid: n.name for n in slice_.nodes}
+    return {
+        "uid": uid,
+        "nodes": [
+            {"uid": n.uid, "name": n.name, "entity_type": n.type_name, "props": n.props}
+            for n in slice_.nodes
+        ],
+        "edges": [
+            {
+                "subject": names.get(e.subject_uid, e.subject_uid),
+                "predicate": e.predicate_name,
+                "object": names.get(e.object_uid, e.object_uid),
+                "status": e.status,
+                "confidence": e.confidence,
+                "evidence_text": e.evidence_text,
+                "chunk_ids": e.chunk_ids,
+            }
+            for e in slice_.edges
+        ],
+        "truncated": slice_.truncated,
+    }
+
+
+@public_router.post("/ask")
+@limiter.limit(settings.external_rate_limit)
+async def public_ask(request: Request, body: AskIn, db: DbSession) -> dict:
+    """本体优先问答：返回事实包；本体事实不够时回退向量检索并标 fallback_used。"""
+    pack = await retrieve_with_ontology(
+        db,
+        body.question,
+        kb_id=body.kb_id,
+        profile_id=body.profile_id,
+        conditions={"climate": body.climate, "flood_type": body.flood_type},
+        min_facts=body.min_facts,
+    )
+    return pack.to_dict()

@@ -68,6 +68,11 @@ def build_metrics(registry: CollectorRegistry | None = None) -> dict[str, Any]:
                                         "检索请求数", ["scope"], reg),
         "semantic_cache_requests_total": get(Counter, "rag_semantic_cache_requests_total",
                                              "语义缓存查询数", ["result"], reg),
+        # 本体检索（O5）：result=ontology（本体够用）/ fallback（回退了向量检索）
+        "ontology_queries_total": get(Counter, "rag_ontology_queries_total",
+                                      "本体检索请求数", ["result"], reg),
+        "ontology_facts_total": get(Counter, "rag_ontology_facts_total",
+                                    "本体检索返回的事实条数", [], reg),
     }
 
 

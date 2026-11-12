@@ -130,7 +130,7 @@ constraints:
 | O2 | Neo4jGraphStore（连接/schema/CRUD/查询/降级）+ `ontology_instances` 真相源表 | ✅ 已完成 |
 | O3 | 调参+流程 profile、参数表模板与导入 | ✅ 已完成 |
 | O4 | 推荐卡 + 实例 CRUD + 管理 API | ✅ 已完成 |
-| O5 | 检索编排 + 对外 API + 指标 | 待做 |
+| O5 | 检索编排 + 对外 API + 指标 | ✅ 已完成 |
 | O6 | MCP 薄封装 | 待做 |
 | O7 | 前端图谱浏览页 | 后续 |
 | O8 | 流程本体扩充 + 率定记录回流 | 后续 |

@@ -85,3 +85,14 @@ class ReloadOut(BaseModel):
     profile_id: str
     entity_types: int
     relation_types: int
+
+
+class AskIn(BaseModel):
+    """对外本体问答（agent 用）：问题 → 事实包。"""
+
+    question: str = Field(..., min_length=1, max_length=500)
+    kb_id: int | None = Field(None, description="限定知识库；缺省跨全库")
+    profile_id: str | None = Field(None, description="本体 profile，缺省用配置默认值")
+    climate: str | None = Field(None, description="湿润/半湿润/半干旱/干旱")
+    flood_type: str | None = Field(None, description="单峰/多峰")
+    min_facts: int | None = Field(None, ge=0, le=50, description="事实条数门槛，低于则回退向量检索")
