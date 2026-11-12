@@ -34,7 +34,21 @@ if not exist .env (
 echo ============================================
 echo   水利知识库问答 - 后端服务
 echo   地址: http://localhost:8000
-echo   文档: http://localhost:8000/api/docs
+echo   文档: http://localhost:8000/api/docs （需在 .env 设 DEBUG=true）
 echo ============================================
+:: ===== 前端构建产物检查：没有就自动构建（否则打开网页是 404）=====
+if not exist "..\frontend\dist\index.html" (
+    echo [步骤] 未找到前端构建产物，正在构建（首次约 1~2 分钟）...
+    pushd "..\frontend"
+    if not exist node_modules (
+        call npm install --registry=https://registry.npmmirror.com --no-audit --no-fund
+    )
+    call npm run build
+    popd
+    if not exist "..\frontend\dist\index.html" (
+        echo [警告] 前端构建失败，网页打不开；请手动执行: cd frontend ^&^& npm install ^&^& npm run build
+    )
+)
+
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 pause
