@@ -14,6 +14,7 @@ from app.services.table_query import (
     TableView,
     _aggregate,
     load_table,
+    load_tables,
 )
 
 
@@ -139,6 +140,14 @@ class TestLoadTable:
 
             # 找不到的表 → None
             assert await load_table(db, f"doc{doc.id}:nonexistent", kb_id=kb.id) is None
+
+            # 批量版必须和单表版给出一致的视图（精确通道要一次性拿到全部表，
+            # 逐表 load_table 是「每张表扫一遍全表」——143 张表实测 15.6 秒）
+            views = await load_tables(db, kb_id=kb.id)
+            assert len(views) == 1
+            assert views[0].table_id == tv.table_id
+            assert views[0].rows == tv.rows
+            assert views[0].chunk_ids == tv.chunk_ids
 
             await db.execute(delete(KnowledgeBase).where(KnowledgeBase.id == kb.id))
             await db.commit()

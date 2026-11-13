@@ -55,6 +55,17 @@ class TestIntentTableQuery:
         assert table_query_kind("明渠均匀流的形成条件是什么？") is None
         assert table_query_kind("什么是径流？") is None
 
+    def test_value_amount_is_not_count(self):
+        """「取多少 / 是多少」问的是取值，不是数行数。
+
+        漏判会让这类问题进精确读表通道，被拿去和表名做字面匹配——
+        实测「sm 这个参数一般取多少」被答成「马斯京根法演算参数 / 数量: 1」，
+        还要白扫一遍全库表格（22 秒）。计数会问「多少套/多少个」，不会问「取多少」。
+        """
+        assert table_query_kind("sm 这个参数一般取多少？依据是什么？") is None
+        assert table_query_kind("参数取值范围是多少？") is None
+        assert table_query_kind("自由水蓄水能力应该怎么取值") is None
+
     def test_is_table_query_alias(self):
         assert is_table_query("动力配电箱的数量是多少？") is True
         assert is_table_query("什么是径流？") is False

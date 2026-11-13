@@ -71,8 +71,12 @@ def is_real_time_query(query: str) -> bool:
 
 
 # ---- 表格结构化查询信号（单元二 2-4）----
-# 计数类问法：X 的数量/多少/几台/几套…——答案落在一张表的某列某值，应精确读。
-_TABLE_COUNT_RE = re.compile(r"数量|多少|几台|几套|几座|几个|几处|个数|台数|套数|共计|合计")
+# 强计数类问法：X 的数量/几台/几套…——答案落在一张表的某列某值，应精确读。
+_TABLE_COUNT_RE = re.compile(r"数量|几台|几套|几座|几个|几处|个数|台数|套数|共计|合计")
+# 弱计数信号：「多少」本身太宽——「sm 一般取多少」「范围是多少」问的是**取值**，
+# 不是数行数。这种问题进读表通道会被拿去和表名做字面匹配，
+# 实测把「参数一般取多少」错答成「马斯京根法演算参数 / 数量: 1」。
+_VALUE_AMOUNT_RE = re.compile(r"(?:取|是|为|约|一般|通常|大概|大约|应该|应|宜)\s*多少")
 # 枚举类问法：列出/有哪些/清单/一览…——答案是一张表里某列的整列值。
 _TABLE_ENUM_RE = re.compile(r"有哪些|列出|清单|一览|名单|哪些|所有|全部|都有|都包含")
 
@@ -89,6 +93,9 @@ def table_query_kind(query: str) -> str | None:
     if not q:
         return None
     if _TABLE_COUNT_RE.search(q):
+        return "count"
+    # 「多少」必须不是取值问法才算计数：「一共多少套」是计数，「一般取多少」不是
+    if "多少" in q and not _VALUE_AMOUNT_RE.search(q):
         return "count"
     if _TABLE_ENUM_RE.search(q):
         return "enum"

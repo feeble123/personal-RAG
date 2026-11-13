@@ -159,14 +159,8 @@ async def _active_version_ids(db: AsyncSession, kb_id: int | None = None) -> set
     return {r[0] for r in (await db.execute(stmt)).all()}
 
 
-async def load_table(
-    db: AsyncSession, table_id: str, kb_id: int | None = None
-) -> TableView | None:
-    """按 table_id 聚合 active 版本的所有表格切片 → TableView（找不到返回 None）。
-
-    除列名/数据行外，还从切片带回 section（含 sheet 名）/ source（文件名）/ chunk_ids，
-    供 2-4 精确通道定位引用。
-    """
+async def _table_rows(db: AsyncSession, kb_id: int | None) -> list[tuple[Chunk, Document]]:
+    """一次取出作用域内**全部**表格切片（含所属文档），供上面两种聚合方式共用。"""
     stmt = (
         select(Chunk, Document)
         .join(Document, Chunk.doc_id == Document.id)
@@ -177,19 +171,57 @@ async def load_table(
     active_ids = await _active_version_ids(db, kb_id)
     if active_ids:
         stmt = stmt.where(Chunk.document_version_id.in_(active_ids))
-    rows = (await db.execute(stmt)).all()
-    matched = [(c, d) for c, d in rows if (c.table_data or {}).get("table_id") == table_id]
-    if not matched:
-        return None
+    return list((await db.execute(stmt)).all())
+
+
+def _view_of(table_id: str, matched: list[tuple[Chunk, Document]]) -> TableView | None:
+    """把同一张表的切片聚合成 TableView，并补上 section/source/chunk_ids 等引用信息。"""
     tv = _aggregate(table_id, [c for c, _ in matched])
     if tv is None:
         return None
-    section = next((c.section for c, _ in matched if c.section), None)
-    source = next((d.filename for _, d in matched if d.filename), None)
-    chunk_ids = tuple(c.id for c, _ in matched)
-    doc_id = next((d.id for _, d in matched), None)
-    kb_id = next((c.kb_id for c, _ in matched), None)
-    return replace(tv, section=section, source=source, chunk_ids=chunk_ids, doc_id=doc_id, kb_id=kb_id)
+    return replace(
+        tv,
+        section=next((c.section for c, _ in matched if c.section), None),
+        source=next((d.filename for _, d in matched if d.filename), None),
+        chunk_ids=tuple(c.id for c, _ in matched),
+        doc_id=next((d.id for _, d in matched), None),
+        kb_id=next((c.kb_id for c, _ in matched), None),
+    )
+
+
+async def load_table(
+    db: AsyncSession, table_id: str, kb_id: int | None = None
+) -> TableView | None:
+    """按 table_id 聚合 active 版本的所有表格切片 → TableView（找不到返回 None）。
+
+    单表查询，内部仍是取全量表格切片后过滤。**循环里不要调它**——
+    N 张表 = N 次全表扫描（实测 143 张表 15.6 秒），改用 `load_tables` 一次取回。
+    """
+    matched = [
+        (c, d) for c, d in await _table_rows(db, kb_id)
+        if (c.table_data or {}).get("table_id") == table_id
+    ]
+    return _view_of(table_id, matched) if matched else None
+
+
+async def load_tables(db: AsyncSession, kb_id: int | None = None) -> list[TableView]:
+    """一次查出作用域内**所有**表格并聚合（O(1) 次查询，替代逐表 load_table 的 N 次全表扫描）。
+
+    精确通道要拿全部表来打分，天然是「全量」需求；之前写成
+    `for tid in list_table_ids(): await load_table(tid)`，每张表都重扫一遍全表，
+    143 张表要 15.6 秒——这是本体回退那 22 秒的真正来源。
+    """
+    grouped: dict[str, list[tuple[Chunk, Document]]] = {}
+    for chunk, doc in await _table_rows(db, kb_id):
+        tid = (chunk.table_data or {}).get("table_id")
+        if tid:
+            grouped.setdefault(tid, []).append((chunk, doc))
+    views: list[TableView] = []
+    for tid, matched in grouped.items():
+        tv = _view_of(tid, matched)
+        if tv is not None and tv.columns and tv.rows:
+            views.append(tv)
+    return views
 
 
 async def list_table_ids(db: AsyncSession, kb_id: int | None = None) -> list[str]:
@@ -557,14 +589,7 @@ async def query_table(
     kind = table_query_kind(query)
     if kind is None:
         return None
-    table_ids = await list_table_ids(db, kb_id)
-    if not table_ids:
-        return None
-    views: list[TableView] = []
-    for tid in table_ids:
-        tv = await load_table(db, tid, kb_id)
-        if tv is not None and tv.columns and tv.rows:
-            views.append(tv)
+    views = await load_tables(db, kb_id)
     if not views:
         return None
     # 只保留问句本体：丢弃「请以表格输出」「不用把交底时间输出」等元指令子句（污染打分）
