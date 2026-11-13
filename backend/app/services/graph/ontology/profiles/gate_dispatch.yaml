@@ -30,6 +30,44 @@ entity_types:
         type: number
       - name: note
         type: text
+      - name: col_1
+        type: string
+        values:
+          - 溪口闸
+          - 石门闸
+        description: 名称
+      - name: col_2
+        type: string
+        values:
+          - '2024-06-01'
+          - '2024-06-02'
+        description: 巡查日期
+      - name: col_3
+        type: string
+        values:
+          - 张三
+          - 李四
+        description: 巡查人
+      - name: col_4
+        type: enum
+        values:
+          - 正常
+          - 异常
+        description: 闸门状态
+      - name: col_5
+        type: number
+        description: 水位m
+      - name: col_6
+        type: text
+        values:
+          - 无
+          - 启闭机异响
+        description: 发现问题
+      - name: col_7
+        type: text
+        values:
+          - 报修
+        description: 处理意见
   - name: river_section
     display_name: 河道断面
     uid_prefix: rs

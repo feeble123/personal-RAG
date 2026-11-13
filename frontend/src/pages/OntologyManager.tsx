@@ -519,6 +519,14 @@ export default function OntologyManager() {
                       message="先预演，确认无误再正式导入"
                       description="预演只解析不写库；正式导入会按名称覆盖更新（证据只增不减）。"
                     />
+                    {!entityTypes.some((t) => t.name === 'Parameter') && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message={`当前图谱库「${typesQuery.data?.display_name ?? profileId}」没有「参数」类型`}
+                        description="参数表只认 Parameter 类型。请先在上方切换到「调参本体」这类含参数类型的库，再导入。"
+                      />
+                    )}
                     <Upload
                       accept=".xlsx,.xlsm"
                       maxCount={1}
@@ -557,6 +565,16 @@ export default function OntologyManager() {
                           <Tag>无变化 {importResult.unchanged}</Tag>
                           {importResult.dry_run && <Tag color="orange">预演</Tag>}
                         </Space>
+                        {importResult.errors.length === 0 &&
+                          importResult.created === 0 &&
+                          importResult.updated === 0 && (
+                            <Alert
+                              type="success"
+                              showIcon
+                              message="表里的参数都已在库中，且内容完全一致"
+                              description="所以「新增/更新」都是 0——说明之前已经导入过，不是导入失败。"
+                            />
+                          )}
                         {importResult.warnings.length > 0 && (
                           <Alert
                             type="warning"

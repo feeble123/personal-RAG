@@ -1187,6 +1187,19 @@ async def _run_import(
         preview=preview,
     )
     if dry_run or not result.drafts:
+        if dry_run and result.drafts:
+            # 预演也要给出「会新增/会更新/不会变」——只报 0 的话用户以为导入没生效。
+            # 直接跑一次真实写入再回滚，保证预演数字和正式导入**完全一致**
+            # （自己算一遍的话，证据合并语义很难对得上，会多报一堆"更新"）。
+            try:
+                upsert = await inst_mod.upsert_instances(db, result.drafts)
+                out.created, out.updated, out.unchanged = (
+                    upsert.created,
+                    upsert.updated,
+                    upsert.unchanged,
+                )
+            finally:
+                await db.rollback()  # 预演：一个字都不落库
         return out
     upsert = await inst_mod.upsert_instances(db, result.drafts)
     await db.commit()
@@ -1205,6 +1218,15 @@ async def import_params(
     dry_run: bool = Query(True, description="默认只预演，false 才写库"),
 ) -> ImportResult:
     reg = _registry(profile)
+    # 参数表只认 Parameter 类型。库里没有这个类型时，
+    # 逐行报 13 条「未定义实体类型」既吵又难懂——直接说清楚该切库。
+    if reg.entity(_ENTITY_TYPE_DEFAULT) is None:
+        raise BizError(
+            f"当前图谱库「{reg.library_name}」没有「参数」类型（{_ENTITY_TYPE_DEFAULT}），"
+            f"参数表导入只适用于定义了该类型的库（如调参本体）",
+            400,
+            "ONTOLOGY_IMPORT_NO_PARAM_TYPE",
+        )
     suffix = Path(file.filename or "params.xlsx").suffix or ".xlsx"
     if suffix.lower() not in (".xlsx", ".xlsm"):
         raise BizError("只支持 .xlsx 参数表", 400, "ONTOLOGY_IMPORT_BAD_TYPE")

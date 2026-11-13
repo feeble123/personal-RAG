@@ -175,8 +175,15 @@ class TestImport:
         data = r.json()
         assert data["dry_run"] is True
         assert data["rows"] == 1 and data["drafts"] == 1
-        assert data["created"] == 0
+        # 预演要报「会新增 1」——只报 0 的话用户以为导入没生效（用户实测反馈）
+        assert data["created"] == 1
         assert data["preview"][0]["name"] == "t4_ke"
+
+        # 但预演必须**一个字都不落库**
+        r = await client.get(
+            f"{BASE}/instances", headers=admin_headers, params={"entity_type": "Parameter"}
+        )
+        assert not any(item["name"] == "t4_ke" for item in r.json()), "预演不该写库"
 
         files = {
             "file": (
