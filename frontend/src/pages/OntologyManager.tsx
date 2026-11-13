@@ -213,28 +213,59 @@ export default function OntologyManager() {
     })
   }, [instances, typeFilter, keyword])
 
+  // 列由**本体**决定：类型里没声明的字段就不要出现在表头（用户提过：水闸没有「中文名/范围」这两列）
+  const visibleTypes = entityTypes.filter((t) => !typeFilter || t.name === typeFilter)
+  const attrMap = new Map<string, string>() // 属性名 → 显示用标签
+  for (const et of visibleTypes) {
+    for (const a of et.attributes) attrMap.set(a.name, a.description || a.name)
+  }
+  const hasDisplayZh = attrMap.has('display_zh')
+  const hasRange = attrMap.has('range_low') || attrMap.has('range_high')
+  const extraAttrs = [...attrMap.keys()]
+    .filter((n) => n !== 'display_zh' && n !== 'range_low' && n !== 'range_high')
+    .slice(0, 5)
+
   const instanceColumns = [
     { title: '标识', dataIndex: 'name', width: 130 },
-    {
-      title: '中文名',
-      width: 160,
-      render: (_: unknown, row: OntologyInstance) => String(row.props?.display_zh ?? '—'),
-    },
+    ...(hasDisplayZh
+      ? [
+          {
+            title: '中文名',
+            width: 160,
+            render: (_: unknown, row: OntologyInstance) =>
+              String(row.props?.display_zh ?? '—'),
+          },
+        ]
+      : []),
     {
       title: '类型',
       dataIndex: 'entity_type',
       width: 140,
       render: (v: string) => <Tag>{typeLabel(v)}</Tag>,
     },
-    {
-      title: '范围',
+    ...extraAttrs.map((name) => ({
+      title: attrMap.get(name) ?? name,
       width: 150,
       render: (_: unknown, row: OntologyInstance) => {
-        const low = row.props?.range_low
-        const high = row.props?.range_high
-        return low === undefined && high === undefined ? '—' : `[${low ?? '?'}, ${high ?? '?'}]`
+        const v = row.props?.[name]
+        return v === undefined || v === null || v === '' ? '—' : String(v)
       },
-    },
+    })),
+    ...(hasRange
+      ? [
+          {
+            title: '范围',
+            width: 150,
+            render: (_: unknown, row: OntologyInstance) => {
+              const low = row.props?.range_low
+              const high = row.props?.range_high
+              return low === undefined && high === undefined
+                ? '—'
+                : `[${low ?? '?'}, ${high ?? '?'}]`
+            },
+          },
+        ]
+      : []),
     {
       title: '证据',
       width: 90,

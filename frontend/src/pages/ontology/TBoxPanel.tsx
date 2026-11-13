@@ -91,6 +91,8 @@ export default function TBoxPanel({ types, profileId }: Props) {
   const [attrForm] = Form.useForm()
   const [relationForm] = Form.useForm()
   const attrType = Form.useWatch('type', attrForm)
+  // 必须无条件调用：写在 JSX 的 {xxx && ...} 里会让枚举属性多一次 hook，React 直接崩整页
+  const attrValues = Form.useWatch('values', attrForm) as string[] | undefined
 
   // Excel 表头 → 属性建议（先预览，用户确认后才写库）
   const [excelModal, setExcelModal] = useState<{
@@ -664,7 +666,7 @@ export default function TBoxPanel({ types, profileId }: Props) {
           )}
           {attrType === 'enum' && (
             <Text type="secondary" style={{ fontSize: 12, marginBottom: 12, display: 'block' }}>
-              将保存为 {(Form.useWatch('values', attrForm) as string[] | undefined)?.length ?? 0}{' '}
+              将保存为 {attrValues?.length ?? 0}{' '}
               个选项；实例表单里是**单选**下拉。
             </Text>
           )}
