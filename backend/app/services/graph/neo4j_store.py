@@ -39,6 +39,8 @@ FULLTEXT_INDEX = "ont_entity_ft"
 
 # schema 初始化失败后的冷却时间：图库没起来时不要每次调用都重试三条 DDL
 _SCHEMA_RETRY_COOLDOWN_S = 30.0
+# 连接最长存活时间。太短会导致频繁重建连接（每次约 2 秒），把稳态查询超时顶爆。
+_CONNECTION_LIFETIME_S = 3600
 # 单条 Cypher 一次带多少行（节点/边批量写入）
 _BATCH_SIZE = 500
 # 状态优先级：数字越大越权威（与内存实现一致）
@@ -285,6 +287,9 @@ class Neo4jGraphStore:
         self._schema_timeout_s = max(self._connect_timeout_s, 10.0)
         self._driver_obj: Any = None
         self._schema_ready = False
+        # 连接池是否已经热过。建连（含回收后重建）约 2 秒，远大于稳态查询超时，
+        # 所以只有「热着」的时候才敢用 0.8 秒的紧超时。
+        self._warm = False
         self._schema_retry_at = 0.0
         self._schema_lock = asyncio.Lock()
 
@@ -297,8 +302,12 @@ class Neo4jGraphStore:
                 self._uri,
                 auth=(self._user, self._password),
                 connection_timeout=self._connect_timeout_s,
-                max_connection_lifetime=300,
+                # 原来 300 秒回收一次：每 5 分钟就要重新握手（实测 ~2 秒），
+                # 正好撞上 0.8 秒的查询超时，表现为「图谱用一会儿就没边了」。
+                max_connection_lifetime=_CONNECTION_LIFETIME_S,
                 max_connection_pool_size=int(settings.graph_neo4j_pool_size),
+                # 池子被占满时默认要等 60 秒，会把调用方一起拖死
+                connection_acquisition_timeout=self._connect_timeout_s,
             )
         return self._driver_obj
 
@@ -340,8 +349,21 @@ class Neo4jGraphStore:
             # 用 dict(record) 而不是 result.data()：后者会把关系压成三元组、丢关系属性
             return [dict(record) async for record in result]
 
+    def _budget(self) -> float:
+        """这次调用能用多少秒。
+
+        只有「schema 建好 + 连接池热着」才用稳态的紧超时；其余情况（冷启动、
+        刚失败过）一律给宽松预算——建连本身就要 ~2 秒，用 0.8 秒只会反复误判。
+        """
+        steady = self._schema_ready and self._warm
+        return self._timeout_s if steady else self._schema_timeout_s
+
     def _note_failure(self) -> None:
         """记录一次失败：schema 还没建好就进入冷却，避免图库宕机时每次调用都等超时。"""
+        # 关键：失败后把「连接池已热」标记清掉，下一次调用改用宽松超时重建连接。
+        # 否则一次 2 秒的建连超时之后，后面每次都被 0.8 秒的稳态超时卡死，永远连不回来
+        # —— 实测就是「图能看，但过几分钟所有边都没了」。
+        self._warm = False
         if not self._schema_ready:
             self._schema_retry_at = time.monotonic() + _SCHEMA_RETRY_COOLDOWN_S
 
@@ -349,9 +371,12 @@ class Neo4jGraphStore:
         """执行查询：超时/异常一律降级为空结果，不打断调用方。"""
         # 首次调用要顺带建 schema + 驱动握手（实测约 2 秒），不能用稳态查询超时去卡它，
         # 否则进程刚起来的头几个图查询会被误判成「图库不可用」并触发 30 秒冷却。
-        timeout = self._timeout_s if self._schema_ready else self._schema_timeout_s
+        # 连接池被回收后重建连接同样要 ~2 秒，所以「上一次失败过」也走宽松超时。
+        timeout = self._budget()
         try:
-            return await asyncio.wait_for(self._execute(cypher, params or {}), timeout=timeout)
+            rows = await asyncio.wait_for(self._execute(cypher, params or {}), timeout=timeout)
+            self._warm = True
+            return rows
         except asyncio.TimeoutError:
             self._note_failure()
             logger.warning("Neo4j 查询超时（>%.2fs），本次返回空结果", timeout)
@@ -414,6 +439,22 @@ class Neo4jGraphStore:
             f"  AND NOT (n)-[:{REL_TYPE}]-() "
             f"DELETE n",
             {"kb_id": kb_id},
+        )
+
+    async def delete_nodes(self, uids: list[str]) -> None:
+        """DETACH DELETE：连边一起删，不留悬空关系。"""
+        if not uids:
+            return
+        await self._run(
+            f"MATCH (n:{NODE_LABEL}) WHERE n.uid IN $uids DETACH DELETE n",
+            {"uids": list(uids)},
+        )
+
+    async def delete_edges(self, subject_uid: str, predicate: str, object_uid: str) -> None:
+        await self._run(
+            f"MATCH (a:{NODE_LABEL} {{uid: $s}})-[r:{REL_TYPE}]->(b:{NODE_LABEL} {{uid: $o}}) "
+            f"WHERE r.relation_type = $p DELETE r",
+            {"s": subject_uid, "p": predicate, "o": object_uid},
         )
 
     # ---------- 读取 ----------
@@ -509,6 +550,46 @@ class Neo4jGraphStore:
             {"q": text.lower(), "kb_id": kb_id, "limit": int(limit)},
         )
         return [n for n in (_node_from_props(r.get("n")) for r in rows) if n is not None]
+
+    async def overview(
+        self,
+        *,
+        entity_types: list[str] | None = None,
+        kb_id: int | None = None,
+        node_limit: int = 500,
+        edge_limit: int = 1500,
+    ) -> GraphSlice:
+        """全览：取一批节点 + 两端都在结果内的边（给前端画图用）。
+
+        分两条查询而不是一条变长匹配：节点先截断，边再按节点集合过滤，
+        这样即使图很大也不会因为「先匹配边」把内存撑爆。
+        """
+        types = [type_value(t) for t in entity_types] if entity_types else None
+        node_rows = await self._run(
+            f"MATCH (n:{NODE_LABEL}) "
+            f"WHERE ($types IS NULL OR n.entity_type IN $types) "
+            f"  AND ($kb_id IS NULL OR $kb_id IN coalesce(n.kb_ids, [])) "
+            f"RETURN n LIMIT $limit",
+            {"types": types, "kb_id": kb_id, "limit": int(node_limit)},
+        )
+        nodes = [n for n in (_node_from_props(r.get("n")) for r in node_rows) if n is not None]
+        truncated = len(node_rows) >= max(1, int(node_limit))
+        if not nodes:
+            return GraphSlice(nodes=[], edges=[], truncated=False)
+
+        edge_rows = await self._run(
+            f"MATCH (a:{NODE_LABEL})-[r:{REL_TYPE}]->(b:{NODE_LABEL}) "
+            f"WHERE a.uid IN $uids AND b.uid IN $uids "
+            f"  AND coalesce(r.status, 'auto') <> 'rejected' "
+            f"  AND ($kb_id IS NULL OR r.kb_id = $kb_id) "
+            f"RETURN a, b, r, startNode(r).uid AS src, endNode(r).uid AS dst LIMIT $limit",
+            {"uids": [n.uid for n in nodes], "kb_id": kb_id, "limit": int(edge_limit)},
+        )
+        if len(edge_rows) >= max(1, int(edge_limit)):
+            truncated = True
+        slice_ = self._slice(edge_rows, edge_keys=(("r", "src", "dst"),), limit=edge_limit)
+        # _slice 会用边里带的节点覆盖，这里以节点查询结果为准（顺序稳定，前端好复用）
+        return GraphSlice(nodes=nodes, edges=slice_.edges, truncated=truncated)
 
     async def stats(self, kb_id: int | None = None) -> dict:
         node_rows = await self._run(

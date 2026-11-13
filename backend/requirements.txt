@@ -64,3 +64,8 @@ tenacity>=8.3
 neo4j>=5.20
 # 本体 TBox 用 YAML 定义（引擎不写死任何模型知识）
 PyYAML>=6.0
+# TBox 在线编辑（F3）：round-trip 读写 YAML，保住注释与键顺序
+ruamel.yaml>=0.18
+# MCP（Model Context Protocol）官方 Python SDK：本体服务的 stdio 薄封装
+# 2.x 的 API 是 MCPServer（1.x 叫 FastMCP），别按 1.x 的写法改
+mcp>=2.0

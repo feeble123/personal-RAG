@@ -200,3 +200,36 @@ class TestFactory:
     def test_node_label_constants(self):
         assert nj.NODE_LABEL == "OntologyEntity"
         assert nj.REL_TYPE == "ONT_REL"
+
+
+class TestTimeoutBudget:
+    """连接重建要 ~2 秒，紧超时只该用在「连接池热着」的稳态。
+
+    回归背景：驱动原来 max_connection_lifetime=300，每 5 分钟回收连接后重建，
+    撞上 0.8 秒查询超时 → 超时后永远回到 0.8 秒 → 图谱只剩 PG 节点、所有边消失。
+    """
+
+    def _store(self) -> Neo4jGraphStore:
+        return Neo4jGraphStore(
+            uri="bolt://127.0.0.1:1", user="neo4j", password="x",
+            query_timeout_s=0.8, connect_timeout_s=5.0,
+        )
+
+    def test_cold_start_gets_generous_budget(self):
+        store = self._store()
+        # schema 没建好之前一律宽松
+        assert store._budget() >= 5.0
+
+    def test_steady_state_uses_tight_timeout(self):
+        store = self._store()
+        store._schema_ready = True
+        store._warm = True
+        assert store._budget() == pytest.approx(0.8)
+
+    def test_failure_relaxes_budget_again(self):
+        store = self._store()
+        store._schema_ready = True
+        store._warm = True
+        store._note_failure()
+        assert store._warm is False
+        assert store._budget() >= 5.0

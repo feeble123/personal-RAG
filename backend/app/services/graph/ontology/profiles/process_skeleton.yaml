@@ -9,6 +9,9 @@
 # ============================================================
 version: 1
 profile_id: process_skeleton
+# 界面上显示的「图谱库」名称与说明（缺省回落到 profile_id）
+display_name: 流程骨架本体
+description: 数据下载 → 处理 → 建模 → 率定 → 输出这条流水线本身（首期只有骨架）。
 domain: modeling_process
 
 entity_types:

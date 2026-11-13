@@ -131,8 +131,8 @@ constraints:
 | O3 | 调参+流程 profile、参数表模板与导入 | ✅ 已完成 |
 | O4 | 推荐卡 + 实例 CRUD + 管理 API | ✅ 已完成 |
 | O5 | 检索编排 + 对外 API + 指标 | ✅ 已完成 |
-| O6 | MCP 薄封装 | 待做 |
-| O7 | 前端图谱浏览页 | 后续 |
+| O6 | MCP 薄封装 | ✅ 已完成（`python -m app.mcp`，5 个工具，stdio 已联调） |
+| O7 | 前端图谱浏览页 | 🔄 F1 图谱总览已完成；F2 ABox 管理页、F3 TBox 编辑页待做 |
 | O8 | 流程本体扩充 + 率定记录回流 | 后续 |
 
 ---
@@ -155,6 +155,7 @@ python -m venv .venv
 |---|---|
 | **Neo4j 5.26.0 社区版服务端** | `E:\GPT-Codex\neo4j\neo4j-community-5.26.0`（ZIP 解压，无 Docker、无管理员权限） |
 | **Java 21（Temurin）** | `E:\GPT-Codex\tools\jdk\jdk-21.0.13+9`（Neo4j 5 必需；本机原本没有 Java） |
+| **MinerU（扫描件解析）** | 单独清单 `requirements-mineru.txt`（主依赖刻意保持轻量，**新建 venv 必须额外装**）。模型 2.5G 用官方命令下到**项目自己的** `backend/data/mineru_models/`（已 gitignore），`MINERU_MODEL_DIR` 指向 `.../snapshots/master`；注意 MinerU 3.x 的 ModelPath 自带 `models/` 前缀，**不能再往里拼一层 models** |
 | 启动数据库 | 双击 `E:\GPT-Codex\neo4j\启动Neo4j.bat`（关闭窗口即停止） |
 | 看图界面 | 浏览器打开 `http://localhost:7474`，账号 `neo4j`，密码见 `backend\.env` 的 `GRAPH_NEO4J_PASSWORD` |
 | 监听范围 | `server.default_listen_address=localhost`（只本机可连，不对局域网开放） |

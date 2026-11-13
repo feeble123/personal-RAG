@@ -86,6 +86,20 @@ body {
   background: rgba(12, 20, 40, 0.5);
 }
 
+/* 图谱页的悬浮玻璃卡片（图例 / 筛选等压在画布上）：半透明 + 模糊 + 霓虹描边 */
+.graph-float-card {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  box-shadow:
+    0 0 0 1px rgba(0, 198, 255, 0.06) inset,
+    0 8px 28px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
 /* 引用 pill：等宽编号 + 品牌渐变描边 + 悬浮发光 */
 .citation-pill {
   font-family: var(--font-mono);
@@ -699,4 +713,27 @@ body {
   border-color: rgba(0, 198, 255, 0.6);
   box-shadow: 0 0 14px rgba(0, 198, 255, 0.25);
   transform: translateY(-2px);
+}
+
+/* 本体事实卡（O7）：本体模式回答上方的结构化事实摘要 */
+.ontology-facts {
+  margin-bottom: 8px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 198, 255, 0.22);
+  background: rgba(0, 198, 255, 0.05);
+}
+.ontology-facts .ant-collapse-header {
+  padding: 4px 0 !important;
+  align-items: center !important;
+}
+.ontology-facts .ant-collapse-content-box {
+  padding: 0 !important;
+}
+.ontology-fact-item {
+  padding: 6px 0;
+  border-top: 1px dashed rgba(122, 190, 255, 0.16);
+}
+.ontology-fact-item:first-child {
+  border-top: none;
 }

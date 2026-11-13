@@ -42,6 +42,7 @@ from app.services.chat import (
     resolve_answer_style,
 )
 from app.services.embedding import embed_query
+from app.services.graph.ontology.retrieval import retrieve_with_ontology
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["qa"])
@@ -246,12 +247,33 @@ async def chat(
                     yield _sse({"event": "done", "data": {"message_id": asst_id}})
                     return
 
+                # 2.5) 本体模式（O7）：先查本体，命中就不再走向量检索
+                #      本体给的是结构化事实（参数范围、实体关系），检索给的是原文片段。
+                #      这里是「本体优先」，不是「本体替代」：本体一条事实都拿不到时照常回退，
+                #      回退走下方原有检索链路，行为与 kb 模式完全一致。
+                ontology_pack = None
+                ontology_hit = False
+                if body.mode == "ontology":
+                    ontology_pack = await retrieve_with_ontology(
+                        sdb, search_query, kb_id=body.kb_id, allow_fallback=False
+                    )
+                    ontology_hit = bool(ontology_pack.facts)
+                    yield _sse({"event": "facts", "data": {
+                        "mode": "ontology",
+                        "facts": ontology_pack.facts,
+                        "fallback_used": not ontology_hit,
+                        "sources": ontology_pack.sources,
+                        "latency_ms": ontology_pack.latency_ms,
+                        "notes": ontology_pack.notes,
+                    }})
+
                 # 3) 问答记忆（用户背书，先于检索）：命中即秒回，不浪费检索
                 #    good → 直接复用记忆答案；bad → 强制跳过语义缓存重新检索
+                #    本体模式下跳过：记忆里存的是知识库答案，会盖掉本体事实。
                 subject = rag.focus_rerank_query(body.content)
                 skip_cache = False
                 qvec = None
-                if settings.memory_enabled:
+                if settings.memory_enabled and not ontology_hit:
                     qvec = await embed_query(body.content)
                     mem = await memory.recall(
                         sdb, qvec, subject,
@@ -300,19 +322,25 @@ async def chat(
                         logger.info("负面记忆命中 mem=%s，强制重新检索", mem.memory_id)
 
                 # 4) 检索（记忆未命中才执行）：用改写后的查询检索（追问合并主题，保证新问题自行检索）
-                _t_retrieve = perf_counter()
-                cites = await rag.retrieve(
-                    sdb,
-                    search_query,
-                    kb_id=body.kb_id,
-                    doc_ids=doc_ids or None,
-                    top_k=settings.top_k_final,
-                )
-                metrics["chat_stage_seconds"].labels("retrieve").observe(perf_counter() - _t_retrieve)
-                # U3 证据等级：按检索分数四级判级
-                scores = [c.score for c in cites if c.score is not None]
-                evidence_level = rag.judge_evidence_level(scores)
-                evidence_top_score = scores[0] if scores else None
+                #    本体已命中 → 不检索：本体事实本身就够回答，再检索纯属浪费（实测 20 秒）。
+                if ontology_hit:
+                    cites = []
+                    evidence_level = "sufficient"  # 结构化事实视为强证据，不触发弱证据约束
+                    evidence_top_score = None
+                else:
+                    _t_retrieve = perf_counter()
+                    cites = await rag.retrieve(
+                        sdb,
+                        search_query,
+                        kb_id=body.kb_id,
+                        doc_ids=doc_ids or None,
+                        top_k=settings.top_k_final,
+                    )
+                    metrics["chat_stage_seconds"].labels("retrieve").observe(perf_counter() - _t_retrieve)
+                    # U3 证据等级：按检索分数四级判级
+                    scores = [c.score for c in cites if c.score is not None]
+                    evidence_level = rag.judge_evidence_level(scores)
+                    evidence_top_score = scores[0] if scores else None
                 # U3 动态放行：仅当「实时/外部信息」类问题（天气/时间/新闻/汇率等，系统无此能力）
                 # 且 KB 无强证据时拒答；问候/闲聊/能力咨询/规范概述/领域问答一律放行，
                 # 由 LLM 依据证据等级诚实作答（规则8 + 较弱约束，不强行引用弱相关资料）。
@@ -353,8 +381,9 @@ async def chat(
                     )
                     return
                 # 5) 语义缓存（仅严谨风格；负面记忆命中时跳过）：相似、主题一致且**作用域一致**直接秒回
+                #    本体命中时跳过：缓存里是知识库答案，会盖掉本体事实。
                 cached = None
-                if cacheable and not skip_cache:
+                if cacheable and not skip_cache and not ontology_hit:
                     if qvec is None:
                         qvec = await embed_query(body.content)
                     cached = await semantic_cache.find(
@@ -413,7 +442,12 @@ async def chat(
             # 5) 流式生成（按回答风格组装 SYSTEM_PROMPT + 对应温度；证据较弱/不足时追加据实约束）
             llm = build_chat_model(style_temp)
             messages = build_prompt(
-                body.content, cites, history, style=style, evidence_weak=(evidence_level in ("weak", "none"))
+                body.content,
+                cites,
+                history,
+                style=style,
+                evidence_weak=(evidence_level in ("weak", "none")),
+                ontology_facts=(ontology_pack.facts if ontology_hit else None),
             )
             buffer = ""
             usage_in = usage_out = None

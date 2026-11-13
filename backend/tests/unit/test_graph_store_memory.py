@@ -139,3 +139,38 @@ class TestQuery:
         stats = await store.stats(kb_id=1)
         assert stats["nodes"]["by_type"]["engineering_object"] == 1
         assert stats["edges"]["by_type"]["downstream_of"] == 2
+
+
+class TestOverview:
+    """全览（前端画图用）：只返回两端都在结果里的边，超限要标 truncated。"""
+
+    async def test_returns_all_nodes_and_edges(self, store):
+        await _seed(store)
+        slice_ = await store.overview(node_limit=100, edge_limit=100)
+        assert len(slice_.nodes) == 4
+        assert len(slice_.edges) == 3  # 水库→河段、河段→乡镇、乡镇→措施
+        assert slice_.truncated is False
+        uids = {n.uid for n in slice_.nodes}
+        assert all(e.subject_uid in uids and e.object_uid in uids for e in slice_.edges)
+
+    async def test_node_limit_truncates_and_drops_dangling_edges(self, store):
+        await _seed(store)
+        slice_ = await store.overview(node_limit=1, edge_limit=100)
+        assert len(slice_.nodes) == 1
+        assert slice_.truncated is True
+        # 只有一个节点，边两端不可能都在结果里
+        assert slice_.edges == []
+
+    async def test_rejected_edges_excluded(self, store):
+        nodes = await _seed(store)
+        await store.upsert(
+            [],
+            [_edge(nodes["reservoir"], RelationType.DOWNSTREAM_OF, nodes["town"], status="rejected")],
+        )
+        slice_ = await store.overview()
+        assert all(e.status != "rejected" for e in slice_.edges)
+
+    async def test_kb_scope(self, store):
+        await _seed(store)
+        assert (await store.overview(kb_id=2)).nodes == []
+        assert len((await store.overview(kb_id=1)).nodes) == 4

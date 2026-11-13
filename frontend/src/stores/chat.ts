@@ -1,7 +1,14 @@
 import { create } from 'zustand'
 import { convApi, feedbackApi, streamChat, streamOptimize, type MessageOut } from '@/api/modules'
-import type { Citation, Conversation } from '@/api/types'
+import type { Citation, Conversation, OntologyFactsEvent } from '@/api/types'
 import { useAuthStore } from './auth'
+
+/**
+ * 回答模式：
+ *   kb       —— 只查知识库切片（原行为）
+ *   ontology —— 先查本体（参数卡/图谱关系），本体一条事实都拿不到才回退向量检索
+ */
+export type AnswerMode = 'kb' | 'ontology'
 
 // 本地流式消息：assistant 流式生成期间的临时状态
 export interface StreamMessage {
@@ -22,6 +29,8 @@ export interface StreamMessage {
   answer_complete?: boolean | null
   // LLM 优化（opt-in）：true = 用户点「🤖 LLM优化」产生的结果
   optimized?: boolean
+  // 本体模式：后端在正文之前推送的结构化事实（参数卡/图谱关系）
+  ontologyFacts?: OntologyFactsEvent | null
 }
 
 interface ChatState {
@@ -50,7 +59,12 @@ interface ChatState {
   newConversation: () => Promise<number | null>
   renameConversation: (id: number, title: string) => Promise<void>
   deleteConversation: (id: number) => Promise<void>
-  send: (content: string, kbId?: number | null, style?: string) => Promise<void>
+  send: (
+    content: string,
+    kbId?: number | null,
+    style?: string,
+    mode?: AnswerMode,
+  ) => Promise<void>
   optimizeMessage: (messageId: number) => Promise<void>
   stop: () => void
   giveFeedback: (messageId: number, feedback: 'up' | 'down' | null) => Promise<void>
@@ -132,7 +146,7 @@ export const useChatStore = create<ChatState>()((set, get) => ({
     if (currentId === id) set({ currentId: null, history: [], messages: [], streaming: false, abortCtrl: null })
   },
 
-  send: async (content, kbId, style) => {
+  send: async (content, kbId, style, mode = 'kb') => {
     const state = get()
     const convId = state.currentId
     if (!convId || state.streaming || !content.trim()) return
@@ -156,10 +170,22 @@ export const useChatStore = create<ChatState>()((set, get) => ({
         content,
         kbId,
         style,
+        mode,
         signal: abortCtrl.signal,
         onEvent: (ev) => {
           if (seq !== streamSeq) return // 过期流回调，丢弃（切会话后新流已领号）
-          if (ev.event === 'citations') {
+          if (ev.event === 'facts') {
+            // 本体模式：结构化事实先到，展示在回答正文上方
+            const facts = ev.data as OntologyFactsEvent
+            set((s) => {
+              const msgs = [...s.messages]
+              const last = msgs[msgs.length - 1]
+              if (last && last.role === 'assistant') {
+                msgs[msgs.length - 1] = { ...last, ontologyFacts: facts }
+              }
+              return { messages: msgs }
+            })
+          } else if (ev.event === 'citations') {
             citations = ev.data as Citation[]
             set((s) => {
               const msgs = [...s.messages]

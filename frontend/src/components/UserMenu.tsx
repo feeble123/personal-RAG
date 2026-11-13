@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { App, Avatar, Dropdown, Form, Input, Modal, Space, Typography } from 'antd'
-import { BulbOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, SafetyCertificateOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { ApartmentOutlined, BulbOutlined, DeploymentUnitOutlined, DatabaseOutlined, KeyOutlined, LogoutOutlined, SafetyCertificateOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { Link } from 'react-router-dom'
 import { authApi } from '@/api/modules'
 import { logoutAndRevoke, useAuthStore } from '@/stores/auth'
@@ -36,6 +36,20 @@ export default function UserMenu() {
           key: 'kb',
           icon: <DatabaseOutlined />,
           label: <Link to="/knowledge">知识库管理</Link>,
+        }
+      : null,
+    isAdmin
+      ? {
+          key: 'graph',
+          icon: <ApartmentOutlined />,
+          label: <Link to="/graph">知识图谱</Link>,
+        }
+      : null,
+    isAdmin
+      ? {
+          key: 'ontology',
+          icon: <DeploymentUnitOutlined />,
+          label: <Link to="/ontology">本体管理</Link>,
         }
       : null,
     isAdmin

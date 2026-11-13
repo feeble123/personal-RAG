@@ -198,3 +198,140 @@ class TestImport:
         files = {"file": ("p.txt", b"hello", "text/plain")}
         r = await client.post(f"{BASE}/params/import", headers=admin_headers, files=files)
         assert r.status_code == 400
+
+
+class TestGraphOverview:
+    """前端画图用的全览接口。"""
+
+    async def test_requires_admin(self, client, user_headers):
+        r = await client.get(f"{BASE}/graph", headers=user_headers)
+        assert r.status_code == 403
+
+    async def test_returns_instances_as_nodes(self, client, admin_headers, cleanup_instances):
+        created = await client.post(
+            f"{BASE}/instances", headers=admin_headers, json=_instance_payload("t4_graph_sm")
+        )
+        assert created.status_code == 201, created.text
+        uid = created.json()["uid"]
+
+        r = await client.get(f"{BASE}/graph", headers=admin_headers, params={"node_limit": 500})
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["profile_id"] == "tuning"
+        node = next(n for n in data["nodes"] if n["uid"] == uid)
+        assert node["name"] == "t4_graph_sm"
+        assert node["display"] == "测试参数"  # 中文名优先展示
+        assert node["evidence_count"] == 1
+        assert isinstance(data["edges"], list)
+
+    async def test_graph_disabled_reports_honestly(self, client, admin_headers):
+        """测试环境图库关闭：节点照常给（来自 PG），但要明确说边不可用。"""
+        r = await client.get(f"{BASE}/graph", headers=admin_headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["graph_available"] is False
+        assert "note" in data and "图库未启用" in data["note"]
+
+
+class TestRelations:
+    """关系的真相源在 PG：建/改/删都要能回溯，且改错了能修。"""
+
+    async def _two_params(self, client, admin_headers):
+        a = await client.post(
+            f"{BASE}/instances", headers=admin_headers, json=_instance_payload("t4_rel_a")
+        )
+        b = await client.post(
+            f"{BASE}/instances", headers=admin_headers, json=_instance_payload("t4_rel_b")
+        )
+        assert a.status_code == 201 and b.status_code == 201, (a.text, b.text)
+        return a.json(), b.json()
+
+    async def test_create_and_list(self, client, admin_headers, cleanup_instances):
+        a, b = await self._two_params(client, admin_headers)
+        payload = {
+            "subject_uid": a["uid"],
+            "predicate": "PART_OF",
+            "object_uid": b["uid"],
+            "evidence": [{"type": "教材", "note": "表5.2"}],
+        }
+        r = await client.post(f"{BASE}/relations", headers=admin_headers, json=payload)
+        assert r.status_code == 201, r.text
+        created = r.json()
+        assert created["predicate"] == "PART_OF"
+
+        listed = await client.get(
+            f"{BASE}/relations", headers=admin_headers, params={"touch_uid": a["uid"]}
+        )
+        assert listed.status_code == 200
+        assert any(x["id"] == created["id"] for x in listed.json())
+
+        await client.delete(f"{BASE}/relations/{created['id']}", headers=admin_headers)
+
+    async def test_unknown_predicate_rejected(self, client, admin_headers, cleanup_instances):
+        a, b = await self._two_params(client, admin_headers)
+        r = await client.post(
+            f"{BASE}/relations",
+            headers=admin_headers,
+            json={"subject_uid": a["uid"], "predicate": "NOT_A_RELATION", "object_uid": b["uid"]},
+        )
+        assert r.status_code == 400
+        assert r.json()["code"] == "ONTOLOGY_INVALID_RELATION"
+
+    async def test_endpoint_missing(self, client, admin_headers, cleanup_instances):
+        a, _ = await self._two_params(client, admin_headers)
+        r = await client.post(
+            f"{BASE}/relations",
+            headers=admin_headers,
+            json={"subject_uid": a["uid"], "predicate": "PART_OF", "object_uid": "pn:nope"},
+        )
+        assert r.status_code == 400
+        assert r.json()["code"] == "ONTOLOGY_RELATION_ENDPOINT_MISSING"
+
+    async def test_duplicate_rejected(self, client, admin_headers, cleanup_instances):
+        a, b = await self._two_params(client, admin_headers)
+        payload = {"subject_uid": a["uid"], "predicate": "PART_OF", "object_uid": b["uid"]}
+        first = await client.post(f"{BASE}/relations", headers=admin_headers, json=payload)
+        assert first.status_code == 201
+        second = await client.post(f"{BASE}/relations", headers=admin_headers, json=payload)
+        assert second.status_code == 409
+        await client.delete(f"{BASE}/relations/{first.json()['id']}", headers=admin_headers)
+
+    async def test_patch_and_delete(self, client, admin_headers, cleanup_instances):
+        a, b = await self._two_params(client, admin_headers)
+        created = await client.post(
+            f"{BASE}/relations",
+            headers=admin_headers,
+            json={"subject_uid": a["uid"], "predicate": "PART_OF", "object_uid": b["uid"]},
+        )
+        rid = created.json()["id"]
+
+        patched = await client.patch(
+            f"{BASE}/relations/{rid}",
+            headers=admin_headers,
+            json={"evidence": [{"type": "手册", "note": "新增依据"}], "status": "archived"},
+        )
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["status"] == "archived"
+        assert patched.json()["evidence"][0]["note"] == "新增依据"
+
+        deleted = await client.delete(f"{BASE}/relations/{rid}", headers=admin_headers)
+        assert deleted.status_code == 204
+        gone = await client.patch(
+            f"{BASE}/relations/{rid}", headers=admin_headers, json={"status": "active"}
+        )
+        assert gone.status_code == 404
+
+    async def test_delete_instance_cascades_relations(self, client, admin_headers, cleanup_instances):
+        a, b = await self._two_params(client, admin_headers)
+        created = await client.post(
+            f"{BASE}/relations",
+            headers=admin_headers,
+            json={"subject_uid": a["uid"], "predicate": "PART_OF", "object_uid": b["uid"]},
+        )
+        assert created.status_code == 201
+
+        await client.delete(f"{BASE}/instances/{a['id']}", headers=admin_headers)
+        left = await client.get(
+            f"{BASE}/relations", headers=admin_headers, params={"touch_uid": a["uid"]}
+        )
+        assert left.json() == []

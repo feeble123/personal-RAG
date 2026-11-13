@@ -283,6 +283,35 @@ class TestPersistence:
         await session.commit()
         assert (third.created, third.updated, third.unchanged) == (0, 1, 0)
 
+    async def test_reimport_appends_evidence_instead_of_overwriting(self, session, registry):
+        """多来源证据只增不减：重导 Excel 不能把教材那条抹掉。"""
+        first = self._draft(registry)  # 证据只有手册那条
+        await inst_mod.upsert_instances(session, [first])
+        await session.commit()
+
+        second = inst_mod.InstanceDraft(
+            profile_id=TEST_PROFILE,
+            entity_type="Parameter",
+            name="sm",
+            uid=registry.uid_for("Parameter", "sm", 0),
+            props={"display_zh": "sm", "group": "水源划分", "unit": "mm", "sensitivity": "高"},
+            evidence=[{"type": "教材", "note": "表5.2", "doc_id": 23, "chunk_id": 28335}],
+        )
+        await inst_mod.upsert_instances(session, [second])
+        await session.commit()
+
+        row = await inst_mod.get_instance(session, TEST_PROFILE, "Parameter", "sm")
+        assert row is not None
+        assert {e["type"] for e in row.evidence} == {"manual", "教材"}
+        assert row.props["sensitivity"] == "高"
+
+        # 再写一次同样的证据：不重复、且判定为无变化
+        again = await inst_mod.upsert_instances(session, [second])
+        await session.commit()
+        assert again.unchanged == 1
+        row = await inst_mod.get_instance(session, TEST_PROFILE, "Parameter", "sm")
+        assert len(row.evidence) == 2
+
     async def test_get_and_list(self, session, registry):
         await inst_mod.upsert_instances(session, [self._draft(registry, "a1"), self._draft(registry, "a2")])
         await session.commit()

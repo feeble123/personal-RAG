@@ -28,6 +28,12 @@ class GraphStore(Protocol):
 
     async def delete_kb(self, kb_id: int) -> None: ...
 
+    async def delete_nodes(self, uids: list[str]) -> None: ...
+
+    async def delete_edges(
+        self, subject_uid: str, predicate: str, object_uid: str
+    ) -> None: ...
+
     async def get_node(self, uid: str) -> Node | None: ...
 
     async def neighbors(
@@ -39,6 +45,15 @@ class GraphStore(Protocol):
     ) -> GraphSlice: ...
 
     async def search(self, query: str, kb_id: int | None = None, limit: int = 50) -> list[Node]: ...
+
+    async def overview(
+        self,
+        *,
+        entity_types: list[str] | None = None,
+        kb_id: int | None = None,
+        node_limit: int = 500,
+        edge_limit: int = 1500,
+    ) -> GraphSlice: ...
 
     async def stats(self, kb_id: int | None = None) -> dict: ...
 
@@ -148,6 +163,24 @@ class InMemoryGraphStore:
             if kb_id in node.kb_ids:
                 del self._nodes[uid]
 
+    async def delete_nodes(self, uids: list[str]) -> None:
+        """删节点，连同挂在它身上的边（避免留下悬空边）。"""
+        targets = set(uids)
+        for uid in targets:
+            self._nodes.pop(uid, None)
+        for key, edge in list(self._edges.items()):
+            if edge.subject_uid in targets or edge.object_uid in targets:
+                del self._edges[key]
+
+    async def delete_edges(self, subject_uid: str, predicate: str, object_uid: str) -> None:
+        for key, edge in list(self._edges.items()):
+            if (
+                edge.subject_uid == subject_uid
+                and edge.object_uid == object_uid
+                and type_value(edge.predicate) == predicate
+            ):
+                del self._edges[key]
+
     # ---------- 读取 ----------
     async def get_node(self, uid: str) -> Node | None:
         return self._nodes.get(uid)
@@ -213,6 +246,41 @@ class InMemoryGraphStore:
                 hits.append((1, node))
         hits.sort(key=lambda x: (x[0], -len(x[1].name)))
         return [n for _, n in hits[:limit]]
+
+    async def overview(
+        self,
+        *,
+        entity_types: list[str] | None = None,
+        kb_id: int | None = None,
+        node_limit: int = 500,
+        edge_limit: int = 1500,
+    ) -> GraphSlice:
+        """全览：一次取回一批节点和边（给前端画图用，不等于全库导出）。
+
+        边只保留两端都在本次结果里的，避免画出「悬空边」。
+        """
+        wanted = {type_value(t) for t in entity_types} if entity_types else None
+        nodes = [
+            n
+            for n in self._nodes.values()
+            if (not wanted or type_value(n.entity_type) in wanted)
+            and (kb_id is None or kb_id in n.kb_ids)
+        ]
+        truncated = len(nodes) > node_limit
+        nodes = nodes[: max(1, int(node_limit))]
+
+        keep = {n.uid for n in nodes}
+        edges = [
+            e
+            for e in self._visible_edges()
+            if e.subject_uid in keep
+            and e.object_uid in keep
+            and (kb_id is None or e.kb_id == kb_id)
+        ]
+        if len(edges) > edge_limit:
+            truncated = True
+            edges = edges[: max(1, int(edge_limit))]
+        return GraphSlice(nodes=nodes, edges=edges, truncated=truncated)
 
     async def stats(self, kb_id: int | None = None) -> dict:
         nodes = [n for n in self._nodes.values() if kb_id is None or kb_id in n.kb_ids]

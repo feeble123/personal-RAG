@@ -8,6 +8,8 @@ import KnowledgeBase from '@/pages/KnowledgeBase'
 import MemoryManager from '@/pages/MemoryManager'
 import UserManager from '@/pages/UserManager'
 import AuditLogs from '@/pages/AuditLogs'
+import OntologyGraph from '@/pages/OntologyGraph'
+import OntologyManager from '@/pages/OntologyManager'
 import NotFound from '@/pages/NotFound'
 import { useAuthStore } from '@/stores/auth'
 
@@ -85,6 +87,26 @@ export default function App() {
           <RequireAuth>
             <RequireAdmin>
               <AuditLogs />
+            </RequireAdmin>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/graph"
+        element={
+          <RequireAuth>
+            <RequireAdmin>
+              <OntologyGraph />
+            </RequireAdmin>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/ontology"
+        element={
+          <RequireAuth>
+            <RequireAdmin>
+              <OntologyManager />
             </RequireAdmin>
           </RequireAuth>
         }

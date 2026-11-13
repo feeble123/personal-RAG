@@ -26,6 +26,7 @@ from app.services.graph.ontology.linking import (
     link_instances,
 )
 from app.services.graph.ontology.registry import get_registry
+from app.services.graph.schema import entity_label_zh, relation_label_zh
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,7 @@ async def _graph_facts(
                 "subject": node.uid,
                 "name": node.name,
                 "entity_type": node.type_name,
+                "entity_type_label": entity_label_zh(node.type_name),
                 "props": node.props,
                 "matched_text": entity.matched,
                 "source": "graph",
@@ -143,6 +145,7 @@ async def _graph_facts(
                     "subject": names.get(edge.subject_uid, edge.subject_uid),
                     "subject_uid": edge.subject_uid,
                     "predicate": edge.predicate_name,
+                    "predicate_label": relation_label_zh(edge.predicate_name),
                     "object": names.get(edge.object_uid, edge.object_uid),
                     "object_uid": edge.object_uid,
                     "evidence_text": edge.evidence_text,
@@ -171,15 +174,15 @@ async def _rag_facts(db: AsyncSession, question: str, kb_id: int | None) -> list
     chunks = await rag.retrieve(db, question, kb_id=kb_id, top_k=5)
     facts: list[dict] = []
     for item in chunks:
+        # RetrievedChunk 的正文在 snippet 上（不是 content），取错字段会得到一堆空事实
         facts.append(
             {
                 "kind": "text_chunk",
                 "doc_id": getattr(item, "doc_id", None),
                 "chunk_id": getattr(item, "chunk_id", None),
-                "doc_name": getattr(item, "doc_name", None),
                 "page": getattr(item, "page", None),
                 "section": getattr(item, "section", None),
-                "snippet": (getattr(item, "content", "") or "")[:300],
+                "snippet": (getattr(item, "snippet", "") or "")[:300],
                 "score": getattr(item, "score", None),
                 "source": "rag",
             }
@@ -227,8 +230,12 @@ async def retrieve_with_ontology(
         logger.warning("图事实获取失败：%s", exc)
         pack.notes.append("图库查询失败，已降级")
 
+    # 回退判定只数「本体/图谱给了几条事实」，必须在拼接 RAG 之前算，否则数的是回退后的总数。
+    # 一个参数问题天然只有 1 条参数卡（范围/初值/敏感度/依据都在卡里），
+    # 门槛设成 3 会把每一个参数问题都误判成"本体不够"——这正是之前 22 秒回退的成因。
     threshold = settings.ontology_min_facts if min_facts is None else min_facts
-    if len(pack.facts) < threshold and allow_fallback:
+    ontology_facts = len(pack.facts)
+    if ontology_facts < threshold and allow_fallback:
         try:
             rag_chunks = await _rag_facts(db, question, kb_id)
             if rag_chunks:
@@ -236,7 +243,7 @@ async def retrieve_with_ontology(
             pack.facts.extend(rag_chunks)
             pack.fallback_used = True
             pack.notes.append(
-                f"本体只给出 {len(pack.facts) - len(rag_chunks)} 条事实（阈值 {threshold}），已回退向量检索"
+                f"本体只给出 {ontology_facts} 条事实（阈值 {threshold}），已回退向量检索"
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("回退检索失败：%s", exc)

@@ -27,6 +27,7 @@ import 'katex/dist/katex.min.css'
 import rehypeInlineCitations from '@/plugins/rehypeInlineCitations'
 import CitationDetail from './CitationDetail'
 import InlineCitations from './InlineCitations'
+import OntologyFactCards from './OntologyFactCards'
 import { useChatStore } from '@/stores/chat'
 import type { StreamMessage } from '@/stores/chat'
 
@@ -81,6 +82,8 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
         icon={isUser ? <UserOutlined /> : <RobotOutlined />}
       />
       <div style={{ maxWidth: 'min(82%, 760px)' }}>
+        {/* 本体模式：结构化事实摆在回答上方，让"有依据的事实"和"模型生成的文字"分得清 */}
+        {!isUser && msg.ontologyFacts && <OntologyFactCards data={msg.ontologyFacts} />}
         <div
           className="msg-bubble"
           style={{

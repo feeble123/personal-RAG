@@ -651,3 +651,49 @@ class OntologyInstance(Base):
         ),
         Index("ix_ontology_instances_profile_type", "profile_id", "entity_type"),
     )
+
+
+class OntologyRelation(Base):
+    """本体关系的真相源（人工维护的「主语 - 关系 - 宾语」）。
+
+    道理和实例一样：关系如果只写进 Neo4j，重建图就全没了，人工整理的关系等于白干。
+    所以关系也落 PG，图库由它重放生成。
+
+    唯一性：同一 profile 下 (主语, 关系, 宾语, kb_id) 唯一——同一条关系只维护一份；
+    多来源的说明放进 evidence 列表，而不是建出重复的边。
+    """
+
+    __tablename__ = "ontology_relations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    subject_uid: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    predicate: Mapped[str] = mapped_column(String(60), nullable=False)
+    object_uid: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    kb_id: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", index=True, nullable=False
+    )
+    props: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict, nullable=False)
+    evidence: Mapped[list[Any] | None] = mapped_column(JSONType, nullable=True)
+    # manual（人工录入）/ import（台账导入）/ extracted（文档抽取）
+    source: Mapped[str] = mapped_column(
+        String(20), default="manual", server_default="manual", nullable=False
+    )
+    # active（参与检索）/ archived（保留但不用）
+    status: Mapped[str] = mapped_column(
+        String(20), default="active", server_default="active", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id", "subject_uid", "predicate", "object_uid", "kb_id",
+            name="uq_ontology_relation_scope",
+        ),
+        Index("ix_ontology_relations_profile_pred", "profile_id", "predicate"),
+    )

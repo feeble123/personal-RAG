@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
 from sqlalchemy import select
@@ -141,6 +141,35 @@ async def list_instances(
     return list((await session.execute(stmt)).scalars().all())
 
 
+def _evidence_key(item: Any) -> tuple:
+    """证据去重用的键：同一条原文只留一份，不同来源并列保留。"""
+    if not isinstance(item, dict):
+        return (str(item),)
+    return (
+        item.get("doc_id"),
+        item.get("chunk_id"),
+        item.get("type"),
+        item.get("note"),
+    )
+
+
+def merge_evidence(existing: Iterable[Any], incoming: Iterable[Any]) -> list[Any]:
+    """证据**只增不减**：按来源去重后并集，已有的永远保留。
+
+    为什么不是覆盖：参数先验往往有多份依据（手册 + 教材 + 规范）。
+    重新导入 Excel 只带一份依据，覆盖式写入会把其它来源的证据悄悄抹掉——
+    溯源信息一旦丢了就再也找不回来。要删证据请走 PATCH 接口显式删除。
+    """
+    out = list(existing or [])
+    seen = {_evidence_key(i) for i in out}
+    for item in incoming or []:
+        key = _evidence_key(item)
+        if key not in seen:
+            out.append(item)
+            seen.add(key)
+    return out
+
+
 def _differs(row: OntologyInstance, draft: InstanceDraft) -> bool:
     return (
         row.uid != draft.uid
@@ -176,15 +205,19 @@ async def upsert_instances(session: AsyncSession, drafts: Iterable[InstanceDraft
             )
             result.created += 1
             continue
-        if not _differs(existing, draft):
+        # 证据并集：重导 Excel 不会冲掉其它来源（教材/规范）的证据
+        merged = replace(
+            draft, evidence=merge_evidence(existing.evidence, draft.evidence)
+        )
+        if not _differs(existing, merged):
             result.unchanged += 1
             continue
-        existing.uid = draft.uid
-        existing.props = dict(draft.props)
-        existing.ranges = list(draft.ranges) or None
-        existing.evidence = list(draft.evidence) or None
-        existing.source = draft.source
-        existing.status = draft.status
+        existing.uid = merged.uid
+        existing.props = dict(merged.props)
+        existing.ranges = list(merged.ranges) or None
+        existing.evidence = list(merged.evidence) or None
+        existing.source = merged.source
+        existing.status = merged.status
         result.updated += 1
     await session.flush()
     return result

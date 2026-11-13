@@ -206,3 +206,217 @@ export interface AuditLog {
   client_ip: string | null
   created_at: string
 }
+
+// ===== 本体（Ontology RAG）=====
+
+/** 图谱节点：来自 PG 本体实例（source=instance）或图库（source=graph）。 */
+export interface OntologyGraphNode {
+  uid: string
+  name: string
+  /** 中文展示名（有 display_zh 就用它） */
+  display: string
+  entity_type: string
+  kb_id: number
+  props: Record<string, unknown>
+  evidence_count: number
+  source: 'instance' | 'graph'
+}
+
+export interface OntologyGraphEdge {
+  id: string
+  source: string
+  target: string
+  predicate: string
+  status: string
+  confidence: number
+  evidence_text: string | null
+  chunk_ids: number[]
+}
+
+export interface OntologyGraph {
+  profile_id: string
+  nodes: OntologyGraphNode[]
+  edges: OntologyGraphEdge[]
+  truncated: boolean
+  graph_available: boolean
+  note?: string
+  /** 实体类型 → 中文名（图例和分组标签用） */
+  type_labels?: Record<string, string>
+  /** 关系类型 → 中文名（PART_OF → 属于） */
+  relation_labels?: Record<string, string>
+}
+
+/** TBox 里的实体类型（画图时用来分组着色，也是本体结构编辑的最小单位）。 */
+export interface OntologyEntityType {
+  name: string
+  display_name: string
+  uid_prefix: string
+  /** local=按库隔离，global=跨库共享 */
+  scope: 'local' | 'global'
+  attributes: {
+    name: string
+    type: string
+    values?: string[]
+    description?: string
+    required?: boolean
+  }[]
+}
+
+/** 一条本体实例（ABox，真相源在 PG）。 */
+export interface OntologyInstance {
+  id: number
+  uid: string
+  profile_id: string
+  entity_type: string
+  name: string
+  kb_id: number
+  props: Record<string, unknown>
+  ranges: unknown[] | null
+  evidence: OntologyEvidence[] | null
+  source: string
+  status: string
+  updated_at: string | null
+}
+
+/** 一条证据：能点回原文就带 doc_id/chunk_id，否则只是说明。 */
+export interface OntologyEvidence {
+  type?: string
+  note?: string
+  doc_id?: number | null
+  chunk_id?: number | null
+  doc_name?: string | null
+  page?: number | null
+  locator?: string | null
+  snippet?: string | null
+  traceable?: boolean
+  resolved_by?: string
+}
+
+/** 参数推荐卡：range_level 表示范围强度，conflict 时 candidates 并列。 */
+export interface OntologyParamCard {
+  parameter: string
+  name: string
+  group: string
+  unit: string
+  range_level: 'none' | 'general' | 'conditional' | 'conflict'
+  confidence: number
+  evidence_level: 'none' | 'claim' | 'doc_level' | 'traceable'
+  range: (number | null)[] | null
+  physical_range: (number | null)[] | null
+  initial: number | null
+  sensitivity: string | null
+  narrowed_by: string[]
+  candidates: { when: Record<string, string>; range: (number | null)[] }[]
+  evidence: OntologyEvidence[]
+  notes: string[]
+}
+
+export interface OntologyTypes {
+  profile_id: string
+  /** 图谱库显示名（YAML display_name，缺省回落到 profile_id） */
+  display_name?: string
+  description?: string
+  version?: number
+  domain?: string
+  entity_types: OntologyEntityType[]
+  relation_types: {
+    name: string
+    source: string
+    target: string
+    /** 允许的宾语类型（多选）；空/缺省表示只能连 target */
+    target_types?: string[]
+    display_name?: string
+    description?: string
+  }[]
+}
+
+/** 一条本体关系（ABox 的边，真相源在 PG `ontology_relations`）。 */
+export interface OntologyRelation {
+  id: number
+  profile_id: string
+  subject_uid: string
+  predicate: string
+  object_uid: string
+  kb_id: number
+  props: Record<string, unknown>
+  evidence: OntologyEvidence[] | null
+  source: string
+  status: string
+  updated_at: string | null
+}
+
+/** 参数表导入结果（dry_run=true 时只预演）。 */
+export interface OntologyImportResult {
+  dry_run: boolean
+  profile_id: string
+  rows: number
+  drafts: number
+  created: number
+  updated: number
+  unchanged: number
+  warnings: string[]
+  errors: string[]
+  preview: {
+    name: string
+    display_zh?: string
+    group?: string
+    unit?: string
+    range?: (number | null)[]
+    initial?: number | null
+    conditions: number
+    has_evidence: boolean
+    evidence_level: string
+  }[]
+}
+
+
+/** 从 Excel 表头推断出来的属性建议（F3-3，只预览不写库）。 */
+export interface ExcelColumnSuggestion {
+  header: string
+  name: string
+  type: string
+  values: string[]
+  samples: string[]
+  description: string
+}
+
+/**
+ * 图谱库：一个库 = 一份 TBox（YAML）+ 属于它的实例与关系。
+ * profile_id 同时是文件名与所有本体接口的 `?profile=` 取值。
+ */
+export interface OntologyLibrary {
+  profile_id: string
+  display_name: string
+  description: string
+  file: string
+  entity_type_count: number
+  relation_type_count: number
+  instance_count: number
+  relation_count: number
+  /** 图里真实节点数（按本库声明的实体类型收口） */
+  node_count: number
+  is_default: boolean
+  error?: string | null
+}
+
+/** 本体模式问答时 SSE 的 `facts` 事件负载（先于回答正文到达）。 */
+export interface OntologyFactsEvent {
+  mode: 'ontology'
+  facts: Record<string, unknown>[]
+  fallback_used: boolean
+  sources: string[]
+  latency_ms: number
+  notes: string[]
+}
+
+/** 本体问答返回的事实包。fact 的字段随 kind 不同，这里只约定公共部分。 */
+export interface OntologyAskResult {
+  question: string
+  facts: Record<string, unknown>[]
+  entities: Record<string, unknown>[]
+  evidence: Record<string, unknown>[]
+  fallback_used: boolean
+  sources: string[]
+  latency_ms: number
+  notes: string[]
+}

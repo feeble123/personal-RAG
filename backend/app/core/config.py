@@ -224,8 +224,10 @@ class Settings(BaseSettings):
     ontology_enabled: bool = False
     # TBox profile id，对应 app/services/graph/ontology/profiles/<id>.yaml
     ontology_profile: str = "tuning"
-    # 事实条数达到该值才用本体结果，不足则回退到向量+BM25
-    ontology_min_facts: int = 3
+    # 事实条数达到该值才用本体结果，不足则回退到向量+BM25。
+    # 必须是 1：一个参数问题的正确形态就是「一张参数卡」= 一条事实，
+    # 设成 3 会把每个参数问题都判成"本体不够"而白白回退（实测 2ms → 22s）。
+    ontology_min_facts: int = 1
 
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"

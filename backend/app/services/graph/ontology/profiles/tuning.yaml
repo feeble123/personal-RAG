@@ -10,6 +10,9 @@
 # ============================================================
 version: 1
 profile_id: tuning
+# 界面上显示的「图谱库」名称与说明（缺省回落到 profile_id）
+display_name: 调参本体
+description: 模型参数、流域、率定策略与运行记录——回答「这个参数取多少、依据是什么」。
 domain: model_tuning
 
 entity_types:
@@ -19,16 +22,16 @@ entity_types:
     uid_prefix: pn
     scope: global
     attributes:
-      - { name: group, type: enum, values: [蒸散发, 产流, 水源划分, 汇流, 其他], required: true }
-      - { name: display_zh, type: string, description: "中文名，如 自由水蓄水能力" }
-      - { name: unit, type: string, description: "物理单位；无量纲填 -" }
-      - { name: physical_low, type: number, description: "物理合理下限（可空，待确认）" }
-      - { name: physical_high, type: number, description: "物理合理上限（可空，待确认）" }
-      - { name: range_low, type: number, description: "通用先验下限（可空，待确认）" }
-      - { name: range_high, type: number, description: "通用先验上限（可空，待确认）" }
-      - { name: initial, type: number, description: "建议初值（可空，待确认）" }
-      - { name: sensitivity, type: enum, values: [高, 中, 低] }
-      - { name: note, type: text }
+      - {name: group, type: enum, values: [蒸散发, 产流, 水源划分, 汇流, 其他], required: true}
+      - {name: display_zh, type: string, description: "中文名，如 自由水蓄水能力"}
+      - {name: unit, type: string, description: "物理单位；无量纲填 -"}
+      - {name: physical_low, type: number, description: "物理合理下限（可空，待确认）"}
+      - {name: physical_high, type: number, description: "物理合理上限（可空，待确认）"}
+      - {name: range_low, type: number, description: "通用先验下限（可空，待确认）"}
+      - {name: range_high, type: number, description: "通用先验上限（可空，待确认）"}
+      - {name: initial, type: number, description: "建议初值（可空，待确认）"}
+      - {name: sensitivity, type: enum, values: [高, 中, 低]}
+      - {name: note, type: text}
 
   # ---------- 流域 ----------
   - name: Basin
@@ -36,10 +39,10 @@ entity_types:
     uid_prefix: bn
     scope: global
     attributes:
-      - { name: climate, type: enum, values: [湿润, 半湿润, 半干旱, 干旱] }
-      - { name: flood_type, type: enum, values: [单峰, 多峰] }
-      - { name: area_km2, type: number }
-      - { name: note, type: text }
+      - {name: climate, type: enum, values: [湿润, 半湿润, 半干旱, 干旱]}
+      - {name: flood_type, type: enum, values: [单峰, 多峰]}
+      - {name: area_km2, type: number}
+      - {name: note, type: text}
 
   # ---------- 率定策略 ----------
   - name: Strategy
@@ -47,9 +50,9 @@ entity_types:
     uid_prefix: sg
     scope: local
     attributes:
-      - { name: objectives, type: list, description: "目标函数，如 [NSE, KGE, 洪峰相对误差]" }
-      - { name: algorithm, type: enum, values: [SCE-UA, PSO, GA, 手动] }
-      - { name: note, type: text }
+      - {name: objectives, type: list, description: "目标函数，如 [NSE, KGE, 洪峰相对误差]"}
+      - {name: algorithm, type: enum, values: [SCE-UA, PSO, GA, 手动]}
+      - {name: note, type: text}
 
   # ---------- 指标 ----------
   - name: Metric
@@ -57,9 +60,9 @@ entity_types:
     uid_prefix: mc
     scope: global
     attributes:
-      - { name: direction, type: enum, values: [越大越好, 越小越好] }
-      - { name: unit, type: string }
-      - { name: note, type: text }
+      - {name: direction, type: enum, values: [越大越好, 越小越好]}
+      - {name: unit, type: string}
+      - {name: note, type: text}
 
   # ---------- 运行记录 ----------
   - name: Run
@@ -67,9 +70,9 @@ entity_types:
     uid_prefix: rn
     scope: local
     attributes:
-      - { name: started_at, type: string }
-      - { name: objective_text, type: text }
-      - { name: note, type: text }
+      - {name: started_at, type: string}
+      - {name: objective_text, type: text}
+      - {name: note, type: text}
 
   # ---------- 失效模式 ----------
   - name: FailureMode
@@ -77,16 +80,16 @@ entity_types:
     uid_prefix: fm
     scope: global
     attributes:
-      - { name: detect, type: text, description: "可判定的判据描述" }
-      - { name: action, type: enum, values: [reject, warn] }
+      - {name: detect, type: text, description: "可判定的判据描述"}
+      - {name: action, type: enum, values: [reject, warn]}
 
 relation_types:
-  - { name: PART_OF, source: Parameter, target: Parameter, description: "参数分属同一组" }
-  - { name: AFFECTS, source: Parameter, target: Metric, description: "参数影响某指标" }
-  - { name: APPLIES_TO, source: Strategy, target: Basin, description: "策略适用于某类流域" }
-  - { name: USED, source: Run, target: Parameter, description: "本次运行用了某参数" }
-  - { name: ACHIEVED, source: Run, target: Metric, description: "本次运行达到的指标" }
-  - { name: TRIGGERED_BY, source: FailureMode, target: Parameter, description: "失效由某参数引起" }
-
+  # display_name 是界面上给人看的名字（关系名本身保持英文大写蛇形，是 TBox 的主键）
+  - {name: PART_OF, source: Parameter, target: Parameter, display_name: "属于", description: "参数分属同一组"}
+  - {name: AFFECTS, source: Parameter, target: Metric, display_name: "影响", description: "参数影响某指标"}
+  - {name: APPLIES_TO, source: Strategy, target: Basin, display_name: "适用于", description: "策略适用于某类流域"}
+  - {name: USED, source: Run, target: Parameter, display_name: "使用", description: "本次运行用了某参数"}
+  - {name: ACHIEVED, source: Run, target: Metric, display_name: "达到", description: "本次运行达到的指标"}
+  - {name: TRIGGERED_BY, source: FailureMode, target: Parameter, display_name: "依赖", description: "失效由某参数引起"}
 constraints:
-  - { type: required_attribute, entity: Parameter, attribute: group, severity: error }
+  - {type: required_attribute, entity: Parameter, attribute: group, severity: error}

@@ -84,6 +84,8 @@ class RelationTypeDef:
     source: str
     target: str
     description: str = ""
+    # 界面展示用的中文名（如 PART_OF → 属于）；缺省回落到 description
+    display_name: str = ""
     target_types: tuple[str, ...] = ()
     inverse_of: str | None = None
 
@@ -95,6 +97,7 @@ class RelationTypeDef:
             "name": self.name,
             "source": self.source,
             "target": self.target,
+            "display_name": self.display_name or self.description or self.name,
             "description": self.description,
         }
         if self.target_types:
@@ -115,6 +118,8 @@ class OntologyRegistry:
         entity_types: dict[str, EntityTypeDef],
         relation_types: dict[str, RelationTypeDef],
         source_path: Path | None = None,
+        display_name: str = "",
+        description: str = "",
     ) -> None:
         self.profile_id = profile_id
         self.version = version
@@ -122,6 +127,11 @@ class OntologyRegistry:
         self.entity_types = entity_types
         self.relation_types = relation_types
         self.source_path = source_path
+        # 图谱库的展示信息：界面上「库名」就是它，缺省回落到 profile_id。
+        # 注意**不能**叫 display_name——那个名字已经是「类型 → 中文名」的方法，
+        # 用同名实例属性会把方法覆盖掉（调用时 TypeError: 'str' object is not callable）。
+        self.library_name = display_name or profile_id
+        self.description = description
 
     # ---------- 查询 ----------
     def entity(self, name: str) -> EntityTypeDef | None:
@@ -173,6 +183,8 @@ class OntologyRegistry:
     def to_dict(self) -> dict[str, Any]:
         return {
             "profile_id": self.profile_id,
+            "display_name": self.library_name,
+            "description": self.description,
             "version": self.version,
             "domain": self.domain,
             "entity_types": [e.to_dict() for e in self.entity_types.values()],
@@ -186,7 +198,10 @@ class OntologyRegistry:
         entity_labels_zh = {e.name: e.display_name for e in self.entity_types.values()}
         uid_meta = {e.name: (e.uid_prefix, e.is_global) for e in self.entity_types.values()}
         relation_labels = {r.name: r.name for r in self.relation_types.values()}
-        relation_zh = {r.name: r.description or r.name for r in self.relation_types.values()}
+        relation_zh = {
+            r.name: r.display_name or r.description or r.name
+            for r in self.relation_types.values()
+        }
         endpoints: dict[str, dict[str, set[str]]] = {}
         for rel in self.relation_types.values():
             allowed = endpoints.setdefault(rel.name, {})
@@ -305,6 +320,7 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
             source=source,
             target=target,
             description=str(item.get("description") or ""),
+            display_name=str(item.get("display_name") or ""),
             target_types=target_types,
             inverse_of=item.get("inverse_of"),
         )
@@ -356,6 +372,8 @@ def load_profile(profile: str | Path, *, register: bool = True) -> OntologyRegis
         entity_types=entities,
         relation_types=relations,
         source_path=path,
+        display_name=str(data.get("display_name") or ""),
+        description=str(data.get("description") or ""),
     )
     if register:
         registry.register()

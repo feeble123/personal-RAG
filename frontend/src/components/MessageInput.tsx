@@ -1,18 +1,20 @@
 import { useMemo, useState } from 'react'
-import { Select, Space, Typography } from 'antd'
+import { Segmented, Select, Space, Tooltip, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { kbPublicApi } from '@/api/modules'
 import { ANSWER_STYLE_OPTIONS, type KnowledgeBase } from '@/api/types'
 import { domainLabel } from '@/constants/taxonomy'
-import { useChatStore } from '@/stores/chat'
+import { useChatStore, type AnswerMode } from '@/stores/chat'
 import PromptInput from './PromptInput'
 
-// 底部输入（单元2 装配层）：知识库选择 + 回答风格 + 裁剪版 PromptInput（透明青蓝）。
+// 底部输入（单元2 装配层）：回答模式 + 知识库选择 + 回答风格 + 裁剪版 PromptInput。
 // 业务逻辑（知识库/风格/store 对接）在这里，纯输入交互在 PromptInput。
 export default function MessageInput() {
   const [kbId, setKbId] = useState<number | null>(null)
   // 回答风格（单元 F）：默认跟随所选知识库的 answer_style，也可手动切换
   const [style, setStyle] = useState<string>('standard')
+  // 回答模式（O7）：知识库切片检索 / 本体优先（本体拿不到事实才回退检索）
+  const [mode, setMode] = useState<AnswerMode>('kb')
   const { send, stop, streaming, currentId } = useChatStore()
 
   const { data: kbs = [] } = useQuery<KnowledgeBase[]>({
@@ -41,12 +43,29 @@ export default function MessageInput() {
   }, [kbs])
 
   const doSend = (text: string) => {
-    send(text, kbId, style)
+    send(text, kbId, style, mode)
   }
 
   return (
     <div className="glass-bar" style={{ borderTop: '1px solid rgba(122, 190, 255, 0.12)', padding: 12 }}>
       <Space wrap style={{ marginBottom: 8, width: '100%' }}>
+        <Tooltip
+          title={
+            mode === 'ontology'
+              ? '先查本体知识图谱（参数取值范围、实体关系）；本体一条事实都拿不到才回退知识库切片检索'
+              : '只查知识库切片（原文片段），不做本体推理'
+          }
+        >
+          <Segmented
+            size="small"
+            value={mode}
+            onChange={(v) => setMode(v as AnswerMode)}
+            options={[
+              { label: '知识库回答', value: 'kb' },
+              { label: '本体回答', value: 'ontology' },
+            ]}
+          />
+        </Tooltip>
         <Select
           value={kbId}
           onChange={onKbChange}

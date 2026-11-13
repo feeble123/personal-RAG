@@ -20,11 +20,13 @@
 """
 from __future__ import annotations
 
+import io
 import logging
 import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -33,21 +35,32 @@ from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
 from app.modules.ontology.schemas import (
     AskIn,
+    AttributeIn,
     CardOut,
+    EntityTypeIn,
     ImportResult,
     InstanceCreate,
     InstanceOut,
     InstancePatch,
+    LibraryCreate,
+    LibraryOut,
+    RelationCreate,
+    RelationOut,
+    RelationPatch,
+    RelationTypeIn,
     ReloadOut,
 )
 from app.services import audit
 from app.services.graph.ontology import instances as inst_mod
-from app.services.graph.ontology.cards import recommend
-from app.services.graph.ontology.linking import link_graph_entities, link_instances
+from app.services.graph.ontology import libraries as lib_mod
+from app.services.graph.ontology import queries
+from app.services.graph.ontology import excel_schema
+from app.services.graph.ontology import relations as rel_mod
+from app.services.graph.ontology import tbox_edit
 from app.services.graph.ontology.params import load_prior_excel, resolve_evidence
 from app.services.graph.ontology.registry import get_registry
 from app.services.graph.ontology.retrieval import retrieve_with_ontology
-from app.services.graph.ontology.validator import validate_entity
+from app.services.graph.ontology.validator import validate_entity, validate_relation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/ontology", tags=["ontology"])
@@ -63,13 +76,50 @@ _ENTITY_TYPE_DEFAULT = "Parameter"
 
 
 def _registry(profile: str | None):
-    wanted = (profile or settings.ontology_profile or "").strip()
-    if not wanted:
-        raise BizError("未配置本体 profile（ONTOLOGY_PROFILE）", 400, "ONTOLOGY_PROFILE_MISSING")
+    """TBox 解析：实现在 service 层，MCP 用的是同一个。"""
+    return queries.resolve_profile(profile)
+
+
+def _relation_edge(rel) -> dict:
+    """PG 关系行 → 前端画图用的边。"""
+    evidence = [e for e in (rel.evidence or []) if isinstance(e, dict)]
+    return {
+        "id": f"pg:{rel.id}",
+        "source": rel.subject_uid,
+        "target": rel.object_uid,
+        "predicate": rel.predicate,
+        "status": rel.status,
+        "confidence": 1.0,
+        "evidence_text": "；".join(str(e.get("note") or "") for e in evidence if e.get("note")),
+        "chunk_ids": [e["chunk_id"] for e in evidence if e.get("chunk_id") is not None],
+    }
+
+
+async def _sync_graph(*, nodes: list | None = None, edges: list | None = None,
+                      drop_nodes: list[str] | None = None,
+                      drop_edges: list[tuple[str, str, str]] | None = None) -> None:
+    """管理端写完 PG 后把变化推给图库（尽力而为，失败只记日志）。
+
+    PG 是真相源，图库只是索引：这里失败不会让写操作失败，
+    下次重放（导入脚本或再改一次）就会补上。
+    """
+    from app.services.graph.store import get_graph_store
+
+    store = get_graph_store()
+    if store is None:
+        return
     try:
-        return get_registry(wanted)
-    except Exception as exc:  # noqa: BLE001 - profile 写错是用户可修复的问题
-        raise BizError(f"本体 profile 加载失败：{exc}", 400, "ONTOLOGY_PROFILE_INVALID") from exc
+        if drop_edges:
+            for subject, predicate, obj in drop_edges:
+                await store.delete_edges(subject, predicate, obj)
+        if drop_nodes:
+            await store.delete_nodes(drop_nodes)
+        if nodes:
+            await store.upsert(nodes, edges or [])
+        elif edges:
+            await store.upsert([], edges)
+    except Exception as exc:  # noqa: BLE001 - 索引失败不影响真相源
+        logger.warning("图库同步失败（PG 已保存，稍后重放即可）：%s", exc)
 
 
 @router.get("/types")
@@ -102,6 +152,519 @@ async def reload_profile(
         entity_types=len(reg.entity_types),
         relation_types=len(reg.relation_types),
     )
+
+
+# ---------------- 图谱库（一个库 = 一份 TBox + 属于它的实例/关系）----
+
+
+async def _library_out(
+    db: AsyncSession, info: lib_mod.LibraryInfo, graph_stats: dict | None = None
+) -> LibraryOut:
+    """补上库里有多少实例/关系——删库前的判断依据，也是界面上的库简介。
+
+    `node_count` 取**图里真实节点数**（按本库声明的实体类型收口）：
+    只数 PG 实例会让「防洪链本体」显示 0（那些节点是历史导入的，没有实例行），
+    用户切进去却看见 25 个节点，对不上。
+    """
+    from sqlalchemy import func, select
+
+    from app.db.models import OntologyInstance, OntologyRelation
+
+    instances = await db.scalar(
+        select(func.count())
+        .select_from(OntologyInstance)
+        .where(OntologyInstance.profile_id == info.profile_id)
+    )
+    relations = await db.scalar(
+        select(func.count())
+        .select_from(OntologyRelation)
+        .where(OntologyRelation.profile_id == info.profile_id)
+    )
+    node_count = 0
+    if graph_stats:
+        by_type = (graph_stats.get("nodes") or {}).get("by_type") or {}
+        node_count = sum(int(by_type.get(t, 0)) for t in info.entity_types)
+    return LibraryOut(
+        **info.to_dict(),
+        instance_count=int(instances or 0),
+        relation_count=int(relations or 0),
+        node_count=node_count,
+        is_default=info.profile_id == settings.ontology_profile,
+    )
+
+
+@router.get("/libraries", response_model=list[LibraryOut])
+async def list_libraries(db: DbSession, _admin: AdminUser) -> list[LibraryOut]:
+    """列出所有图谱库（扫 profiles 目录，坏库也会列出来并带 error）。"""
+    from app.services.graph.store import get_graph_store
+
+    store = get_graph_store()
+    stats = await store.stats() if store is not None else None
+    return [await _library_out(db, info, stats) for info in lib_mod.list_libraries()]
+
+
+@router.get("/libraries/{profile_id}/export")
+async def export_library(profile_id: str, _admin: AdminUser) -> Response:
+    """导出图谱库的 TBox YAML（换机器带走 / 交给同事 / 进版本库）。"""
+    try:
+        filename, text = lib_mod.read_library_text(profile_id)
+    except Exception as exc:  # noqa: BLE001
+        raise BizError(str(exc), 404, "ONTOLOGY_LIBRARY_NOT_FOUND") from exc
+    # 用 Response 直接把文本回给浏览器；FileResponse 只认磁盘路径，不认内存流
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="application/x-yaml; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/libraries/import", response_model=LibraryOut, status_code=201)
+async def import_library(
+    db: DbSession,
+    admin: AdminUser,
+    request: Request,
+    file: UploadFile = File(..., description="TBox YAML 文件"),
+) -> LibraryOut:
+    """导入一份现成的 TBox YAML（不覆盖同名库）。"""
+    raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise BizError("文件过大", 413, "PAYLOAD_TOO_LARGE")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise BizError("YAML 必须是 UTF-8 编码", 400, "ONTOLOGY_LIBRARY_INVALID") from exc
+    try:
+        info = lib_mod.import_library(text)
+    except Exception as exc:  # noqa: BLE001
+        raise BizError(str(exc), 400, "ONTOLOGY_LIBRARY_INVALID") from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.library.import",
+        target_type="ontology_profile", target_id=info.profile_id,
+        detail=f"导入 {info.display_name}",
+        client_ip=await get_client_ip(request),
+    )
+    return await _library_out(db, info)
+
+
+@router.post("/schema/excel-preview")
+async def excel_preview(
+    _admin: AdminUser,
+    file: UploadFile = File(..., description="Excel 文件，读第一行表头"),
+) -> dict:
+    """读 Excel 表头，给出「这些列可以建成哪些属性」的建议（只预览，不写入）。"""
+    raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise BizError("文件过大", 413, "PAYLOAD_TOO_LARGE")
+    try:
+        columns = excel_schema.suggest_columns(io.BytesIO(raw))
+    except Exception as exc:  # noqa: BLE001 - 用户上传的文件，任何解析错误都要可读
+        raise BizError(f"读不出表头：{exc}", 400, "ONTOLOGY_EXCEL_INVALID") from exc
+    return {"columns": [c.to_dict() for c in columns]}
+
+
+@router.post("/libraries", response_model=LibraryOut, status_code=201)
+async def create_library(
+    payload: LibraryCreate, db: DbSession, admin: AdminUser, request: Request
+) -> LibraryOut:
+    """新建图谱库：复制一份 TBox 模板（或空白库），实例/关系从零开始。"""
+    try:
+        info = lib_mod.create_library(
+            payload.profile_id,
+            payload.display_name,
+            payload.description,
+            template=payload.template,
+        )
+    except Exception as exc:  # noqa: BLE001 - YAML 也属于用户输入，给可读提示
+        raise BizError(str(exc), 400, "ONTOLOGY_LIBRARY_INVALID") from exc
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.library.create",
+        target_type="ontology_profile",
+        target_id=info.profile_id,
+        detail=f"{info.display_name}（模板 {payload.template}）",
+        client_ip=await get_client_ip(request),
+    )
+    return await _library_out(db, info)
+
+
+@router.delete("/libraries/{profile_id}", status_code=204)
+async def delete_library(
+    profile_id: str, db: DbSession, admin: AdminUser, request: Request
+) -> None:
+    """删除图谱库。库里有实例或关系时拒绝——先清空再删，避免误删数据。"""
+    if not lib_mod.library_exists(profile_id):
+        raise BizError(f"图谱库 {profile_id!r} 不存在", 404, "ONTOLOGY_LIBRARY_NOT_FOUND")
+    info = next(
+        (i for i in lib_mod.list_libraries() if i.profile_id == profile_id), None
+    )
+    if info is not None:
+        counted = await _library_out(db, info)
+        if counted.instance_count or counted.relation_count:
+            raise BizError(
+                f"图谱库「{counted.display_name}」里还有 "
+                f"{counted.instance_count} 个实例、{counted.relation_count} 条关系，"
+                "请先清空再删除",
+                409,
+                "ONTOLOGY_LIBRARY_NOT_EMPTY",
+            )
+    try:
+        lib_mod.delete_library(profile_id)
+    except Exception as exc:  # noqa: BLE001
+        raise BizError(str(exc), 400, "ONTOLOGY_LIBRARY_INVALID") from exc
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.library.delete",
+        target_type="ontology_profile",
+        target_id=profile_id,
+        detail="删除图谱库",
+        client_ip=await get_client_ip(request),
+    )
+
+
+# ---------------- TBox 在线编辑（F3）----------------
+
+
+def _tbox_error(exc: Exception) -> BizError:
+    return BizError(str(exc), 400, "ONTOLOGY_TBOX_INVALID")
+
+
+@router.post("/schema/entity")
+async def upsert_entity_type(
+    payload: EntityTypeIn,
+    admin: AdminUser,
+    request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """新建或修改实体类型（写回 YAML）。"""
+    reg = _registry(profile)
+    try:
+        result = tbox_edit.upsert_entity_type(
+            reg.profile_id,
+            tbox_edit.EntityTypeInput(
+                name=payload.name,
+                display_name=payload.display_name,
+                uid_prefix=payload.uid_prefix,
+                scope=payload.scope,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _tbox_error(exc) from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.entity.upsert",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"{payload.display_name}（{payload.name}）",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.delete("/schema/entity/{name}")
+async def delete_entity_type(
+    name: str, db: DbSession, admin: AdminUser, request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """删除实体类型。被关系引用 / 已有实例时拒绝。"""
+    from sqlalchemy import func, select
+
+    from app.db.models import OntologyInstance
+
+    reg = _registry(profile)
+    count = await db.scalar(
+        select(func.count())
+        .select_from(OntologyInstance)
+        .where(
+            OntologyInstance.profile_id == reg.profile_id,
+            OntologyInstance.entity_type == name,
+        )
+    )
+    try:
+        result = tbox_edit.delete_entity_type(
+            reg.profile_id, name, instance_count=int(count or 0)
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _tbox_error(exc) from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.entity.delete",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"删除实体类型 {name}",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.post("/schema/relation")
+async def upsert_relation_type(
+    payload: RelationTypeIn,
+    admin: AdminUser,
+    request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """新建或修改关系类型（写回 YAML）。"""
+    reg = _registry(profile)
+    try:
+        result = tbox_edit.upsert_relation_type(
+            reg.profile_id,
+            tbox_edit.RelationTypeInput(
+                name=payload.name,
+                display_name=payload.display_name,
+                source=payload.source,
+                target=payload.target,
+                target_types=tuple(payload.target_types),
+                description=payload.description,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _tbox_error(exc) from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.relation.upsert",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"{payload.display_name}（{payload.name}）",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.delete("/schema/relation/{name}")
+async def delete_relation_type(
+    name: str, db: DbSession, admin: AdminUser, request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """删除关系类型。已有边在用时拒绝。"""
+    from sqlalchemy import func, select
+
+    from app.db.models import OntologyRelation
+
+    reg = _registry(profile)
+    count = await db.scalar(
+        select(func.count())
+        .select_from(OntologyRelation)
+        .where(
+            OntologyRelation.profile_id == reg.profile_id,
+            OntologyRelation.predicate == name,
+        )
+    )
+    try:
+        result = tbox_edit.delete_relation_type(
+            reg.profile_id, name, edge_count=int(count or 0)
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _tbox_error(exc) from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.relation.delete",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"删除关系类型 {name}",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.post("/schema/entity/{name}/attribute")
+async def upsert_attribute(
+    name: str, payload: AttributeIn, admin: AdminUser, request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """新建或修改某实体类型的属性（写回 YAML）。"""
+    reg = _registry(profile)
+    try:
+        result = tbox_edit.upsert_attribute(
+            reg.profile_id,
+            name,
+            tbox_edit.AttributeInput(
+                name=payload.name,
+                type=payload.type,
+                values=tuple(payload.values),
+                required=payload.required,
+                description=payload.description,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _tbox_error(exc) from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.attribute.upsert",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"{name}.{payload.name}（{payload.type}）",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.delete("/schema/entity/{name}/attribute/{attr_name}")
+async def delete_attribute(
+    name: str, attr_name: str, admin: AdminUser, request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """删除属性。必填属性拒绝直接删（会让已有实例不合规）。"""
+    reg = _registry(profile)
+    try:
+        result = tbox_edit.delete_attribute(reg.profile_id, name, attr_name)
+    except Exception as exc:  # noqa: BLE001
+        raise _tbox_error(exc) from exc
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.attribute.delete",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"删除属性 {name}.{attr_name}",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.get("/graph")
+async def get_graph(
+    _admin: AdminUser,
+    db: DbSession,
+    profile: str | None = Query(None),
+    entity_type: list[str] | None = Query(None, description="只取这些实体类型，可重复传"),
+    kb_id: int | None = Query(None),
+    node_limit: int = Query(300, ge=1, le=1000),
+    edge_limit: int = Query(1000, ge=1, le=3000),
+) -> dict:
+    """前端画图用的全览：节点 + 边。
+
+    节点以 **PG 实例**为准（图库只是索引，没开图库时参数照样看得见），
+    边只能来自图库（关系目前只存在于图里，F2 会把关系的真相源也落到 PG）。
+    """
+    from app.services.graph.store import get_graph_store
+
+    reg = _registry(profile)
+    rows = await inst_mod.list_instances(
+        db,
+        profile_id=reg.profile_id,
+        entity_type=None if not entity_type or len(entity_type) > 1 else entity_type[0],
+        kb_id=kb_id,
+        status="active",
+        limit=node_limit,
+    )
+    if entity_type and len(entity_type) > 1:
+        rows = [r for r in rows if r.entity_type in entity_type]
+
+    nodes: dict[str, dict] = {}
+    for row in rows:
+        props = row.props or {}
+        nodes[row.uid] = {
+            "uid": row.uid,
+            "name": row.name,
+            "display": props.get("display_zh") or row.name,
+            "entity_type": row.entity_type,
+            "kb_id": row.kb_id,
+            "props": props,
+            "evidence_count": len(row.evidence or []),
+            "source": "instance",
+        }
+
+    store = get_graph_store()
+    truncated = len(rows) >= node_limit
+
+    # PG 里的关系是真相源：图库没开 / 还没同步时，这些边照样要能画出来
+    edge_by_key: dict[tuple[str, str, str], dict] = {}
+    for rel in await rel_mod.list_relations(
+        db, profile_id=reg.profile_id, kb_id=kb_id, status="active", limit=edge_limit
+    ):
+        edge_by_key[(rel.subject_uid, rel.predicate, rel.object_uid)] = _relation_edge(rel)
+
+    if store is None:
+        return {
+            "profile_id": reg.profile_id,
+            "nodes": list(nodes.values()),
+            "edges": list(edge_by_key.values()),
+            "truncated": truncated,
+            "graph_available": False,
+            "note": "图库未启用（GRAPH_ENABLED=false）；节点来自本体实例，关系边来自 PG 人工维护的关系",
+            "type_labels": _type_labels(nodes.values(), reg),
+            "relation_labels": _relation_labels(reg),
+        }
+
+    # 图库是全库共享的，必须按**当前库声明过的实体类型**收口，
+    # 否则切到别的图谱库还会看到这一库的节点（用户实测：切库后仍是 38 节点）。
+    declared = list(reg.entity_types)
+    store_types = [t for t in (entity_type or declared) if t in reg.entity_types]
+    slice_ = await store.overview(
+        entity_types=store_types,
+        kb_id=kb_id,
+        node_limit=node_limit,
+        edge_limit=edge_limit,
+    )
+    for node in slice_.nodes:
+        if node.uid in nodes:
+            continue
+        nodes[node.uid] = {
+            "uid": node.uid,
+            "name": node.name,
+            "display": node.name,
+            "entity_type": node.type_name,
+            "kb_id": node.kb_ids[0] if node.kb_ids else 0,
+            "props": node.props,
+            "evidence_count": 0,
+            "source": "graph",
+        }
+    # 图库里的边补进来（含自动抽取的），与 PG 的关系按 (主语,关系,宾语) 去重
+    for e in slice_.edges:
+        key = (e.subject_uid, e.predicate_name, e.object_uid)
+        if key in edge_by_key:
+            continue
+        edge_by_key[key] = {
+            "id": f"{e.subject_uid}|{e.predicate_name}|{e.object_uid}|{e.version_id}",
+            "source": e.subject_uid,
+            "target": e.object_uid,
+            "predicate": e.predicate_name,
+            "status": e.status,
+            "confidence": e.confidence,
+            "evidence_text": e.evidence_text,
+            "chunk_ids": e.chunk_ids,
+        }
+    edges = list(edge_by_key.values())
+
+    return {
+        "profile_id": reg.profile_id,
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "truncated": truncated or slice_.truncated,
+        "graph_available": True,
+        "type_labels": _type_labels(nodes.values(), reg),
+        "relation_labels": _relation_labels(reg),
+    }
+
+
+def _relation_labels(reg) -> dict[str, str]:
+    """关系类型 → 中文名（PART_OF → 属于）。界面上一律显示中文。
+
+    必须**同时**覆盖两套关系：
+    - 内置防洪链枚举（downstream_of / located_in / responsible …）——存量边用的是这套；
+    - 当前 TBox 里声明的关系（PART_OF / AFFECTS …）——新建的边用的是这套。
+    只取 TBox 会让内置关系在界面上露英文（用户实测：青溪水库 —downstream_of→ 河段）。
+    """
+    from app.services.graph.schema import RELATION_LABELS_ZH
+
+    labels: dict[str, str] = {rt.value: zh for rt, zh in RELATION_LABELS_ZH.items()}
+    labels.update({
+        name: (rel.display_name or rel.description or name)
+        for name, rel in reg.relation_types.items()
+    })
+    return labels
+
+
+def _type_labels(nodes, reg) -> dict[str, str]:
+    """实体类型 → 中文名。图例和分组标签要给人看，不能直接显示 engineering_object。"""
+    from app.services.graph.schema import entity_label_zh
+
+    labels: dict[str, str] = {}
+    for node in nodes:
+        entity_type = node["entity_type"]
+        if entity_type in labels:
+            continue
+        declared = reg.entity(entity_type)
+        labels[entity_type] = (
+            getattr(declared, "display_name", None) or entity_label_zh(entity_type) or entity_type
+        )
+    return labels
 
 
 @router.get("/instances", response_model=list[InstanceOut])
@@ -161,6 +724,8 @@ async def create_instance(
     row = await inst_mod.get_instance(
         db, reg.profile_id, payload.entity_type, payload.name, payload.kb_id
     )
+    if row is not None:
+        await _sync_graph(nodes=[inst_mod.to_node(row)])
     await audit.record_audit(
         actor_id=admin.id,
         actor_name=admin.username,
@@ -205,6 +770,7 @@ async def patch_instance(
     await db.commit()
     # commit 会让 ORM 对象过期；不 refresh 就读 updated_at 会触发 MissingGreenlet
     await db.refresh(row)
+    await _sync_graph(nodes=[inst_mod.to_node(row)])
     await audit.record_audit(
         actor_id=admin.id,
         actor_name=admin.username,
@@ -224,16 +790,19 @@ async def delete_instance(
     row = await inst_mod.get_instance_by_id(db, instance_id)
     if row is None:
         raise BizError("实例不存在", 404, "ONTOLOGY_INSTANCE_NOT_FOUND")
-    name, entity_type, kb_id = row.name, row.entity_type, row.kb_id
+    name, entity_type, kb_id, uid = row.name, row.entity_type, row.kb_id, row.uid
+    # 级联：挂在它身上的关系一起删，不留悬空边（关系表在 PG，必须显式删）
+    dropped = await rel_mod.delete_relations_for_instances(db, [uid])
     await inst_mod.delete_instance(db, row)
     await db.commit()
+    await _sync_graph(drop_nodes=[uid])
     await audit.record_audit(
         actor_id=admin.id,
         actor_name=admin.username,
         action="ontology.instance.delete",
         target_type=entity_type,
         target_id=name,
-        detail=f"kb_id={kb_id}",
+        detail=f"kb_id={kb_id}；一并删除 {dropped} 条关系",
         client_ip=await get_client_ip(request),
     )
 
@@ -251,19 +820,17 @@ async def get_param_cards(
     limit: int = Query(50, ge=1, le=200),
 ) -> list[CardOut]:
     """参数推荐卡：条件收窄 → 冲突并列 → 无依据不出数。"""
-    reg = _registry(profile)
-    conditions = {"climate": climate, "flood_type": flood_type}
-    cards = await recommend(
+    cards = await queries.param_cards(
         db,
-        profile_id=reg.profile_id,
+        profile_id=profile,
         names=name,
-        conditions=conditions,
+        group=group,
         kb_id=kb_id,
+        climate=climate,
+        flood_type=flood_type,
         limit=limit,
     )
-    if group:
-        cards = [c for c in cards if c.group == group]
-    return [CardOut(**card.to_dict()) for card in cards]
+    return [CardOut(**card) for card in cards]
 
 
 async def _run_import(
@@ -355,6 +922,183 @@ async def import_params(
     return result
 
 
+# ==================== 关系（ABox 的边，真相源在 PG） ====================
+
+
+async def _instance_type_of(db: AsyncSession, uid: str, role: str, reg):
+    """按 uid 取实例，顺带拿到它的实体类型（校验关系端点要用）。"""
+    row = await inst_mod.get_instance_by_uid(db, uid)
+    if row is None or row.profile_id != reg.profile_id:
+        raise BizError(f"{role}不存在：{uid}", 400, "ONTOLOGY_RELATION_ENDPOINT_MISSING")
+    return row
+
+
+@router.get("/relations", response_model=list[RelationOut])
+async def list_relations(
+    _admin: AdminUser,
+    db: DbSession,
+    profile: str | None = Query(None),
+    subject_uid: str | None = Query(None),
+    object_uid: str | None = Query(None),
+    touch_uid: str | None = Query(None, description="主语或宾语是它"),
+    predicate: str | None = Query(None),
+    kb_id: int | None = Query(None),
+    status: str | None = Query("active", description="active / archived / all"),
+    limit: int = Query(1000, ge=1, le=5000),
+) -> list[RelationOut]:
+    rows = await rel_mod.list_relations(
+        db,
+        profile_id=profile or settings.ontology_profile,
+        subject_uid=subject_uid,
+        object_uid=object_uid,
+        touch_uid=touch_uid,
+        predicate=predicate,
+        kb_id=kb_id,
+        status=None if status in (None, "all") else status,
+        limit=limit,
+    )
+    return [RelationOut.model_validate(r) for r in rows]
+
+
+@router.post("/relations", response_model=RelationOut, status_code=201)
+async def create_relation(
+    payload: RelationCreate, admin: AdminUser, db: DbSession, request: Request
+) -> RelationOut:
+    reg = _registry(payload.profile_id)
+    subject = await _instance_type_of(db, payload.subject_uid, "主语", reg)
+    obj = await _instance_type_of(db, payload.object_uid, "宾语", reg)
+    check = validate_relation(reg, payload.predicate, subject.entity_type, obj.entity_type)
+    if not check.ok:
+        raise BizError("；".join(check.errors), 400, "ONTOLOGY_INVALID_RELATION")
+
+    existing = await rel_mod.get_relation(
+        db, reg.profile_id, payload.subject_uid, payload.predicate, payload.object_uid, payload.kb_id
+    )
+    if existing is not None:
+        raise BizError(
+            "这条关系已经存在，直接在列表里改它即可", 409, "ONTOLOGY_RELATION_EXISTS"
+        )
+
+    row = await rel_mod.upsert_relation(
+        db,
+        rel_mod.RelationDraft(
+            profile_id=reg.profile_id,
+            subject_uid=payload.subject_uid,
+            predicate=payload.predicate,
+            object_uid=payload.object_uid,
+            kb_id=payload.kb_id,
+            props=payload.props,
+            evidence=payload.evidence,
+            source=payload.source,
+            status=payload.status,
+        ),
+    )
+    await db.commit()
+    await db.refresh(row)
+    await _sync_graph(edges=[rel_mod.to_edge(row)])
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.relation.create",
+        target_type="ontology_relation",
+        target_id=str(row.id),
+        detail=f"{payload.subject_uid} -{payload.predicate}-> {payload.object_uid}",
+        client_ip=await get_client_ip(request),
+    )
+    return RelationOut.model_validate(row)
+
+
+@router.patch("/relations/{relation_id}", response_model=RelationOut)
+async def patch_relation(
+    relation_id: int,
+    payload: RelationPatch,
+    admin: AdminUser,
+    db: DbSession,
+    request: Request,
+) -> RelationOut:
+    row = await rel_mod.get_relation_by_id(db, relation_id)
+    if row is None:
+        raise BizError("关系不存在", 404, "ONTOLOGY_RELATION_NOT_FOUND")
+
+    reg = _registry(row.profile_id)
+    old_predicate = row.predicate
+    changed = rel_mod.apply_changes(
+        row,
+        predicate=payload.predicate,
+        props=payload.props,
+        evidence=payload.evidence,
+        status=payload.status,
+        source=payload.source,
+    )
+    if not changed:
+        return RelationOut.model_validate(row)
+
+    # 改了关系类型或状态 → 端点校验要按新值重做
+    if row.predicate != old_predicate or payload.status is not None:
+        subject = await _instance_type_of(db, row.subject_uid, "主语", reg)
+        obj = await _instance_type_of(db, row.object_uid, "宾语", reg)
+        check = validate_relation(reg, row.predicate, subject.entity_type, obj.entity_type)
+        if not check.ok:
+            raise BizError("；".join(check.errors), 400, "ONTOLOGY_INVALID_RELATION")
+
+    await db.commit()
+    await db.refresh(row)
+    if row.predicate != old_predicate:
+        # 关系类型变了：旧边要删掉，否则图里会同时存在新旧两条
+        await _sync_graph(drop_edges=[(row.subject_uid, old_predicate, row.object_uid)])
+    await _sync_graph(edges=[rel_mod.to_edge(row)])
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.relation.update",
+        target_type="ontology_relation",
+        target_id=str(row.id),
+        detail=f"{row.subject_uid} -{row.predicate}-> {row.object_uid}",
+        client_ip=await get_client_ip(request),
+    )
+    return RelationOut.model_validate(row)
+
+
+@router.delete("/relations/{relation_id}", status_code=204)
+async def delete_relation(
+    relation_id: int, admin: AdminUser, db: DbSession, request: Request
+) -> None:
+    row = await rel_mod.get_relation_by_id(db, relation_id)
+    if row is None:
+        raise BizError("关系不存在", 404, "ONTOLOGY_RELATION_NOT_FOUND")
+    subject_uid, predicate, object_uid = row.subject_uid, row.predicate, row.object_uid
+    await rel_mod.delete_relation(db, row)
+    await db.commit()
+    await _sync_graph(drop_edges=[(subject_uid, predicate, object_uid)])
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.relation.delete",
+        target_type="ontology_relation",
+        target_id=str(relation_id),
+        detail=f"{subject_uid} -{predicate}-> {object_uid}",
+        client_ip=await get_client_ip(request),
+    )
+
+
+@router.post("/ask")
+async def admin_ask(body: AskIn, _admin: AdminUser, db: DbSession) -> dict:
+    """本体问答试验台（管理员用，和对外 /v1/ontology/ask 同一套逻辑）。
+
+    存在的意义：让「本体事实 + 知识库原文」的效果可以在界面上直接验证，
+    不用去配 X-API-Key 走命令行。
+    """
+    pack = await retrieve_with_ontology(
+        db,
+        body.question,
+        kb_id=body.kb_id,
+        profile_id=body.profile_id,
+        conditions={"climate": body.climate, "flood_type": body.flood_type},
+        min_facts=body.min_facts,
+    )
+    return pack.to_dict()
+
+
 # ==================== 对外接口（agent 用，X-API-Key） ====================
 
 
@@ -376,18 +1120,17 @@ async def public_params(
     limit: int = Query(50, ge=1, le=200),
 ) -> list[CardOut]:
     """参数推荐卡：条件收窄 → 冲突并列 → 无依据不出数。"""
-    reg = _registry(profile)
-    cards = await recommend(
+    cards = await queries.param_cards(
         db,
-        profile_id=reg.profile_id,
+        profile_id=profile,
         names=name,
-        conditions={"climate": climate, "flood_type": flood_type},
+        group=group,
         kb_id=kb_id,
+        climate=climate,
+        flood_type=flood_type,
         limit=limit,
     )
-    if group:
-        cards = [c for c in cards if c.group == group]
-    return [CardOut(**card.to_dict()) for card in cards]
+    return [CardOut(**card) for card in cards]
 
 
 @public_router.get("/search")
@@ -399,14 +1142,9 @@ async def public_search(
     limit: int = Query(10, ge=1, le=50),
 ) -> list[dict]:
     """实体链接：问题里的词 → 本体实例 / 图节点。"""
-    reg = _registry(profile)
-    rows = await inst_mod.list_instances(
-        db, profile_id=reg.profile_id, status="active", limit=500
+    return await queries.search_entities(
+        db, q, profile_id=profile, kb_id=kb_id, limit=limit
     )
-    hits = link_instances(rows, q)
-    hits += await link_graph_entities(db, q, kb_id=kb_id, limit=limit)
-    hits.sort(key=lambda x: -x.score)
-    return [h.to_dict() for h in hits[:limit]]
 
 
 @public_router.get("/entities/{uid}")
@@ -417,45 +1155,9 @@ async def public_entity(
     include_evidence: bool = Query(True),
 ) -> dict:
     """实体详情 + 邻居（本体实例优先，找不到再查图）。"""
-    from app.services.graph.store import get_graph_store
-
-    row = await inst_mod.get_instance_by_uid(db, uid)
-    store = get_graph_store()
-    node = await store.get_node(uid) if store is not None else None
-    if row is None and node is None:
-        raise BizError("实体不存在", 404, "ONTOLOGY_ENTITY_NOT_FOUND")
-
-    detail: dict = {
-        "uid": uid,
-        "instance": InstanceOut.model_validate(row).model_dump() if row else None,
-        "node": {"name": node.name, "entity_type": node.type_name, "props": node.props}
-        if node
-        else None,
-    }
-    if include_evidence and row is not None:
-        detail["evidence"] = row.evidence or []
-    if store is not None:
-        slice_ = await store.neighbors(uid, depth=depth)
-        names = {n.uid: n.name for n in slice_.nodes}
-        detail["neighbors"] = [
-            {
-                "uid": n.uid,
-                "name": n.name,
-                "entity_type": n.type_name,
-            }
-            for n in slice_.nodes
-        ]
-        detail["edges"] = [
-            {
-                "subject": names.get(e.subject_uid, e.subject_uid),
-                "predicate": e.predicate_name,
-                "object": names.get(e.object_uid, e.object_uid),
-                "evidence_text": e.evidence_text,
-                "chunk_ids": e.chunk_ids,
-            }
-            for e in slice_.edges
-        ]
-    return detail
+    return await queries.entity_detail(
+        db, uid, depth=depth, include_evidence=include_evidence
+    )
 
 
 @public_router.get("/neighbors/{uid}")
@@ -465,33 +1167,7 @@ async def public_neighbors(
     limit: int = Query(100, ge=1, le=200),
 ) -> dict:
     """纯图查询：某个节点周围 1~2 跳的子图。"""
-    from app.services.graph.store import get_graph_store
-
-    store = get_graph_store()
-    if store is None:
-        raise BizError("图库未启用（GRAPH_ENABLED=false）", 503, "GRAPH_DISABLED")
-    slice_ = await store.neighbors(uid, depth=depth, limit=limit)
-    names = {n.uid: n.name for n in slice_.nodes}
-    return {
-        "uid": uid,
-        "nodes": [
-            {"uid": n.uid, "name": n.name, "entity_type": n.type_name, "props": n.props}
-            for n in slice_.nodes
-        ],
-        "edges": [
-            {
-                "subject": names.get(e.subject_uid, e.subject_uid),
-                "predicate": e.predicate_name,
-                "object": names.get(e.object_uid, e.object_uid),
-                "status": e.status,
-                "confidence": e.confidence,
-                "evidence_text": e.evidence_text,
-                "chunk_ids": e.chunk_ids,
-            }
-            for e in slice_.edges
-        ],
-        "truncated": slice_.truncated,
-    }
+    return await queries.graph_neighbors(uid, depth=depth, limit=limit)
 
 
 @public_router.post("/ask")

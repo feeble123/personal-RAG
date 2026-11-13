@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -63,3 +64,7 @@ class ChatIn(BaseModel):
     kb_id: int | None = None
     # 回答风格（单元 F）：standard/logical/summary/expanded/tutorial；缺省用知识库默认
     style: str | None = Field(None, max_length=30)
+    # 回答模式（O7）：
+    #   kb       —— 只查知识库切片（原有行为，默认，零改动）
+    #   ontology —— 先查本体（参数卡/图谱关系），本体一条事实都拿不到才回退向量检索
+    mode: Literal["kb", "ontology"] = "kb"

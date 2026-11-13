@@ -7,6 +7,7 @@ from __future__ import annotations
 import logging
 import re
 from types import SimpleNamespace
+from typing import Any
 
 from app.core.config import settings
 from app.core.exceptions import BizError
@@ -191,6 +192,68 @@ async def resolve_answer_style(db, kb_id: int | None) -> str:
     return DEFAULT_STYLE
 
 
+def _format_evidence(items: Any) -> str:
+    """证据列表 → 一行可读文字（类型 / 说明 / 文档 / 页码）。没有就返回空串。"""
+    parts: list[str] = []
+    for ev in items or []:
+        if not isinstance(ev, dict):
+            continue
+        bits = [str(ev.get("type") or "依据")]
+        if ev.get("note"):
+            bits.append(str(ev["note"]))
+        if ev.get("doc_name"):
+            bits.append(str(ev["doc_name"]))
+        if ev.get("doc_id"):
+            bits.append(f"doc={ev['doc_id']}")
+        if ev.get("page"):
+            bits.append(f"第{ev['page']}页")
+        parts.append(" ".join(bits))
+    return "；".join(parts)
+
+
+def format_ontology_facts(facts: list[dict[str, Any]]) -> str:
+    """把本体事实包渲染成提示词里的一段（参数卡 / 图谱关系 / 图谱节点）。
+
+    为什么单独成段而不是塞进【参考资料】：本体给的是**结构化事实**（范围、初值、
+    实体关系），和检索片段是两种东西。混在一起模型会把数值当散文改写。
+    """
+    lines: list[str] = []
+    for i, fact in enumerate(facts, 1):
+        kind = str(fact.get("kind") or "")
+        if kind == "parameter_prior":
+            name = fact.get("name") or fact.get("subject")
+            lines.append(f"{i}. [参数先验] {name}（代号 {fact.get('subject')}）")
+            detail: list[str] = []
+            rng = fact.get("range")
+            if isinstance(rng, (list, tuple)) and len(rng) == 2:
+                unit = f" {fact['unit']}" if fact.get("unit") else ""
+                detail.append(f"取值范围 {rng[0]} ~ {rng[1]}{unit}")
+            if fact.get("initial") is not None:
+                detail.append(f"建议初值 {fact['initial']}")
+            if fact.get("range_level"):
+                detail.append(f"范围强度 {fact['range_level']}")
+            if fact.get("evidence_level"):
+                detail.append(f"证据等级 {fact['evidence_level']}")
+            if fact.get("narrowed_by"):
+                detail.append(f"收窄条件 {'、'.join(map(str, fact['narrowed_by']))}")
+            if detail:
+                lines.append("   " + "；".join(detail))
+        elif kind == "graph_edge":
+            relation = fact.get("predicate_label") or fact.get("predicate")
+            lines.append(
+                f"{i}. [图谱关系] {fact.get('subject')} {relation} {fact.get('object')}"
+            )
+        elif kind == "graph_node":
+            etype = fact.get("entity_type_label") or fact.get("entity_type")
+            lines.append(f"{i}. [图谱节点] {fact.get('name')}（{etype}）")
+        else:
+            continue
+        evidence = _format_evidence(fact.get("evidence"))
+        if evidence:
+            lines.append(f"   依据：{evidence}")
+    return "\n".join(lines)
+
+
 def build_prompt(
     query: str,
     cites: list[RetrievedChunk],
@@ -198,6 +261,7 @@ def build_prompt(
     style: str = DEFAULT_STYLE,
     evidence_weak: bool = False,
     note_incomplete: bool = False,
+    ontology_facts: list[dict[str, Any]] | None = None,
 ) -> list[tuple[str, str]]:
     """组装消息列表：[system, (history...), human]。返回 ChatMessages 输入。
 
@@ -206,13 +270,21 @@ def build_prompt(
     evidence_weak：检索证据等级为「较弱」时追加约束——据实作答、不编造、不强行凑数。
     note_incomplete：用户对上次回答不满意 / 上次回答未列全时，追加「补全要求」——
     必须把参考资料中相关条目逐一完整列出，不得省略、不得因篇幅中途停止。
+    ontology_facts：本体模式命中时的结构化事实；放在【参考资料】**之前**，优先作答依据。
     """
-    if not cites:
-        ref_section = "（没有检索到相关参考资料）"
-    else:
+    if cites:
         ref_section = _format_citations(cites)
+    elif ontology_facts:
+        # 本体命中时我们**根本不检索**，这里如果说「没有检索到」，
+        # 模型会顺着答成「知识库未收录」（实测原话），把"没查"说成"查了没有"。
+        ref_section = "（本次未检索原文片段，请以上方【本体事实】为准）"
+    else:
+        ref_section = "（没有检索到相关参考资料）"
 
-    parts = ["【参考资料】", ref_section]
+    parts: list[str] = []
+    if ontology_facts:
+        parts.extend(["【本体事实】", format_ontology_facts(ontology_facts)])
+    parts.extend(["【参考资料】", ref_section])
 
     if history:
         hist_lines = ["【对话历史】"]
@@ -230,6 +302,14 @@ def build_prompt(
             "\n【证据提示】本次检索到的参考资料相关性较弱，可能与问题只是部分相关。"
             "请据实作答：能依据资料回答的部分明确回答；资料不足以支撑的部分，"
             "如实说明「知识库资料未覆盖该内容」，不得编造、不得强行引用弱相关资料凑数。"
+        )
+    if ontology_facts:
+        # 本体模式命中：结构化事实优先，参考片段只做补充说明
+        style_block += (
+            "\n【本体优先】本次已从本体知识图谱取到结构化事实（见【本体事实】）。"
+            "回答以【本体事实】为准：参数取值范围、建议初值、实体之间的关系统一照此陈述，"
+            "不得改写、不得外推、不得编造【本体事实】里没有的数值；"
+            "【参考资料】只用于补足说明性文字，与此处冲突时以【本体事实】为准。"
         )
     if note_incomplete:
         # LLM 优化（/optimize）或补全重生成：上次回答未列全/被截断，必须完整作答

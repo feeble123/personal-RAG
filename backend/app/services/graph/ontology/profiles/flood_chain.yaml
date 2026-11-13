@@ -1,0 +1,106 @@
+# ============================================================
+# 防洪链本体（TBox）
+# ------------------------------------------------------------
+# 描述「一场洪水从工程对象 → 河段 → 行政区 → 措施 → 责任单位」这条链路，
+# 回答「这个水库下游哪些乡镇要预警、归谁管、依据哪条预案」。
+#
+# 类型名（engineering_object / downstream_of …）与内置防洪链枚举**保持同名**，
+# 这样存量节点和边不用迁移：切到这个库就是看这一批实体。
+# uid_prefix 也必须和 schema 里的内置前缀一致，否则新老 uid 会对不上。
+# ============================================================
+version: 1
+profile_id: flood_chain
+display_name: 防洪链本体
+description: 工程对象 → 河流河段 → 行政区 → 措施 → 管理单位，回答「下游哪些乡镇要预警、归谁管」。
+domain: flood_control
+
+entity_types:
+  - name: engineering_object
+    display_name: 工程对象
+    uid_prefix: eo
+    scope: local          # 水库/大坝按项目（知识库）隔离
+    attributes:
+      - {name: category, type: string}
+      - {name: safe_discharge_m3s, type: number}
+
+  - name: river
+    display_name: 河流河段
+    uid_prefix: rv
+    scope: global         # 河段是客观地理对象，跨库共享
+    attributes:
+      - {name: safe_discharge_m3s, type: number}
+
+  - name: admin_region
+    display_name: 行政区
+    uid_prefix: ar
+    scope: global
+    attributes:
+      - {name: level, type: enum, values: [省, 市, 县, 镇, 村]}
+
+  - name: standard_clause
+    display_name: 规范条款
+    uid_prefix: cl
+    scope: global
+    attributes:
+      - {name: clause_no, type: string}
+
+  - name: metric
+    display_name: 指标
+    uid_prefix: mt
+    scope: global
+    attributes:
+      - {name: unit, type: string}
+
+  - name: management_unit
+    display_name: 管理单位
+    uid_prefix: mu
+    scope: local
+    attributes:
+      - {name: contact, type: string}
+
+  - name: response_level
+    display_name: 响应等级
+    uid_prefix: rl
+    scope: global
+    attributes:
+      - {name: level, type: enum, values: [Ⅰ, Ⅱ, Ⅲ, Ⅳ]}
+
+  - name: event
+    display_name: 事件险情
+    uid_prefix: ev
+    scope: local
+    attributes:
+      - {name: occurred_at, type: string}
+
+  - name: term
+    display_name: 专业术语
+    uid_prefix: tm
+    scope: global
+    attributes:
+      - {name: definition, type: text}
+
+  - name: condition
+    display_name: 工况
+    uid_prefix: cd
+    scope: local
+  - name: measure
+    display_name: 措施
+    uid_prefix: ms
+    scope: local
+
+# 关系名必须是**大写蛇形**（TBox 规范）。存量边用的是内置枚举的小写名
+# （downstream_of 之类），显示时由 schema 的内置中文表兜底，照样显示「下游」；
+# 从这个库新建的关系用大写名。以后做一次边名迁移即可统一。
+#
+# 一个关系只能声明一个 source，所以内置枚举里多主语的关系取主要那个。
+relation_types:
+  - {name: DOWNSTREAM_OF, display_name: 下游, source: engineering_object, target: river, target_types: [river, admin_region, engineering_object], description: 工程对象影响其下游的河段与行政区}
+  - {name: LOCATED_IN, display_name: 位于, source: engineering_object, target: admin_region, target_types: [admin_region], description: 工程对象所在行政区}
+  - {name: RESPONSIBLE, display_name: 责任, source: engineering_object, target: management_unit, target_types: [management_unit, measure], description: 谁负责}
+  - {name: PART_OF, display_name: 属于, source: engineering_object, target: engineering_object, target_types: [engineering_object], description: 建筑物属于水库}
+  - {name: FLOWS_INTO, display_name: 汇入, source: river, target: river, target_types: [river], description: 河段汇入关系}
+  - {name: NEEDS_WARNING, display_name: 需预警, source: admin_region, target: measure, target_types: [measure], description: 该行政区需要发布预警}
+  - {name: NEEDS_EVACUATION, display_name: 需转移, source: admin_region, target: measure, target_types: [measure], description: 该行政区需要转移安置}
+  - {name: HAS_PLAN, display_name: 对应预案, source: admin_region, target: response_level, target_types: [response_level], description: 行政区对应的响应等级}
+  - {name: BASED_ON, display_name: 依据, source: measure, target: standard_clause, target_types: [standard_clause], description: 措施依据的规范条款}
+  - {name: STIPULATES, display_name: 规定, source: condition, target: river, target_types: [river, metric], description: 工况规定的下泄流量等}

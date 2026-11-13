@@ -6,6 +6,9 @@ import { useAuthStore } from '@/stores/auth'
 export const api = axios.create({
   baseURL: '/api',
   timeout: 60_000,
+  // 数组参数序列化成重复键（entity_type=A&entity_type=B），而不是 entity_type[]=A。
+  // 后者 FastAPI 的 list[str] 查询参数读不到 —— 这正是「点图例没反应」的原因。
+  paramsSerializer: { indexes: null },
 })
 
 // P0-1：access token 改内存后，401 先用 refresh cookie 续期（避免误登出）

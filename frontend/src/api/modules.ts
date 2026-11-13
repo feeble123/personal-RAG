@@ -1,6 +1,6 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
-import type { AuditLog, ChunkItem, Citation, Conversation, KnowledgeBase, MemoryItem, MemoryStats, Message, SystemStats, TokenOut, User } from './types'
+import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -98,6 +98,146 @@ export const auditApi = {
     api.get('/admin/audit-logs', { params }).then((r) => r.data as { items: AuditLog[]; total: number }),
 }
 
+// ===== 本体（Ontology RAG）=====
+export const ontologyApi = {
+  /** TBox：当前本体有哪些实体类型 / 关系类型 / 属性 */
+  types: (profile?: string) =>
+    api.get('/admin/ontology/types', { params: { profile } }).then((r) => r.data as OntologyTypes),
+  /** 图谱全览：节点 + 边（节点来自 PG 实例，边来自图库） */
+  graph: (params?: Record<string, unknown>) =>
+    api.get('/admin/ontology/graph', { params }).then((r) => r.data as OntologyGraph),
+  /** ABox 实例列表 */
+  instances: (params?: Record<string, unknown>) =>
+    api.get('/admin/ontology/instances', { params }).then((r) => r.data as OntologyInstance[]),
+  /** 参数推荐卡 */
+  params: (params?: Record<string, unknown>) =>
+    api.get('/admin/ontology/params', { params }).then((r) => r.data as OntologyParamCard[]),
+
+  // —— 实例（ABox 节点）——
+  createInstance: (data: Record<string, unknown>) =>
+    api.post('/admin/ontology/instances', data).then((r) => r.data as OntologyInstance),
+  updateInstance: (id: number, data: Record<string, unknown>) =>
+    api.patch(`/admin/ontology/instances/${id}`, data).then((r) => r.data as OntologyInstance),
+  deleteInstance: (id: number) => api.delete(`/admin/ontology/instances/${id}`),
+
+  // —— 关系（ABox 的边）——
+  relations: (params?: Record<string, unknown>) =>
+    api.get('/admin/ontology/relations', { params }).then((r) => r.data as OntologyRelation[]),
+  createRelation: (data: Record<string, unknown>) =>
+    api.post('/admin/ontology/relations', data).then((r) => r.data as OntologyRelation),
+  updateRelation: (id: number, data: Record<string, unknown>) =>
+    api.patch(`/admin/ontology/relations/${id}`, data).then((r) => r.data as OntologyRelation),
+  deleteRelation: (id: number) => api.delete(`/admin/ontology/relations/${id}`),
+
+  // —— TBox 在线编辑（F3）：改的是图谱库的「图纸」，写回 YAML ——
+  upsertEntityType: (
+    profile: string | undefined,
+    data: { name: string; display_name: string; uid_prefix: string; scope: 'local' | 'global' },
+  ) =>
+    api
+      .post('/admin/ontology/schema/entity', data, { params: { profile } })
+      .then((r) => r.data as OntologyTypes),
+  deleteEntityType: (profile: string | undefined, name: string) =>
+    api
+      .delete(`/admin/ontology/schema/entity/${name}`, { params: { profile } })
+      .then((r) => r.data as OntologyTypes),
+  upsertRelationType: (
+    profile: string | undefined,
+    data: {
+      name: string
+      display_name: string
+      source: string
+      target: string
+      target_types?: string[]
+      description?: string
+    },
+  ) =>
+    api
+      .post('/admin/ontology/schema/relation', data, { params: { profile } })
+      .then((r) => r.data as OntologyTypes),
+  deleteRelationType: (profile: string | undefined, name: string) =>
+    api
+      .delete(`/admin/ontology/schema/relation/${name}`, { params: { profile } })
+      .then((r) => r.data as OntologyTypes),
+  upsertAttribute: (
+    profile: string | undefined,
+    entity: string,
+    data: { name: string; type: string; values?: string[]; required?: boolean; description?: string },
+  ) =>
+    api
+      .post(`/admin/ontology/schema/entity/${entity}/attribute`, data, { params: { profile } })
+      .then((r) => r.data as OntologyTypes),
+  deleteAttribute: (profile: string | undefined, entity: string, attr: string) =>
+    api
+      .delete(`/admin/ontology/schema/entity/${entity}/attribute/${attr}`, { params: { profile } })
+      .then((r) => r.data as OntologyTypes),
+
+  // —— 图谱库（一个库 = 一份 TBox + 属于它的实例/关系）——
+  libraries: () => api.get('/admin/ontology/libraries').then((r) => r.data as OntologyLibrary[]),
+  createLibrary: (data: {
+    profile_id: string
+    display_name: string
+    description?: string
+    template?: string
+  }) =>
+    api.post('/admin/ontology/libraries', data).then((r) => r.data as OntologyLibrary),
+  deleteLibrary: (profileId: string) => api.delete(`/admin/ontology/libraries/${profileId}`),
+  /** 导出该库的 TBox YAML（换机器带走 / 交给同事） */
+  exportLibrary: async (profileId: string) => {
+    const res = await api.get(`/admin/ontology/libraries/${profileId}/export`, {
+      responseType: 'blob',
+    })
+    const url = URL.createObjectURL(res.data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${profileId}.yaml`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+  /** 导入一份 TBox YAML（不覆盖同名库） */
+  importLibrary: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api
+      .post('/admin/ontology/libraries/import', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data as OntologyLibrary)
+  },
+  /** 读 Excel 表头 → 属性建议（只预览，不写库） */
+  excelPreview: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api
+      .post('/admin/ontology/schema/excel-preview', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data as { columns: ExcelColumnSuggestion[] })
+  },
+
+  /** 本体问答试验台（管理员） */
+  ask: (question: string, opts?: { kbId?: number; minFacts?: number }) =>
+    api
+      .post('/admin/ontology/ask', {
+        question,
+        kb_id: opts?.kbId ?? null,
+        min_facts: opts?.minFacts ?? null,
+      })
+      .then((r) => r.data as OntologyAskResult),
+
+  // —— 参数表导入（默认只预演）——
+  importParams: (file: File, opts: { dryRun: boolean; kbId?: number; profile?: string }) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api
+      .post('/admin/ontology/params/import', form, {
+        params: { dry_run: opts.dryRun, kb_id: opts.kbId ?? 0, profile: opts.profile },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data as OntologyImportResult)
+  },
+}
+
 // ===== 流式 SSE（fetch + ReadableStream）：解析 `data: {json}\n\n` 事件 =====
 async function readSSE(
   res: Response,
@@ -134,6 +274,8 @@ export async function streamChat(opts: {
   content: string
   kbId?: number | null
   style?: string
+  /** kb = 只查知识库切片（默认）；ontology = 先查本体，拿不到事实才回退检索 */
+  mode?: 'kb' | 'ontology'
   signal: AbortSignal
   onEvent: (ev: { event: string; data: unknown }) => void
 }): Promise<void> {
@@ -144,7 +286,12 @@ export async function streamChat(opts: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ content: opts.content, kb_id: opts.kbId ?? null, style: opts.style ?? null }),
+    body: JSON.stringify({
+      content: opts.content,
+      kb_id: opts.kbId ?? null,
+      style: opts.style ?? null,
+      mode: opts.mode ?? 'kb',
+    }),
     signal: opts.signal,
   })
   await readSSE(res, opts.onEvent)
