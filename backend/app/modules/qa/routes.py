@@ -253,15 +253,17 @@ async def chat(
                 #      回退走下方原有检索链路，行为与 kb 模式完全一致。
                 ontology_pack = None
                 ontology_hit = False
-                if body.mode == "ontology":
+                if body.mode in ("ontology", "hybrid"):
                     ontology_pack = await retrieve_with_ontology(
                         sdb, search_query, kb_id=body.kb_id, allow_fallback=False
                     )
                     ontology_hit = bool(ontology_pack.facts)
                     yield _sse({"event": "facts", "data": {
-                        "mode": "ontology",
+                        "mode": body.mode,
                         "facts": ontology_pack.facts,
                         "fallback_used": not ontology_hit,
+                        # hybrid：本体命中也照样检索原文，这里告诉前端"下面还有原文补充"
+                        "supplementary": body.mode == "hybrid" and ontology_hit,
                         "sources": ontology_pack.sources,
                         "latency_ms": ontology_pack.latency_ms,
                         "notes": ontology_pack.notes,
@@ -322,8 +324,9 @@ async def chat(
                         logger.info("负面记忆命中 mem=%s，强制重新检索", mem.memory_id)
 
                 # 4) 检索（记忆未命中才执行）：用改写后的查询检索（追问合并主题，保证新问题自行检索）
-                #    本体已命中 → 不检索：本体事实本身就够回答，再检索纯属浪费（实测 20 秒）。
-                if ontology_hit:
+                #    本体已命中且是纯本体模式 → 不检索：事实本身就够答，再检索纯属浪费。
+                #    混合模式例外：用户明确要「本体 + 原文补充」，该付的时间照付。
+                if ontology_hit and body.mode == "ontology":
                     cites = []
                     evidence_level = "sufficient"  # 结构化事实视为强证据，不触发弱证据约束
                     evidence_top_score = None

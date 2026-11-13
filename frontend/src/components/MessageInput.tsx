@@ -53,7 +53,9 @@ export default function MessageInput() {
           title={
             mode === 'ontology'
               ? '先查本体知识图谱（参数取值范围、实体关系）；本体一条事实都拿不到才回退知识库切片检索'
-              : '只查知识库切片（原文片段），不做本体推理'
+              : mode === 'hybrid'
+                ? '本体事实 + 同时检索原文片段做补充：回答更全，但每次都要多花几秒检索'
+                : '只查知识库切片（原文片段），不做本体推理'
           }
         >
           <Segmented
@@ -63,6 +65,7 @@ export default function MessageInput() {
             options={[
               { label: '知识库回答', value: 'kb' },
               { label: '本体回答', value: 'ontology' },
+              { label: '本体+原文', value: 'hybrid' },
             ]}
           />
         </Tooltip>

@@ -1,5 +1,6 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
+import type { AnswerMode } from '@/stores/chat'
 import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
@@ -286,8 +287,8 @@ export async function streamChat(opts: {
   content: string
   kbId?: number | null
   style?: string
-  /** kb = 只查知识库切片（默认）；ontology = 先查本体，拿不到事实才回退检索 */
-  mode?: 'kb' | 'ontology'
+  /** kb = 只查切片；ontology = 本体优先，拿不到事实回退检索；hybrid = 本体 + 原文补充 */
+  mode?: AnswerMode
   signal: AbortSignal
   onEvent: (ev: { event: string; data: unknown }) => void
 }): Promise<void> {

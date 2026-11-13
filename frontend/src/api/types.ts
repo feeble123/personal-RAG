@@ -401,9 +401,11 @@ export interface OntologyLibrary {
 
 /** 本体模式问答时 SSE 的 `facts` 事件负载（先于回答正文到达）。 */
 export interface OntologyFactsEvent {
-  mode: 'ontology'
+  mode: 'ontology' | 'hybrid'
   facts: Record<string, unknown>[]
   fallback_used: boolean
+  /** 混合模式：本体命中的同时还会检索原文补充 */
+  supplementary?: boolean
   sources: string[]
   latency_ms: number
   notes: string[]

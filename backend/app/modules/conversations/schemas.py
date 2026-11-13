@@ -67,4 +67,5 @@ class ChatIn(BaseModel):
     # 回答模式（O7）：
     #   kb       —— 只查知识库切片（原有行为，默认，零改动）
     #   ontology —— 先查本体（参数卡/图谱关系），本体一条事实都拿不到才回退向量检索
-    mode: Literal["kb", "ontology"] = "kb"
+    #   hybrid   —— 本体事实 + 同时检索原文片段做补充（更全，但每次都要付检索时间）
+    mode: Literal["kb", "ontology", "hybrid"] = "kb"

@@ -7,8 +7,9 @@ import { useAuthStore } from './auth'
  * 回答模式：
  *   kb       —— 只查知识库切片（原行为）
  *   ontology —— 先查本体（参数卡/图谱关系），本体一条事实都拿不到才回退向量检索
+ *   hybrid   —— 本体事实 + 同时检索原文做补充（更全，但每次都要付检索时间）
  */
-export type AnswerMode = 'kb' | 'ontology'
+export type AnswerMode = 'kb' | 'ontology' | 'hybrid'
 
 // 本地流式消息：assistant 流式生成期间的临时状态
 export interface StreamMessage {

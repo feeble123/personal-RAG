@@ -112,3 +112,21 @@ class TestBuildPromptOntology:
         human = messages[-1][1]
         assert "【本体事实】" not in human
         assert "本体优先" not in messages[0][1]
+
+
+class TestHybridMode:
+    """混合模式 = 本体事实 + 原文补充：两段都要有，且不再说"未检索原文"。"""
+
+    def test_hybrid_keeps_both_sections(self):
+        messages = build_prompt(
+            "sm 一般取多少", [_chunk("手册原文片段")], ontology_facts=[_param_fact()]
+        )
+        human = messages[-1][1]
+        assert "【本体事实】" in human
+        assert "【参考资料】" in human
+        assert "本次未检索原文片段" not in human, "既然检索了，就不能说没检索"
+        assert "手册原文片段" in human
+
+    def test_hybrid_still_says_ontology_wins(self):
+        messages = build_prompt("sm 一般取多少", [_chunk()], ontology_facts=[_param_fact()])
+        assert "以【本体事实】为准" in messages[0][1]
