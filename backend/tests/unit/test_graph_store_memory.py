@@ -120,7 +120,8 @@ class TestQuery:
     async def test_rel_type_filter(self, store):
         nodes = await _seed(store)
         slice_ = await store.neighbors(nodes["town"].uid, rel_types=[RelationType.NEEDS_WARNING])
-        assert {e.predicate for e in slice_.edges} == {RelationType.NEEDS_WARNING}
+        # 关系名落库时统一成大写蛇形（见 schema.canonical_relation）
+        assert {e.predicate for e in slice_.edges} == {"NEEDS_WARNING"}
 
     async def test_search_exact_and_partial(self, store):
         await _seed(store)
@@ -138,7 +139,7 @@ class TestQuery:
         await _seed(store)
         stats = await store.stats(kb_id=1)
         assert stats["nodes"]["by_type"]["engineering_object"] == 1
-        assert stats["edges"]["by_type"]["downstream_of"] == 2
+        assert stats["edges"]["by_type"]["DOWNSTREAM_OF"] == 2
 
 
 class TestOverview:
@@ -174,3 +175,27 @@ class TestOverview:
         await _seed(store)
         assert (await store.overview(kb_id=2)).nodes == []
         assert len((await store.overview(kb_id=1)).nodes) == 4
+
+
+class TestCanonicalRelationName:
+    """内置关系是小写枚举值，TBox 是大写蛇形；存储层要统一，否则同一关系两种写法。"""
+
+    def test_builtin_values_map_to_upper(self):
+        from app.services.graph.schema import canonical_relation
+
+        assert canonical_relation("downstream_of") == "DOWNSTREAM_OF"
+        assert canonical_relation(RelationType.NEEDS_WARNING) == "NEEDS_WARNING"
+        assert canonical_relation("PART_OF") == "PART_OF"
+
+    def test_unknown_name_is_uppercased(self):
+        from app.services.graph.schema import canonical_relation
+
+        assert canonical_relation("custom_rel") == "CUSTOM_REL"
+
+    async def test_neighbors_filter_accepts_enum_after_canonical_storage(self, store):
+        """按枚举过滤仍要命中已按大写落库的边。"""
+        nodes = await _seed(store)
+        by_enum = await store.neighbors(nodes["town"].uid, rel_types=[RelationType.NEEDS_WARNING])
+        by_upper = await store.neighbors(nodes["town"].uid, rel_types=["NEEDS_WARNING"])
+        assert [e.predicate for e in by_enum.edges] == [e.predicate for e in by_upper.edges]
+        assert by_enum.edges

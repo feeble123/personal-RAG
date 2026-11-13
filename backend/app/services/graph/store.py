@@ -12,7 +12,14 @@ import logging
 from typing import Protocol
 
 from app.core.config import settings
-from app.services.graph.schema import Edge, GraphSlice, Node, RelationType, type_value
+from app.services.graph.schema import (
+    Edge,
+    GraphSlice,
+    Node,
+    RelationType,
+    canonical_relation,
+    type_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +113,12 @@ class InMemoryGraphStore:
             setattr(existing, field_name, merged)
 
     def _merge_edge(self, incoming: Edge) -> None:
+        # 关系名统一成大写蛇形再落表：老数据是 downstream_of，TBox 是 DOWNSTREAM_OF，
+        # 不归一的话同一条关系会因为大小写不同被当成两条。
+        predicate = canonical_relation(incoming.predicate)
         key = (
             incoming.subject_uid,
-            type_value(incoming.predicate),
+            predicate,
             incoming.object_uid,
             incoming.version_id,
         )
@@ -116,7 +126,7 @@ class InMemoryGraphStore:
         if existing is None:
             self._edges[key] = Edge(
                 subject_uid=incoming.subject_uid,
-                predicate=incoming.predicate,
+                predicate=predicate,
                 object_uid=incoming.object_uid,
                 kb_id=incoming.kb_id,
                 doc_id=incoming.doc_id,
@@ -173,11 +183,12 @@ class InMemoryGraphStore:
                 del self._edges[key]
 
     async def delete_edges(self, subject_uid: str, predicate: str, object_uid: str) -> None:
+        wanted = canonical_relation(predicate)
         for key, edge in list(self._edges.items()):
             if (
                 edge.subject_uid == subject_uid
                 and edge.object_uid == object_uid
-                and type_value(edge.predicate) == predicate
+                and canonical_relation(edge.predicate) == wanted
             ):
                 del self._edges[key]
 
@@ -190,7 +201,9 @@ class InMemoryGraphStore:
         for edge in self._edges.values():
             if edge.status == "rejected":
                 continue
-            if rel_types and type_value(edge.predicate) not in {type_value(r) for r in rel_types}:
+            if rel_types and canonical_relation(edge.predicate) not in {
+                canonical_relation(r) for r in rel_types
+            }:
                 continue
             out.append(edge)
         return out

@@ -252,6 +252,18 @@ def relation_label_zh(value: Any) -> str:
     except ValueError:
         return tv
 
+
+# 内置关系是历史小写（downstream_of），而 TBox 规范要求大写蛇形（DOWNSTREAM_OF）。
+# 两者指同一个概念；落到存储层统一成大写，避免「同一条关系两种写法」并存——
+# 否则按关系名过滤/分组时会各算各的，新建的关系和老数据也对不上。
+_BUILTIN_REL_CANONICAL: dict[str, str] = {rt.value: rt.name for rt in RelationType}
+
+
+def canonical_relation(value: Any) -> str:
+    """关系名归一成大写蛇形（未知的自定义名也转大写，与 TBox 规范一致）。"""
+    tv = type_value(value)
+    return _BUILTIN_REL_CANONICAL.get(tv, tv.upper())
+
 _QUOTES_RE = re.compile(r"[《》\"'“”‘’\s]+")
 _SPACE_RE = re.compile(r"\s+")
 

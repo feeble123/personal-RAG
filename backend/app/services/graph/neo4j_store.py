@@ -29,7 +29,13 @@ import time
 from typing import Any
 
 from app.core.config import settings
-from app.services.graph.schema import Edge, GraphSlice, Node, type_value
+from app.services.graph.schema import (
+    Edge,
+    GraphSlice,
+    Node,
+    canonical_relation,
+    type_value,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +180,7 @@ def _edge_row(edge: Edge) -> dict[str, Any]:
     return {
         "subject": edge.subject_uid,
         "object": edge.object_uid,
-        "rel": edge.predicate_name,
+        "rel": canonical_relation(edge.predicate_name),
         "ver": -1 if edge.version_id is None else int(edge.version_id),
         "kb_id": edge.kb_id,
         "doc_id": edge.doc_id,
@@ -454,7 +460,7 @@ class Neo4jGraphStore:
         await self._run(
             f"MATCH (a:{NODE_LABEL} {{uid: $s}})-[r:{REL_TYPE}]->(b:{NODE_LABEL} {{uid: $o}}) "
             f"WHERE r.relation_type = $p DELETE r",
-            {"s": subject_uid, "p": predicate, "o": object_uid},
+            {"s": subject_uid, "p": canonical_relation(predicate), "o": object_uid},
         )
 
     # ---------- 读取 ----------
@@ -472,7 +478,7 @@ class Neo4jGraphStore:
         limit: int = 200,
     ) -> GraphSlice:
         depth = max(1, min(int(depth), 2))  # 只允许 1~2 跳，防爆炸
-        types = [type_value(t) for t in rel_types] if rel_types else None
+        types = [canonical_relation(t) for t in rel_types] if rel_types else None
         params: dict[str, Any] = {"uid": uid, "types": types, "limit": int(limit)}
         if depth == 1:
             cypher = (
