@@ -20,7 +20,7 @@ from app.core.config import settings
 from app.core.deps import CurrentUser
 from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
-from app.core.time import utcnow_naive
+from app.core.time import as_utc, utcnow_naive
 from app.core.security import (
     REFRESH_COOKIE,
     create_access_token,
@@ -45,6 +45,18 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def _now() -> datetime:
     """SQLite DateTime 存 naive（无时区），统一用 naive UTC 避免 aware/naive 比较错误。"""
     return utcnow_naive()
+
+
+def _session_expired(expires_at: datetime | None, now: datetime) -> bool:
+    """会话是否过期。两侧先归一成 aware UTC 再比。
+
+    落库用 naive UTC，但 **PG 的 timestamptz 读回是 aware**、SQLite 读回是 naive；
+    直接 `session.expires_at < now` 在 PG 上抛
+    `can't compare offset-naive and offset-aware datetimes` —— 每次刷新令牌都 500，
+    前端拿不到新令牌就直接掉回登录页（用户实测：进图谱页被踢出登录）。
+    """
+    exp = as_utc(expires_at)
+    return exp is not None and exp < as_utc(now)
 
 
 def _set_refresh_cookie(resp: Response, token: str) -> None:
@@ -145,7 +157,7 @@ async def refresh(request: Request, resp: Response, db: AsyncSession = Depends(g
         # 已吊销（可能是重放）：拒绝。为防更激进攻击，这里只拒绝当前请求。
         raise BizError("刷新令牌已被吊销", 401, "UNAUTHORIZED")
     now = _now()
-    if session.expires_at < now:
+    if _session_expired(session.expires_at, now):
         raise BizError("登录会话已过期，请重新登录", 401, "UNAUTHORIZED")
 
     user = await db.get(User, session.user_id)

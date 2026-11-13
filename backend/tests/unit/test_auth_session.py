@@ -203,3 +203,40 @@ class TestLogout:
         data = await _reg(client, "reg_cookie_user")
         assert data["access_token"]
         assert client.cookies.get("refresh_token"), "注册也应种 refresh cookie"
+
+
+class TestSessionExpiryComparison:
+    """刷新令牌时比较 session.expires_at：PG 读回 aware、SQLite 读回 naive。
+
+    直接比较会在 PG 上抛 `can't compare offset-naive and offset-aware datetimes`，
+    表现为每次刷新令牌 500、前端掉回登录页（用户实测：进知识图谱被踢出登录）。
+    """
+
+    def test_aware_expires_at_does_not_raise(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.modules.auth.routes import _session_expired
+
+        now_naive = datetime(2026, 1, 1, 12, 0, 0)
+        future = datetime(2026, 1, 2, 12, 0, 0, tzinfo=timezone.utc)
+        past = datetime(2025, 12, 31, 12, 0, 0, tzinfo=timezone.utc)
+
+        assert _session_expired(future, now_naive) is False
+        assert _session_expired(past, now_naive) is True
+
+    def test_naive_expires_at_still_works(self):
+        """SQLite 路径：两边都 naive 时行为不变。"""
+        from datetime import datetime
+
+        from app.modules.auth.routes import _session_expired
+
+        now = datetime(2026, 1, 1, 12, 0, 0)
+        assert _session_expired(datetime(2026, 1, 2, 12, 0, 0), now) is False
+        assert _session_expired(datetime(2025, 12, 31, 12, 0, 0), now) is True
+
+    def test_none_expires_at_is_not_expired(self):
+        from datetime import datetime
+
+        from app.modules.auth.routes import _session_expired
+
+        assert _session_expired(None, datetime(2026, 1, 1)) is False
