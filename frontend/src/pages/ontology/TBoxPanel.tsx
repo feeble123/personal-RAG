@@ -56,6 +56,16 @@ const SCOPES = [
 
 type RelationRow = OntologyTypes['relation_types'][number]
 
+/** 一条属性的形状（含自动抽取规则）。 */
+interface RowAttr {
+  name: string
+  type: string
+  values?: string[]
+  required?: boolean
+  description?: string
+  extract?: { pattern?: string; unit?: string; map?: Record<string, string> }
+}
+
 interface Props {
   types: OntologyTypes | undefined
   profileId: string
@@ -68,10 +78,11 @@ export default function TBoxPanel({ types, profileId }: Props) {
     open: false,
     row: null,
   })
-  const [attrModal, setAttrModal] = useState<{ open: boolean; entity: OntologyEntityType | null }>({
-    open: false,
-    entity: null,
-  })
+  const [attrModal, setAttrModal] = useState<{
+    open: boolean
+    entity: OntologyEntityType | null
+    attr: OntologyEntityType['attributes'][number] | null
+  }>({ open: false, entity: null, attr: null })
   const [relationModal, setRelationModal] = useState<{
     open: boolean
     row: OntologyTypes['relation_types'][number] | null
@@ -121,14 +132,25 @@ export default function TBoxPanel({ types, profileId }: Props) {
       values?: string[]
       required?: boolean
       description?: string
-    }) =>
-      ontologyApi.upsertAttribute(profileId || undefined, attrModal.entity?.name ?? '', {
+      extract_pattern?: string
+      extract_unit?: string
+      extract_map_text?: string
+    }) => {
+      // 「敏感=高」按行写，转成 {敏感: '高'}
+      const map: Record<string, string> = {}
+      for (const line of (values.extract_map_text ?? '').split(/\r?\n/)) {
+        const [k, v] = line.split('=')
+        if (k?.trim() && v?.trim()) map[k.trim()] = v.trim()
+      }
+      return ontologyApi.upsertAttribute(profileId || undefined, attrModal.entity?.name ?? '', {
         ...values,
         values: values.values ?? [],
-      }),
+        extract_map: map,
+      })
+    },
     onSuccess: () => {
       message.success('属性已保存')
-      setAttrModal({ open: false, entity: null })
+      setAttrModal({ open: false, entity: null, attr: null })
       refresh()
     },
     onError: (e) => message.error(errMsg(e)),
@@ -153,10 +175,25 @@ export default function TBoxPanel({ types, profileId }: Props) {
       target_types?: string[]
       description?: string
     }) => ontologyApi.upsertRelationType(profileId || undefined, values),
-    onSuccess: () => {
-      message.success('关系类型已保存')
+    onSuccess: (data, values) => {
       setRelationModal({ open: false, row: null })
       refresh()
+      // 改了主语/宾语方向：已有边还是老方向，图不会自己变——问一句要不要一起掉头
+      if (data.reversed_edges > 0) {
+        Modal.confirm({
+          title: `有 ${data.reversed_edges} 条已有关系方向和新定义相反`,
+          content: '改定义只影响以后新建的关系。要不要把这些已有关系也一起掉头？',
+          okText: '一起掉头',
+          cancelText: '先不动',
+          onOk: async () => {
+            const res = await ontologyApi.fixReversedEdges(profileId || undefined, values.name)
+            message.success(`已调整 ${res.fixed} 条关系方向`)
+            refresh()
+          },
+        })
+      } else {
+        message.success('关系类型已保存')
+      }
     },
     onError: (e) => message.error(errMsg(e)),
   })
@@ -281,7 +318,7 @@ export default function TBoxPanel({ types, profileId }: Props) {
                   onClick={() => {
                     attrForm.resetFields()
                     attrForm.setFieldsValue({ type: 'string', required: false })
-                    setAttrModal({ open: true, entity: row })
+                    setAttrModal({ open: true, entity: row, attr: null })
                   }}
                 >
                   添加属性
@@ -334,18 +371,52 @@ export default function TBoxPanel({ types, profileId }: Props) {
                       render: (v: string | undefined) => v || <Text type="secondary">—</Text>,
                     },
                     {
+                      title: '自动抽取',
+                      width: 90,
+                      render: (_: unknown, attr: RowAttr) =>
+                        attr.extract?.pattern ? (
+                          <Tag color="green">已配规则</Tag>
+                        ) : (
+                          <Text type="secondary">—</Text>
+                        ),
+                    },
+                    {
                       title: '操作',
                       width: 90,
-                      render: (_: unknown, attr: { name: string }) => (
-                        <Popconfirm
-                          title="删除这个属性？"
-                          description="已有实例里这个字段的数据会保留，但表单不再显示。"
-                          okText="删除"
-                          cancelText="取消"
-                          onConfirm={() => removeAttr.mutate({ entity: row.name, attr: attr.name })}
-                        >
-                          <Button size="small" danger type="text" icon={<DeleteOutlined />} />
-                        </Popconfirm>
+                      render: (_: unknown, attr: RowAttr) => (
+                        <Space size={0}>
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<EditOutlined />}
+                            onClick={() => {
+                              attrForm.setFieldsValue({
+                                name: attr.name,
+                                type: attr.type,
+                                values: attr.values ?? [],
+                                required: attr.required ?? false,
+                                description: attr.description ?? '',
+                                extract_pattern: attr.extract?.pattern ?? '',
+                                extract_unit: (attr.extract?.unit as string) ?? '',
+                                extract_map_text: Object.entries(
+                                  (attr.extract?.map as Record<string, string>) ?? {},
+                                )
+                                  .map(([k, v]) => `${k}=${v}`)
+                                  .join('\n'),
+                              })
+                              setAttrModal({ open: true, entity: row, attr })
+                            }}
+                          />
+                          <Popconfirm
+                            title="删除这个属性？"
+                            description="已有实例里这个字段的数据会保留，但表单不再显示。"
+                            okText="删除"
+                            cancelText="取消"
+                            onConfirm={() => removeAttr.mutate({ entity: row.name, attr: attr.name })}
+                          >
+                            <Button size="small" danger type="text" icon={<DeleteOutlined />} />
+                          </Popconfirm>
+                        </Space>
                       ),
                     },
                   ]}
@@ -547,11 +618,15 @@ export default function TBoxPanel({ types, profileId }: Props) {
 
       <Modal
         open={attrModal.open}
-        title={`给「${attrModal.entity?.display_name ?? ''}」加属性`}
+        title={
+          attrModal.attr
+            ? `编辑属性「${attrModal.attr.name}」`
+            : `给「${attrModal.entity?.display_name ?? ''}」加属性`
+        }
         okText="保存"
         cancelText="取消"
         confirmLoading={saveAttr.isPending}
-        onCancel={() => setAttrModal({ open: false, entity: null })}
+        onCancel={() => setAttrModal({ open: false, entity: null, attr: null })}
         onOk={async () => saveAttr.mutate(await attrForm.validateFields())}
         destroyOnClose
       >
@@ -586,6 +661,30 @@ export default function TBoxPanel({ types, profileId }: Props) {
           <Form.Item name="description" label="说明（会显示在实例表单里）">
             <Input placeholder="如：这个字段填什么、从哪来" maxLength={200} />
           </Form.Item>
+
+          <Card size="small" title="自动抽取规则（可选）" style={{ marginBottom: 12 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              配了规则，程序才会去知识库里找这个字段的值；抽到的结果进「自动抽取」待审区，你确认后才写进实例。
+            </Text>
+            <Form.Item
+              name="extract_pattern"
+              label="正则"
+              tooltip="{name} 会替换成实例名，所以一条规则能复用给所有实例"
+              style={{ marginTop: 8 }}
+            >
+              <Input placeholder="如：安全泄量[^0-9]{0,10}([0-9]+(?:\.[0-9]+)?)" maxLength={300} />
+            </Form.Item>
+            <Form.Item name="extract_unit" label="单位（可选）">
+              <Input placeholder="如：m³/s" maxLength={20} />
+            </Form.Item>
+            <Form.Item
+              name="extract_map_text"
+              label="原文写法 → 枚举值（可选）"
+              tooltip="原文写「敏感」，枚举值是「高」，就在这里翻译；一行一条"
+            >
+              <Input.TextArea rows={3} placeholder={'敏感=高\n不敏感=低'} />
+            </Form.Item>
+          </Card>
           {saveAttr.isError && <Alert type="error" showIcon message={errMsg(saveAttr.error)} />}
         </Form>
       </Modal>

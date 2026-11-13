@@ -16,6 +16,7 @@ import {
   Card,
   Input,
   Layout,
+  Modal,
   Popconfirm,
   Select,
   Space,
@@ -43,6 +44,7 @@ import { useOntologyLibrary } from '@/stores/ontologyLibrary'
 import TBoxPanel from './ontology/TBoxPanel'
 import ExtractionPanel from './ontology/ExtractionPanel'
 import type {
+  InstanceImportResult,
   OntologyImportResult,
   OntologyInstance,
   OntologyRelation,
@@ -67,6 +69,14 @@ export default function OntologyManager() {
     { open: false, row: null },
   )
   const [importFile, setImportFile] = useState<File | null>(null)
+  // 通用实例批量导入（F3-3）：先预演，确认再写入
+  const [instImport, setInstImport] = useState<{
+    open: boolean
+    file: File | null
+    entityType: string
+    result: InstanceImportResult | null
+    loading: boolean
+  }>({ open: false, file: null, entityType: '', result: null, loading: false })
   const [importResult, setImportResult] = useState<OntologyImportResult | null>(null)
 
   // 当前图谱库：换库时三类查询全部重取，实体/关系/参数表互不串库
@@ -154,6 +164,27 @@ export default function OntologyManager() {
     },
     onError: (e) => message.error(errMsg(e)),
   })
+
+  const runInstanceImport = async (file: File, entityType: string, dryRun: boolean) => {
+    setInstImport((s) => ({ ...s, loading: true }))
+    try {
+      const result = await ontologyApi.importInstances(file, {
+        entityType,
+        profile: profileId || undefined,
+        dryRun,
+      })
+      if (dryRun) {
+        setInstImport((s) => ({ ...s, result, loading: false }))
+      } else {
+        message.success(`导入完成：新增 ${result.created ?? 0} / 更新 ${result.updated ?? 0}`)
+        setInstImport({ open: false, file: null, entityType: '', result: null, loading: false })
+        refreshAll()
+      }
+    } catch (e) {
+      setInstImport((s) => ({ ...s, loading: false }))
+      message.error(errMsg(e))
+    }
+  }
 
   const importMutation = useMutation({
     mutationFn: (dryRun: boolean) =>
@@ -359,6 +390,20 @@ export default function OntologyManager() {
                     >
                       新建实例
                     </Button>
+                    <Button
+                      icon={<UploadOutlined />}
+                      onClick={() =>
+                        setInstImport({
+                          open: true,
+                          file: null,
+                          entityType: entityTypes[0]?.name ?? '',
+                          result: null,
+                          loading: false,
+                        })
+                      }
+                    >
+                      Excel 批量导入
+                    </Button>
                   </Space>
                   <Table
                     rowKey="id"
@@ -538,6 +583,93 @@ export default function OntologyManager() {
           ]}
         />
       </Content>
+
+      <Modal
+        open={instImport.open}
+        title="Excel 批量导入实例"
+        width={760}
+        okText={instImport.result ? '确认导入' : '先预演'}
+        cancelText="取消"
+        confirmLoading={instImport.loading}
+        onCancel={() =>
+          setInstImport({ open: false, file: null, entityType: '', result: null, loading: false })
+        }
+        onOk={() => {
+          if (!instImport.file) {
+            message.warning('先选一个 Excel 文件')
+            return
+          }
+          if (!instImport.entityType) {
+            message.warning('先选这批数据属于哪个实体类型')
+            return
+          }
+          runInstanceImport(instImport.file, instImport.entityType, !instImport.result)
+        }}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="表头写属性名或属性的中文说明，程序只认对得上的列"
+            description="必须有一列叫 名称 / display_zh；对不上的列会被跳过并在下面列出来（不猜）。默认先预演，确认无误再写入。"
+          />
+          <Space wrap>
+            <Select
+              value={instImport.entityType || undefined}
+              onChange={(v) => setInstImport((s) => ({ ...s, entityType: v, result: null }))}
+              style={{ width: 220 }}
+              placeholder="这批数据属于哪个类型"
+              options={entityTypes.map((t) => ({ value: t.name, label: t.display_name }))}
+            />
+            <Upload
+              accept=".xlsx,.xls"
+              showUploadList={false}
+              beforeUpload={(f) => {
+                setInstImport((s) => ({ ...s, file: f, result: null }))
+                return false
+              }}
+            >
+              <Button icon={<UploadOutlined />}>
+                {instImport.file ? instImport.file.name : '选择文件'}
+              </Button>
+            </Upload>
+          </Space>
+
+          {instImport.result && (
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Space wrap>
+                <Tag color="blue">共 {instImport.result.total} 行</Tag>
+                <Tag color="green">可导入 {instImport.result.valid}</Tag>
+                {instImport.result.rejected > 0 && (
+                  <Tag color="red">有问题 {instImport.result.rejected}</Tag>
+                )}
+              </Space>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                对上的列：
+                {Object.entries(instImport.result.mapped)
+                  .map(([h, a]) => `${h}→${a}`)
+                  .join('，') || '—'}
+              </Text>
+              {instImport.result.skipped_headers.length > 0 && (
+                <Text type="warning" style={{ fontSize: 12 }}>
+                  跳过的列（没对上属性）：{instImport.result.skipped_headers.join('、')}
+                </Text>
+              )}
+              {instImport.result.errors.length > 0 && (
+                <div style={{ maxHeight: 160, overflow: 'auto' }}>
+                  {instImport.result.errors.slice(0, 20).map((e, i) => (
+                    <div key={i}>
+                      <Text type="danger" style={{ fontSize: 12 }}>
+                        第 {e.row_no} 行{e.name ? `（${e.name}）` : ''}：{e.message}
+                      </Text>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Space>
+          )}
+        </Space>
+      </Modal>
 
       <InstanceForm
         open={instanceModal.open}

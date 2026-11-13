@@ -61,6 +61,7 @@ from app.services.graph.ontology import libraries as lib_mod
 from app.services.graph.ontology import queries
 from app.services.graph.ontology import excel_schema
 from app.services.graph.ontology import extraction
+from app.services.graph.ontology import instance_import
 from app.services.graph.ontology import relations as rel_mod
 from app.services.graph.ontology import tbox_edit
 from app.services.graph.ontology.params import load_prior_excel, resolve_evidence
@@ -249,7 +250,7 @@ async def list_proposals(
     status: str = Query("pending", pattern="^(pending|accepted|rejected|all)$"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[ProposalOut]:
-    from app.db.models import OntologyProposal
+    from app.db.models import OntologyInstance, OntologyProposal
 
     reg = _registry(profile)
     stmt = select(OntologyProposal).where(OntologyProposal.profile_id == reg.profile_id)
@@ -262,7 +263,7 @@ async def list_proposals(
 async def _review(
     db: AsyncSession, ids: list[int], *, accept: bool
 ) -> dict:
-    from app.db.models import OntologyProposal
+    from app.db.models import OntologyInstance, OntologyProposal
 
     rows = (await db.scalars(select(OntologyProposal).where(OntologyProposal.id.in_(ids)))).all()
     done, missing = 0, 0
@@ -604,7 +605,49 @@ async def upsert_relation_type(
         detail=f"{payload.display_name}（{payload.name}）",
         client_ip=await get_client_ip(request),
     )
-    return result
+    # 改了主语/宾语方向后，已有边还是老方向——这里报个数，让前端问一句要不要一起掉头。
+    reversed_rows = await rel_mod.find_reversed_edges(
+        db,
+        profile_id=reg.profile_id,
+        predicate=payload.name,
+        source_type=payload.source,
+        target_type=payload.target,
+    )
+    return {"types": result, "reversed_edges": len(reversed_rows)}
+
+
+@router.post("/schema/relation/{name}/fix-reversed")
+async def fix_reversed_edges(
+    name: str, db: DbSession, admin: AdminUser, request: Request,
+    profile: str | None = Query(None),
+) -> dict:
+    """按新的关系定义，把方向相反的已有边掉头。"""
+    reg = _registry(profile)
+    rel = reg.relation(name)
+    if rel is None:
+        raise BizError(f"关系类型 {name!r} 不存在", 404, "ONTOLOGY_RELATION_NOT_FOUND")
+    rows = await rel_mod.find_reversed_edges(
+        db,
+        profile_id=reg.profile_id,
+        predicate=name,
+        source_type=rel.source,
+        target_type=rel.target,
+    )
+    drops = [(r.subject_uid, r.predicate, r.object_uid) for r in rows]
+    fixed = await rel_mod.swap_endpoints(db, rows)
+    # 图库：删旧边、写新边（PG 已是真相源，这里失败也只是索引滞后）
+    await _sync_graph(
+        drop_edges=drops,
+        edges=[rel_mod.to_edge(r) for r in rows],
+    )
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.tbox.relation.fix_reversed",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"{name} 掉头 {fixed} 条",
+        client_ip=await get_client_ip(request),
+    )
+    return {"fixed": fixed}
 
 
 @router.delete("/schema/relation/{name}")
@@ -659,6 +702,15 @@ async def upsert_attribute(
                 values=tuple(payload.values),
                 required=payload.required,
                 description=payload.description,
+                extract=(
+                    {
+                        "pattern": payload.extract_pattern,
+                        **({"unit": payload.extract_unit} if payload.extract_unit else {}),
+                        **({"map": payload.extract_map} if payload.extract_map else {}),
+                    }
+                    if payload.extract_pattern
+                    else None
+                ),
             ),
         )
     except Exception as exc:  # noqa: BLE001
@@ -863,6 +915,91 @@ async def list_instances(
         limit=limit,
     )
     return [InstanceOut.model_validate(r) for r in rows]
+
+
+@router.post("/instances/import")
+async def import_instances(
+    db: DbSession,
+    admin: AdminUser,
+    request: Request,
+    file: UploadFile = File(..., description="Excel：表头=属性名或属性的中文说明"),
+    entity_type: str = Query(..., description="这批数据属于哪个实体类型"),
+    kb_id: int = Query(0, ge=0),
+    profile: str | None = Query(None),
+    dry_run: bool = Query(True, description="默认只预演，确认无误再改成 false"),
+) -> dict:
+    """一张表批量建实例。默认预演；正式导入会按 (类型, 名称) 幂等更新。"""
+    from app.db.models import OntologyInstance
+
+    reg = _registry(profile)
+    raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise BizError("文件过大", 413, "PAYLOAD_TOO_LARGE")
+    try:
+        preview = instance_import.preview_import(io.BytesIO(raw), reg, entity_type)
+    except Exception as exc:  # noqa: BLE001 - 用户上传的表，什么错都要给可读提示
+        raise BizError(str(exc), 400, "ONTOLOGY_EXCEL_INVALID") from exc
+
+    if not dry_run and preview.total > 0 and not preview.rows and preview.errors:
+        # 正式导入且一行都没成：直接抛出来，别写库。
+        # 预演时**不抛**——用户需要看到"哪些列没对上、哪些行有问题"才知道怎么改表。
+        raise BizError(
+            f"没有可导入的行（{len(preview.errors)} 行有问题）："
+            f"{preview.errors[0].get('message', '')}",
+            400,
+            "ONTOLOGY_EXCEL_INVALID",
+        )
+
+    result = {
+        "entity_type": entity_type,
+        "dry_run": dry_run,
+        "total": preview.total,
+        "valid": len(preview.rows),
+        "rejected": len(preview.errors),
+        "mapped": preview.mapped,
+        "skipped_headers": preview.skipped_headers,
+        "errors": preview.errors,
+    }
+    if dry_run:
+        result["rows"] = preview.to_dict()["rows"]
+        return result
+
+    drafts = [
+        inst_mod.InstanceDraft(
+            profile_id=reg.profile_id,
+            entity_type=entity_type,
+            name=row.name,
+            uid=reg.uid_for(entity_type, row.name, kb_id),
+            kb_id=kb_id,
+            props=row.props,
+            source="import",
+        )
+        for row in preview.rows
+    ]
+    upserted = await inst_mod.upsert_instances(db, drafts)
+    await db.commit()
+    rows = [
+        r
+        for r in (
+            await db.scalars(
+                select(OntologyInstance).where(
+                    OntologyInstance.profile_id == reg.profile_id,
+                    OntologyInstance.entity_type == entity_type,
+                )
+            )
+        ).all()
+    ]
+    await _sync_graph(nodes=[inst_mod.to_node(r) for r in rows])
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.instances.import",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=f"{entity_type} 新增 {upserted.created} / 更新 {upserted.updated}",
+        client_ip=await get_client_ip(request),
+    )
+    result["created"] = upserted.created
+    result["updated"] = upserted.updated
+    return result
 
 
 @router.post("/instances", response_model=InstanceOut, status_code=201)

@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
+import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -167,7 +167,14 @@ export const ontologyApi = {
   ) =>
     api
       .post('/admin/ontology/schema/relation', data, { params: { profile } })
-      .then((r) => r.data as OntologyTypes),
+      .then((r) => r.data as { types: OntologyTypes; reversed_edges: number }),
+  /** 改完关系方向后，把已有边一起掉头（否则图和定义对不上） */
+  fixReversedEdges: (profile: string | undefined, name: string) =>
+    api
+      .post(`/admin/ontology/schema/relation/${name}/fix-reversed`, null, {
+        params: { profile },
+      })
+      .then((r) => r.data as { fixed: number }),
   deleteRelationType: (profile: string | undefined, name: string) =>
     api
       .delete(`/admin/ontology/schema/relation/${name}`, { params: { profile } })
@@ -175,7 +182,18 @@ export const ontologyApi = {
   upsertAttribute: (
     profile: string | undefined,
     entity: string,
-    data: { name: string; type: string; values?: string[]; required?: boolean; description?: string },
+    data: {
+      name: string
+      type: string
+      values?: string[]
+      required?: boolean
+      description?: string
+      /** 自动抽取：正则；{name} 会替换成实例名 */
+      extract_pattern?: string
+      extract_unit?: string
+      /** 原文写法 → 枚举值 */
+      extract_map?: Record<string, string>
+    },
   ) =>
     api
       .post(`/admin/ontology/schema/entity/${entity}/attribute`, data, { params: { profile } })
@@ -237,6 +255,26 @@ export const ontologyApi = {
         min_facts: opts?.minFacts ?? null,
       })
       .then((r) => r.data as OntologyAskResult),
+
+  /** 通用实例 Excel 批量导入（表头=属性名或属性的中文说明）；默认只预演 */
+  importInstances: (
+    file: File,
+    opts: { entityType: string; kbId?: number; profile?: string; dryRun: boolean },
+  ) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api
+      .post('/admin/ontology/instances/import', form, {
+        params: {
+          entity_type: opts.entityType,
+          kb_id: opts.kbId ?? 0,
+          profile: opts.profile,
+          dry_run: opts.dryRun,
+        },
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      .then((r) => r.data as InstanceImportResult)
+  },
 
   // —— 参数表导入（默认只预演）——
   importParams: (file: File, opts: { dryRun: boolean; kbId?: number; profile?: string }) => {

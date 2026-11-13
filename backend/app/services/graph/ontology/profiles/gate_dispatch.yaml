@@ -1,0 +1,51 @@
+# ============================================================
+# 空白图谱库（TBox）
+# ------------------------------------------------------------
+# 只保留最基本的「参数」类型，其余按需要在「本体管理」里加。
+# 具体取值不是本体，是数据（实例），不要写在这里。
+# ============================================================
+version: 1
+profile_id: gate_dispatch
+display_name: 水闸调度本体
+description:
+domain: generic
+
+entity_types:
+  - name: gate
+    display_name: 水闸
+    uid_prefix: gt
+    scope: local
+    attributes:
+      - name: design_flow
+        type: number
+        required: true
+      - name: gate_type
+        type: enum
+        values:
+          - 平板闸/弧形闸/人字闸
+        required: true
+      - name: open_height_m
+        type: number
+      - name: note
+        type: text
+  - name: river_section
+    display_name: 河道断面
+    uid_prefix: rs
+    scope: global
+  - name: manage_station
+    display_name: 管理所
+    uid_prefix: ms
+    scope: local
+relation_types:
+  - name: LOCATED_IN
+    display_name: 位于
+    source: gate
+    target: river_section
+  - name: RESPONSIBLE
+    display_name: 管辖
+    source: manage_station
+    target: gate
+  - name: UPSTREAM_OF
+    display_name: 上游接
+    source: river_section
+    target: river_section

@@ -456,3 +456,18 @@ export interface ExtractRunResult {
     evidence: Record<string, unknown> | null
   }[]
 }
+
+/** 实例 Excel 批量导入的结果（dry_run=true 时只有预览）。 */
+export interface InstanceImportResult {
+  entity_type: string
+  dry_run: boolean
+  total: number
+  valid: number
+  rejected: number
+  mapped: Record<string, string>
+  skipped_headers: string[]
+  errors: { row_no: number; name?: string; message: string }[]
+  rows?: { row_no: number; name: string; props: Record<string, unknown>; error: string | null }[]
+  created?: number
+  updated?: number
+}

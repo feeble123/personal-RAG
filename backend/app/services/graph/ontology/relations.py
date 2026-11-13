@@ -240,3 +240,62 @@ async def sync_to_graph(rows: Iterable[OntologyRelation], store: Any) -> int:
     if not hit:
         return 0
     return len(edges)
+
+
+# ---------------- 方向纠正（改 TBox 定义后修已有边）----------------
+
+
+async def find_reversed_edges(
+    session: AsyncSession,
+    *,
+    profile_id: str,
+    predicate: str,
+    source_type: str,
+    target_type: str,
+) -> list[OntologyRelation]:
+    """找出方向和新定义**相反**的边：主语是新的宾语类型、宾语是新的主语类型。
+
+    场景：把「水闸 —管辖→ 管理所」改成「管理所 —管辖→ 水闸」后，
+    已有边还是老方向。TBox 只管约束，不会回头改数据，所以必须显式找出来。
+    """
+    from app.db.models import OntologyInstance
+
+    rows = list(
+        (
+            await session.scalars(
+                select(OntologyRelation).where(
+                    OntologyRelation.profile_id == profile_id,
+                    OntologyRelation.predicate == predicate,
+                )
+            )
+        ).all()
+    )
+    if not rows:
+        return []
+    uids = {r.subject_uid for r in rows} | {r.object_uid for r in rows}
+    types = {
+        inst.uid: inst.entity_type
+        for inst in (
+            await session.scalars(
+                select(OntologyInstance).where(OntologyInstance.uid.in_(uids))
+            )
+        ).all()
+    }
+    return [
+        r
+        for r in rows
+        if types.get(r.subject_uid) == target_type and types.get(r.object_uid) == source_type
+    ]
+
+
+async def swap_endpoints(
+    session: AsyncSession, rows: Iterable[OntologyRelation]
+) -> int:
+    """把若干条边的两端对调（改完方向后的一次性修正）。"""
+    count = 0
+    for row in rows:
+        row.subject_uid, row.object_uid = row.object_uid, row.subject_uid
+        count += 1
+    if count:
+        await session.commit()
+    return count

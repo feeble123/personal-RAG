@@ -188,6 +188,15 @@ class AttributeIn(BaseModel):
     values: list[str] = Field(default_factory=list, description="enum 类型的可选值")
     required: bool = False
     description: str = Field("", max_length=200)
+    # —— 自动抽取规则（F4）——
+    extract_pattern: str = Field(
+        "", max_length=300,
+        description="正则；可写 {name} 表示实例名。留空表示这个属性不参与自动抽取",
+    )
+    extract_unit: str = Field("", max_length=20)
+    extract_map: dict[str, str] = Field(
+        default_factory=dict, description="原文写法 → 枚举值，如 {敏感: 高}"
+    )
 
 
 class RelationTypeIn(BaseModel):

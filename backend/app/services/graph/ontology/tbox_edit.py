@@ -61,6 +61,8 @@ class AttributeInput:
     values: tuple[str, ...] = ()
     required: bool = False
     description: str = ""
+    # 自动抽取规则：{pattern, unit, map}；None = 不参与自动抽取
+    extract: dict[str, Any] | None = None
 
 
 # ---------------- YAML 读写 ----------------
@@ -304,6 +306,10 @@ def upsert_attribute(profile_id: str, entity_name: str, payload: AttributeInput)
         existing["description"] = payload.description
     elif "description" in existing:
         del existing["description"]
+    if payload.extract:
+        existing["extract"] = dict(payload.extract)
+    elif "extract" in existing:
+        del existing["extract"]
 
     _commit(profile_id, path, doc)
     return get_registry(profile_id).to_dict()
