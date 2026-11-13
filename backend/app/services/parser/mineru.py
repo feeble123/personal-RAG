@@ -88,16 +88,25 @@ def mineru_available() -> bool:
 
 
 def _models_snapshot_dir() -> Path | None:
-    """定位模型快照目录（snapshots/master）。优先配置项，其次 data/mineru_models 约定路径。"""
+    """定位模型快照目录（snapshots/master）。优先配置项，其次 data/mineru_models 约定路径。
+
+    注意路径语义（实测 MinerU 3.4.4）：它的 ModelPath 常量**自带 "models/" 前缀**
+    （如 `models/MFR/unimernet_hf_small_2503`），所以配置给 MinerU 的 models-dir
+    必须是**快照根目录**。再往里拼一层 models 会变成 `.../models/models/MFR/...`。
+    """
     if settings.mineru_model_dir:
         p = Path(settings.mineru_model_dir)
-        # 若直接指向快照目录（含 models/ 子结构）则用之；否则尝试拼接
+        # 已经是快照根目录（下面直接就是 models/MFR、models/Layout）→ 原样返回
+        if (p / "models" / "MFR").is_dir() or (p / "models" / "Layout").is_dir():
+            return p
+        # 旧布局：给的是包含 models/ 的父目录
         if (p / "models").exists():
-            p = p / "models"
+            return p / "models"
         return p
-    # 默认：backend/data/mineru_models/modelscope/models/OpenDataLab--PDF-Extract-Kit-1.0/snapshots/master
+    # 默认：data/mineru_models 下按 MinerU 下载器的目录结构自动定位快照
     base = settings.data_dir / "mineru_models"
     candidates = [
+        base / "models" / "OpenDataLab--PDF-Extract-Kit-1.0" / "snapshots" / "master",
         base / "modelscope" / "models" / "OpenDataLab--PDF-Extract-Kit-1.0" / "snapshots" / "master",
     ]
     for c in candidates:
