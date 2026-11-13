@@ -115,6 +115,15 @@ def apply_changes(
     return changed
 
 
+def dedupe_evidence(items: Iterable[Any]) -> list[Any]:
+    """按来源去重（保留首次出现）。
+
+    和 `merge_evidence` 的区别：那个只管「新来的别重复」，不会清理已有列表里的重复。
+    历史数据修复（用户实测：改两次实例证据变 3 条）和写入时自愈都需要这个。
+    """
+    return merge_evidence([], items)
+
+
 async def delete_instance(session: AsyncSession, row: OntologyInstance) -> None:
     await session.delete(row)
 

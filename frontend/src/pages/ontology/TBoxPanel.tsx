@@ -387,8 +387,8 @@ export default function TBoxPanel({ types, profileId }: Props) {
                         <Space size={0}>
                           <Button
                             size="small"
-                            type="text"
-                            icon={<EditOutlined />}
+                            type="link"
+                            style={{ paddingInline: 4 }}
                             onClick={() => {
                               attrForm.setFieldsValue({
                                 name: attr.name,
@@ -406,7 +406,9 @@ export default function TBoxPanel({ types, profileId }: Props) {
                               })
                               setAttrModal({ open: true, entity: row, attr })
                             }}
-                          />
+                          >
+                            编辑
+                          </Button>
                           <Popconfirm
                             title="删除这个属性？"
                             description="已有实例里这个字段的数据会保留，但表单不再显示。"
@@ -652,8 +654,19 @@ export default function TBoxPanel({ types, profileId }: Props) {
               rules={[{ required: true, message: '枚举必须给出可选值' }]}
               getValueProps={(v?: string[]) => ({ value: v ?? [] })}
             >
-              <Select mode="tags" placeholder="输入后回车，如：红 / 橙 / 黄" tokenSeparators={[',', '，']} />
+              <Select
+                mode="tags"
+                placeholder="一个选项输完按回车；也可以直接粘「平板闸/弧形闸/人字闸」"
+                // 斜杠、顿号、分号都当分隔符——用户就是会这么写，吞成一整个选项是 bug
+                tokenSeparators={[',', '，', '/', '、', ';', '；']}
+              />
             </Form.Item>
+          )}
+          {attrType === 'enum' && (
+            <Text type="secondary" style={{ fontSize: 12, marginBottom: 12, display: 'block' }}>
+              将保存为 {(Form.useWatch('values', attrForm) as string[] | undefined)?.length ?? 0}{' '}
+              个选项；实例表单里是**单选**下拉。
+            </Text>
           )}
           <Form.Item name="required" label="必填" valuePropName="checked">
             <Switch />
@@ -664,13 +677,26 @@ export default function TBoxPanel({ types, profileId }: Props) {
 
           <Card size="small" title="自动抽取规则（可选）" style={{ marginBottom: 12 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              配了规则，程序才会去知识库里找这个字段的值；抽到的结果进「自动抽取」待审区，你确认后才写进实例。
+              配了规则，程序才知道怎么去知识库里找这个字段的值。不配 = 不参与自动抽取（手填就够的话不用管）。
+              抽到的结果进「自动抽取」tab 的待审区，你点接受才写进实例。
             </Text>
+            <Form.Item label="不会写正则？选一个常用写法" style={{ marginTop: 8, marginBottom: 8 }}>
+              <Select
+                allowClear
+                placeholder="选一个模板，下面会自动填好"
+                options={[
+                  { value: '{name}\\s*[:：=＝]\\s*(\\S{1,20})', label: '「名称：值」式（冒号/等号后面）' },
+                  { value: '{name}\\s*\\|\\s*(\\S{1,20})', label: '表格行（竖线分隔，如 KC | 流域蒸散发折算系数 | 敏感）' },
+                  { value: '{name}[^0-9]{0,10}([0-9]+(?:\\.[0-9]+)?)', label: '名称后面紧跟一个数字（取值/流量等）' },
+                  { value: '{name}[^。]{0,12}?为\\s*(\\S{1,20})', label: '「…为 XXX」式（中文叙述）' },
+                ]}
+                onChange={(v) => v && attrForm.setFieldsValue({ extract_pattern: v })}
+              />
+            </Form.Item>
             <Form.Item
               name="extract_pattern"
               label="正则"
               tooltip="{name} 会替换成实例名，所以一条规则能复用给所有实例"
-              style={{ marginTop: 8 }}
             >
               <Input placeholder="如：安全泄量[^0-9]{0,10}([0-9]+(?:\.[0-9]+)?)" maxLength={300} />
             </Form.Item>

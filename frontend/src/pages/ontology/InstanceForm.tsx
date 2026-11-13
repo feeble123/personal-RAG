@@ -76,24 +76,34 @@ export default function InstanceForm({
       const value = values[attr.name]
       if (value !== undefined && value !== null && value !== '') props[attr.name] = value
     }
-    const evidence =
+    // 只在「依据」三格被真正改动过时才生成新证据。
+    // 之前这里每次都把表单里预填的旧证据再追加一遍，改两次实例证据就变成 3 条（用户实测）。
+    const draft =
       values.__evidence_note || values.__evidence_doc
-        ? [
-            {
-              type: values.__evidence_type || '人工录入',
-              note: values.__evidence_note || '',
-              doc_name: values.__evidence_doc || undefined,
-              page: values.__evidence_page ?? undefined,
-              traceable: false,
-              resolved_by: 'none',
-            },
-          ]
-        : []
+        ? {
+            type: values.__evidence_type || '人工录入',
+            note: values.__evidence_note || '',
+            doc_name: values.__evidence_doc || undefined,
+            page: values.__evidence_page ?? undefined,
+            traceable: false,
+            resolved_by: 'none',
+          }
+        : null
+    const existing = initial?.evidence ?? []
+    const dup = draft
+      ? existing.some(
+          (e) =>
+            (e.type ?? '') === draft.type &&
+            (e.note ?? '') === draft.note &&
+            (e.doc_name ?? '') === (draft.doc_name ?? '') &&
+            (e.page ?? null) === (draft.page ?? null),
+        )
+      : true
     onSubmit({
       entity_type: values.entity_type,
       name: values.name,
       props,
-      evidence: isEdit ? [...(initial?.evidence ?? []), ...evidence] : evidence,
+      evidence: draft && !dup ? [...existing, draft] : existing,
     })
   }
 

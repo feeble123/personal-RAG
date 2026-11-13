@@ -22,7 +22,9 @@ entity_types:
       - name: gate_type
         type: enum
         values:
-          - 平板闸/弧形闸/人字闸
+          - 平板闸
+          - 弧形闸
+          - 人字闸
         required: true
       - name: open_height_m
         type: number

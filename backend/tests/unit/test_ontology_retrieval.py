@@ -215,3 +215,27 @@ class TestDegradation:
             "question", "facts", "entities", "evidence",
             "fallback_used", "sources", "latency_ms", "notes",
         }
+
+
+class TestEvidenceDedupe:
+    """证据并集语义的历史坑：改实例时把旧证据又追加一遍，改两次就变 3 条。"""
+
+    def test_dedupe_evidence_清理已有重复(self):
+        from app.services.graph.ontology.instances import dedupe_evidence
+
+        item = {"note": "2024年工程台账", "type": "人工录入"}
+        assert dedupe_evidence([item, dict(item), dict(item)]) == [item]
+
+    def test_dedupe_evidence_不同来源并列保留(self):
+        from app.services.graph.ontology.instances import dedupe_evidence
+
+        a = {"note": "手册", "type": "手册"}
+        b = {"note": "教材", "type": "教材"}
+        assert dedupe_evidence([a, b, dict(a)]) == [a, b]
+
+    def test_merge_evidence_不会清理旧列表(self):
+        """merge_evidence 只管新来的别重复——这正是历史数据需要单独脚本清理的原因。"""
+        from app.services.graph.ontology.instances import merge_evidence
+
+        item = {"note": "x", "type": "人工录入"}
+        assert len(merge_evidence([item, dict(item)], [])) == 2

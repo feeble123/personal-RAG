@@ -1074,7 +1074,13 @@ async def patch_instance(
         row,
         props=payload.props,
         ranges=payload.ranges,
-        evidence=payload.evidence,
+        # 证据是**并集**语义：前端重复提交同一份说明（比如只是改了别的字段）不会越堆越多，
+        # 也不会覆盖人工写的证据。用户实测过：改两次实例，证据列变成 3 条。
+        evidence=(
+            inst_mod.dedupe_evidence([*(row.evidence or []), *payload.evidence])
+            if payload.evidence is not None
+            else None
+        ),
         status=payload.status,
         source=payload.source,
     )
