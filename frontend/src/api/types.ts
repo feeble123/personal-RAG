@@ -420,3 +420,37 @@ export interface OntologyAskResult {
   latency_ms: number
   notes: string[]
 }
+
+/** 自动抽取的一条待审提案（F4）。 */
+export interface OntologyProposalItem {
+  id: number
+  profile_id: string
+  instance_uid: string
+  instance_name: string
+  entity_type: string
+  attribute: string
+  value: unknown
+  method: 'rule' | 'llm' | string
+  confidence: number
+  evidence: Record<string, unknown> | null
+  status: string
+  created_at: string | null
+}
+
+/** 一次抽取运行的结果统计。 */
+export interface ExtractRunResult {
+  profile_id: string
+  rule_hits: number
+  llm_hits: number
+  saved: number
+  dry_run: boolean
+  proposals: {
+    instance_uid: string
+    entity_type: string
+    attribute: string
+    value: unknown
+    method: string
+    confidence: number
+    evidence: Record<string, unknown> | null
+  }[]
+}

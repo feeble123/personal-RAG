@@ -21,14 +21,18 @@ entity_types:
     scope: local          # 水库/大坝按项目（知识库）隔离
     attributes:
       - {name: category, type: string}
-      - {name: safe_discharge_m3s, type: number}
+      # extract = 自动抽取规则（F4）：程序拿这个正则去知识库切片里找值，
+      # 抽到的结果先进「待审区」，人工点接受才写进实例。
+      - {name: safe_discharge_m3s, type: number,
+         extract: {pattern: '安全泄量[^0-9]{0,10}([0-9]+(?:\.[0-9]+)?)', unit: m³/s}}
 
   - name: river
     display_name: 河流河段
     uid_prefix: rv
     scope: global         # 河段是客观地理对象，跨库共享
     attributes:
-      - {name: safe_discharge_m3s, type: number}
+      - {name: safe_discharge_m3s, type: number,
+         extract: {pattern: '安全泄量[^0-9]{0,10}([0-9]+(?:\.[0-9]+)?)', unit: m³/s}}
 
   - name: admin_region
     display_name: 行政区

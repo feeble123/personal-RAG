@@ -1,6 +1,6 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
-import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
+import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -128,6 +128,18 @@ export const ontologyApi = {
   updateRelation: (id: number, data: Record<string, unknown>) =>
     api.patch(`/admin/ontology/relations/${id}`, data).then((r) => r.data as OntologyRelation),
   deleteRelation: (id: number) => api.delete(`/admin/ontology/relations/${id}`),
+
+  // —— 自动抽取（F4）：规则先跑 → LLM 补漏 → 结果进待审区，人工确认才落实例 ——
+  extractRun: (data: { profile_id?: string; kb_id?: number | null; use_llm?: boolean; dry_run?: boolean }) =>
+    api.post('/admin/ontology/extract/run', data).then((r) => r.data as ExtractRunResult),
+  proposals: (params?: { profile?: string; status?: string; limit?: number }) =>
+    api.get('/admin/ontology/proposals', { params }).then((r) => r.data as OntologyProposalItem[]),
+  acceptProposal: (id: number) =>
+    api.post(`/admin/ontology/proposals/${id}/accept`).then((r) => r.data),
+  acceptProposals: (ids: number[]) =>
+    api.post('/admin/ontology/proposals/accept', { ids }).then((r) => r.data),
+  rejectProposal: (id: number) =>
+    api.post(`/admin/ontology/proposals/${id}/reject`).then((r) => r.data),
 
   // —— TBox 在线编辑（F3）：改的是图谱库的「图纸」，写回 YAML ——
   upsertEntityType: (

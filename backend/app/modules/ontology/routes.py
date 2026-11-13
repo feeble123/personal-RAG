@@ -27,23 +27,28 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import AdminUser, DbSession, get_client_ip, verify_external_api_key
 from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
+from app.core.time import utcnow
 from app.modules.ontology.schemas import (
     AskIn,
     AttributeIn,
     CardOut,
     EntityTypeIn,
+    ExtractRunIn,
     ImportResult,
     InstanceCreate,
     InstanceOut,
     InstancePatch,
     LibraryCreate,
     LibraryOut,
+    ProposalAcceptIn,
+    ProposalOut,
     RelationCreate,
     RelationOut,
     RelationPatch,
@@ -55,6 +60,7 @@ from app.services.graph.ontology import instances as inst_mod
 from app.services.graph.ontology import libraries as lib_mod
 from app.services.graph.ontology import queries
 from app.services.graph.ontology import excel_schema
+from app.services.graph.ontology import extraction
 from app.services.graph.ontology import relations as rel_mod
 from app.services.graph.ontology import tbox_edit
 from app.services.graph.ontology.params import load_prior_excel, resolve_evidence
@@ -152,6 +158,177 @@ async def reload_profile(
         entity_types=len(reg.entity_types),
         relation_types=len(reg.relation_types),
     )
+
+
+# ---------------- 自动抽取（F4）：规则先跑 → LLM 补漏 → 人工确认 ----
+
+
+async def _proposal_out(db: AsyncSession, rows: list) -> list[ProposalOut]:
+    """补上实例中文名——审核列表上光看 uid 没法判断。"""
+    from app.db.models import OntologyInstance
+
+    uids = {r.instance_uid for r in rows}
+    names: dict[str, str] = {}
+    if uids:
+        for inst in (
+            await db.scalars(select(OntologyInstance).where(OntologyInstance.uid.in_(uids)))
+        ).all():
+            names[inst.uid] = str((inst.props or {}).get("display_zh") or inst.name)
+    return [
+        ProposalOut(
+            id=r.id,
+            profile_id=r.profile_id,
+            instance_uid=r.instance_uid,
+            instance_name=names.get(r.instance_uid, r.instance_uid),
+            entity_type=r.entity_type,
+            attribute=r.attribute,
+            value=r.value,
+            method=r.method,
+            confidence=float(r.confidence or 0),
+            evidence=r.evidence,
+            status=r.status,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/extract/run")
+async def run_extraction(
+    payload: ExtractRunIn, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    """扫知识库，给实例找属性值，结果进待审区（不直接改实例）。"""
+    reg = _registry(payload.profile_id)
+
+    proposals = await extraction.run_rule_extraction(db, reg, kb_id=payload.kb_id)
+    rule_hits = {(p.instance_uid, p.attribute) for p in proposals}
+    llm_hits = 0
+    if payload.use_llm:
+        llm = await extraction.run_llm_extraction(
+            db, reg, kb_id=payload.kb_id, skip=rule_hits
+        )
+        llm_hits = len(llm)
+        proposals.extend(llm)
+
+    saved = 0 if payload.dry_run else await extraction.save_proposals(db, reg.profile_id, proposals)
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.extract.run",
+        target_type="ontology_profile",
+        target_id=reg.profile_id,
+        detail=f"kb={payload.kb_id} 规则 {len(rule_hits)} / LLM {llm_hits} / 新入库 {saved}",
+        client_ip=await get_client_ip(request),
+    )
+    return {
+        "profile_id": reg.profile_id,
+        "rule_hits": len(rule_hits),
+        "llm_hits": llm_hits,
+        "saved": saved,
+        "dry_run": payload.dry_run,
+        "proposals": [
+            {
+                "instance_uid": p.instance_uid,
+                "entity_type": p.entity_type,
+                "attribute": p.attribute,
+                "value": p.value,
+                "method": p.method,
+                "confidence": p.confidence,
+                "evidence": p.evidence,
+            }
+            for p in proposals[:200]
+        ],
+    }
+
+
+@router.get("/proposals", response_model=list[ProposalOut])
+async def list_proposals(
+    db: DbSession,
+    _admin: AdminUser,
+    profile: str | None = Query(None),
+    status: str = Query("pending", pattern="^(pending|accepted|rejected|all)$"),
+    limit: int = Query(200, ge=1, le=1000),
+) -> list[ProposalOut]:
+    from app.db.models import OntologyProposal
+
+    reg = _registry(profile)
+    stmt = select(OntologyProposal).where(OntologyProposal.profile_id == reg.profile_id)
+    if status != "all":
+        stmt = stmt.where(OntologyProposal.status == status)
+    rows = (await db.scalars(stmt.order_by(OntologyProposal.id.desc()).limit(limit))).all()
+    return await _proposal_out(db, list(rows))
+
+
+async def _review(
+    db: AsyncSession, ids: list[int], *, accept: bool
+) -> dict:
+    from app.db.models import OntologyProposal
+
+    rows = (await db.scalars(select(OntologyProposal).where(OntologyProposal.id.in_(ids)))).all()
+    done, missing = 0, 0
+    touched_nodes: list = []
+    for row in rows:
+        if row.status != "pending":
+            continue
+        if accept:
+            ok = await extraction.accept_proposal(db, row)
+            if not ok:
+                missing += 1  # 实例已被删掉：提案失去意义，直接标记
+            else:
+                from app.services.graph.ontology import instances as inst_mod
+
+                inst = await inst_mod.get_instance_by_uid(db, row.instance_uid)
+                if inst is not None:
+                    touched_nodes.append(inst_mod.to_node(inst))
+        row.status = "accepted" if accept else "rejected"
+        row.reviewed_at = utcnow()
+        done += 1
+    await db.commit()
+    if touched_nodes:
+        await _sync_graph(nodes=touched_nodes)
+    return {"reviewed": done, "skipped": len(ids) - done, "missing_instance": missing}
+
+
+@router.post("/proposals/{proposal_id}/accept")
+async def accept_proposal(
+    proposal_id: int, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    result = await _review(db, [proposal_id], accept=True)
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.proposal.accept",
+        target_type="ontology_proposal", target_id=str(proposal_id),
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.post("/proposals/accept")
+async def accept_proposals(
+    payload: ProposalAcceptIn, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    result = await _review(db, payload.ids, accept=True)
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.proposal.accept_batch",
+        target_type="ontology_proposal", target_id=f"{len(payload.ids)} 条",
+        client_ip=await get_client_ip(request),
+    )
+    return result
+
+
+@router.post("/proposals/{proposal_id}/reject")
+async def reject_proposal(
+    proposal_id: int, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    result = await _review(db, [proposal_id], accept=False)
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.proposal.reject",
+        target_type="ontology_proposal", target_id=str(proposal_id),
+        client_ip=await get_client_ip(request),
+    )
+    return result
 
 
 # ---------------- 图谱库（一个库 = 一份 TBox + 属于它的实例/关系）----

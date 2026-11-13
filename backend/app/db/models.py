@@ -697,3 +697,43 @@ class OntologyRelation(Base):
         ),
         Index("ix_ontology_relations_profile_pred", "profile_id", "predicate"),
     )
+
+
+class OntologyProposal(Base):
+    """自动抽取的待审提案（F4）。
+
+    为什么要有暂存区而不是直接写进实例：机器抽出来的值和人工整理的值混在一起后，
+    事后根本分不清哪条是查证过的、哪条是猜的。这里让"机器猜的"先落到待审列表，
+    人点「接受」才写进实例属性并附上证据——**证据只增不减**的承诺才不会破。
+
+    dedupe_key = sha1(profile|instance|attribute|value)：同一条结论反复跑不会堆一堆重复项。
+    """
+
+    __tablename__ = "ontology_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    instance_uid: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    attribute: Mapped[str] = mapped_column(String(60), nullable=False)
+    value: Mapped[Any] = mapped_column(JSONType, nullable=False)
+    # rule（TBox 正则）/ llm（大模型抽取）
+    method: Mapped[str] = mapped_column(
+        String(10), default="rule", server_default="rule", nullable=False
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=0.0, server_default="0", nullable=False)
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # pending（待审）/ accepted（已写入实例）/ rejected（已驳回）
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending", index=True, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("profile_id", "dedupe_key", name="uq_ontology_proposal_dedupe"),
+        Index("ix_ontology_proposals_profile_status", "profile_id", "status"),
+    )

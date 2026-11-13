@@ -41,6 +41,7 @@ import { errMsg } from '@/api/client'
 import { ontologyApi } from '@/api/modules'
 import { useOntologyLibrary } from '@/stores/ontologyLibrary'
 import TBoxPanel from './ontology/TBoxPanel'
+import ExtractionPanel from './ontology/ExtractionPanel'
 import type {
   OntologyImportResult,
   OntologyInstance,
@@ -396,6 +397,11 @@ export default function OntologyManager() {
               key: 'schema',
               label: `本体结构（${entityTypes.length}）`,
               children: <TBoxPanel types={typesQuery.data} profileId={profileId} />,
+            },
+            {
+              key: 'extract',
+              label: '自动抽取',
+              children: <ExtractionPanel profileId={profileId} />,
             },
             {
               key: 'relations',

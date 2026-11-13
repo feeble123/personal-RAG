@@ -44,6 +44,8 @@ class AttributeDef:
     required: bool = False
     values: tuple[str, ...] = ()
     description: str = ""
+    # 自动抽取规则（F4）：{pattern/unit} —— 有它才会去知识库里找这个属性的值
+    extract: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out = {"name": self.name, "type": self.type, "required": self.required}
@@ -51,6 +53,8 @@ class AttributeDef:
             out["values"] = list(self.values)
         if self.description:
             out["description"] = self.description
+        if self.extract:
+            out["extract"] = dict(self.extract)
         return out
 
 
@@ -275,12 +279,18 @@ def _parse_entities(raw: Any, path: Path) -> dict[str, EntityTypeDef]:
                 raise ProfileError(f"{a_where} 是 enum 但没给 values")
             if a_name in attributes:
                 raise ProfileError(f"{a_where}.name 重复：{a_name}")
+            extract = attr.get("extract")
+            if extract is not None and not isinstance(extract, dict):
+                raise ProfileError(f"{a_where}.extract 必须是映射（pattern / unit）")
+            if isinstance(extract, dict) and not extract.get("pattern"):
+                raise ProfileError(f"{a_where}.extract 缺少 pattern（正则）")
             attributes[a_name] = AttributeDef(
                 name=a_name,
                 type=a_type,
                 required=bool(attr.get("required", False)),
                 values=values,
                 description=str(attr.get("description") or ""),
+                extract=dict(extract) if isinstance(extract, dict) else None,
             )
 
         out[name] = EntityTypeDef(

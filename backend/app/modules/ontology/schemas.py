@@ -200,3 +200,31 @@ class RelationTypeIn(BaseModel):
     target: str = Field(..., min_length=1, max_length=40, description="宾语实体类型")
     target_types: list[str] = Field(default_factory=list, description="允许的宾语类型（可多选，空=只用 target）")
     description: str = Field("", max_length=200)
+
+
+# ---------------- 自动抽取（F4）----------------
+
+class ExtractRunIn(BaseModel):
+    profile_id: str | None = None
+    kb_id: int | None = Field(None, description="限定知识库；缺省跨全库")
+    use_llm: bool = Field(False, description="规则抽不到的再交给大模型（慢、费 token）")
+    dry_run: bool = Field(False, description="只返回结果，不写待审区")
+
+
+class ProposalOut(BaseModel):
+    id: int
+    profile_id: str
+    instance_uid: str
+    instance_name: str = ""
+    entity_type: str
+    attribute: str
+    value: Any
+    method: str
+    confidence: float
+    evidence: dict[str, Any] | None = None
+    status: str
+    created_at: datetime | None = None
+
+
+class ProposalAcceptIn(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=200)

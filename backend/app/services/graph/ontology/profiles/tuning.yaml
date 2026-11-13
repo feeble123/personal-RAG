@@ -30,7 +30,14 @@ entity_types:
       - {name: range_low, type: number, description: "通用先验下限（可空，待确认）"}
       - {name: range_high, type: number, description: "通用先验上限（可空，待确认）"}
       - {name: initial, type: number, description: "建议初值（可空，待确认）"}
-      - {name: sensitivity, type: enum, values: [高, 中, 低]}
+      # extract = 自动抽取规则（F4）。教材表5.2 是表格版式：
+      #   KC | 流域蒸散发折算系数 | 敏感 | 10~20
+      # `{name}` 运行时替换成实例名（流域蒸散发折算系数），所以一条规则能复用给所有参数。
+      # 原文写「敏感/不敏感」，枚举值是「高/低」，用 map 翻译；
+      # 抽出来的结果先进待审区，人工确认后才写进实例。
+      - {name: sensitivity, type: enum, values: [高, 中, 低],
+         extract: {pattern: '{name}\s*\|\s*(敏感|不敏感)',
+                   map: {敏感: 高, 不敏感: 低}}}
       - {name: note, type: text}
 
   # ---------- 流域 ----------
