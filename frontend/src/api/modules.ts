@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
+import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -148,10 +148,24 @@ export const ontologyApi = {
   // —— 自动抽取（F4）：规则先跑 → LLM 补漏 → 结果进待审区，人工确认才落实例 ——
   extractRun: (data: { profile_id?: string; kb_id?: number | null; use_llm?: boolean; dry_run?: boolean }) =>
     api.post('/admin/ontology/extract/run', data).then((r) => r.data as ExtractRunResult),
-  proposals: (params?: { profile?: string; status?: string; limit?: number }) =>
+  /** 证据锚定（P2）：给已有实例找原文出处，不改值 */
+  anchorRun: (data: {
+    profile_id?: string
+    kb_id?: number | null
+    instance_uids?: string[]
+    max_instances?: number
+    top_k?: number
+    dry_run?: boolean
+  }) => api.post('/admin/ontology/anchor/run', data).then((r) => r.data as AnchorRunResult),
+  proposals: (params?: { profile?: string; status?: string; method?: string; limit?: number }) =>
     api.get('/admin/ontology/proposals', { params }).then((r) => r.data as OntologyProposalItem[]),
-  acceptProposal: (id: number) =>
-    api.post(`/admin/ontology/proposals/${id}/accept`).then((r) => r.data),
+  acceptProposal: (id: number, adoptValue = false) =>
+    api
+      .post(`/admin/ontology/proposals/${id}/accept`, null, {
+        // 锚定提案默认只挂证据；adoptValue=true 才把原文里的值写进实例
+        params: adoptValue ? { adopt_value: true } : undefined,
+      })
+      .then((r) => r.data),
   acceptProposals: (ids: number[]) =>
     api.post('/admin/ontology/proposals/accept', { ids }).then((r) => r.data),
   rejectProposal: (id: number) =>

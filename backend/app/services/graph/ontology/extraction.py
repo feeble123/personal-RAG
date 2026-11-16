@@ -344,20 +344,41 @@ async def save_proposals(
 # ---------------- 审核：接受 / 驳回 ----------------
 
 
-async def accept_proposal(db: AsyncSession, proposal: OntologyProposal) -> bool:
-    """把提案写进实例属性 + 追加证据。返回是否写入成功（实例已不存在则 False）。
+async def accept_proposal(
+    db: AsyncSession, proposal: OntologyProposal, *, adopt_value: bool = False
+) -> bool:
+    """把提案写进实例。返回是否写入成功（实例已不存在则 False）。
+
+    分两种提案：
+
+    - **抽取**（rule / llm）：写值 + 附证据；
+    - **锚定**（anchor，P2）：**默认只附证据，一个字都不改值**——实例值是人按
+      业务链条梳理的；只有用户点「采用原文值」（`adopt_value=True`）才连值一起写。
 
     证据是**并集**语义：同一条原文重复接受不会堆重复项，也不会覆盖人工写的证据。
     """
+    from app.services.graph.ontology import anchoring
     from app.services.graph.ontology import instances as inst_mod
 
     row = await inst_mod.get_instance_by_uid(db, proposal.instance_uid)
     if row is None:
         return False
-    props = dict(row.props or {})
-    props[proposal.attribute] = proposal.value
-    evidence = inst_mod.merge_evidence(row.evidence or [], [proposal.evidence])
-    inst_mod.apply_changes(row, props=props, evidence=evidence, source="extracted")
+
+    is_anchor = proposal.method == anchoring.METHOD_ANCHOR
+    write_value = (not is_anchor) or adopt_value
+    new_props: dict[str, Any] | None = None
+    if write_value and proposal.attribute and proposal.value not in (None, ""):
+        new_props = {**dict(row.props or {}), proposal.attribute: proposal.value}
+
+    incoming = [proposal.evidence] if proposal.evidence else []
+    evidence = inst_mod.merge_evidence(row.evidence or [], incoming)
+    inst_mod.apply_changes(
+        row,
+        props=new_props,
+        evidence=evidence,
+        # 只有真改了值才算「从文档抽取」；单纯挂证据不动来源
+        source="extracted" if new_props else None,
+    )
     await db.commit()
     await db.refresh(row)
     return True

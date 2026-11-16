@@ -493,7 +493,7 @@ export default function OntologyManager() {
             },
             {
               key: 'extract',
-              label: '自动抽取',
+              label: '抽值 / 找依据',
               children: <ExtractionPanel profileId={profileId} />,
             },
             {

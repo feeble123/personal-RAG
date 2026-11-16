@@ -437,11 +437,35 @@ export interface OntologyProposalItem {
   entity_type: string
   attribute: string
   value: unknown
-  method: 'rule' | 'llm' | string
+  /** 实例当前这个字段的值：和提案值并排看，冲突一眼可见（P2） */
+  current_value: unknown
+  /** rule / llm = 抽值；anchor = 只找证据（P2） */
+  method: 'rule' | 'llm' | 'anchor' | string
   confidence: number
   evidence: Record<string, unknown> | null
   status: string
   created_at: string | null
+}
+
+/** 一次证据锚定的结果统计（P2）。 */
+export interface AnchorRunResult {
+  profile_id: string
+  dry_run: boolean
+  saved: number
+  scanned: number
+  with_candidates: number
+  proposed: number
+  rejected: number
+  reject_reasons: Record<string, number>
+  notes: string[]
+  preview: {
+    instance: string
+    attribute: string
+    value: unknown
+    doc_name: string
+    page: number | null
+    quote: string
+  }[]
 }
 
 /** 一次抽取运行的结果统计。 */

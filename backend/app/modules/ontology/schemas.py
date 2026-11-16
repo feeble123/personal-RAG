@@ -233,6 +233,8 @@ class ProposalOut(BaseModel):
     entity_type: str
     attribute: str
     value: Any
+    # 实例当前这个字段的值：审核时和提案值并排看，冲突一眼可见（P2）
+    current_value: Any = None
     method: str
     confidence: float
     evidence: dict[str, Any] | None = None
@@ -242,3 +244,14 @@ class ProposalOut(BaseModel):
 
 class ProposalAcceptIn(BaseModel):
     ids: list[int] = Field(..., min_length=1, max_length=200)
+
+
+class AnchorRunIn(BaseModel):
+    """P2 证据自动锚定：给已有实例找原文出处（不改值）。"""
+
+    profile_id: str | None = None
+    kb_id: int | None = Field(None, description="只在某个知识库里找；不传 = 全库")
+    instance_uids: list[str] | None = Field(None, description="只锚定这些实例；不传 = 全库实例")
+    max_instances: int = Field(20, ge=1, le=200, description="一次最多锚定多少个实例（花钱的闸）")
+    top_k: int = Field(6, ge=1, le=20, description="每个实例最多看几段候选切片")
+    dry_run: bool = Field(False, description="true = 只预演，不写待审区")

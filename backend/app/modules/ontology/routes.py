@@ -37,6 +37,7 @@ from app.core.exceptions import BizError
 from app.core.ratelimit import limiter
 from app.core.time import utcnow
 from app.modules.ontology.schemas import (
+    AnchorRunIn,
     AskIn,
     AttributeIn,
     CardOut,
@@ -170,16 +171,18 @@ async def reload_profile(
 
 
 async def _proposal_out(db: AsyncSession, rows: list) -> list[ProposalOut]:
-    """补上实例中文名——审核列表上光看 uid 没法判断。"""
+    """补上实例中文名和当前值——审核列表上光看 uid 没法判断，光看提案值也看不出冲突。"""
     from app.db.models import OntologyInstance
 
     uids = {r.instance_uid for r in rows}
     names: dict[str, str] = {}
+    props: dict[str, dict] = {}
     if uids:
         for inst in (
             await db.scalars(select(OntologyInstance).where(OntologyInstance.uid.in_(uids)))
         ).all():
             names[inst.uid] = str((inst.props or {}).get("display_zh") or inst.name)
+            props[inst.uid] = dict(inst.props or {})
     return [
         ProposalOut(
             id=r.id,
@@ -189,6 +192,8 @@ async def _proposal_out(db: AsyncSession, rows: list) -> list[ProposalOut]:
             entity_type=r.entity_type,
             attribute=r.attribute,
             value=r.value,
+            # 锚定提案的 attribute 为空（整条实例），此时没有"当前值"可比
+            current_value=props.get(r.instance_uid, {}).get(r.attribute) if r.attribute else None,
             method=r.method,
             confidence=float(r.confidence or 0),
             evidence=r.evidence,
@@ -247,12 +252,53 @@ async def run_extraction(
     }
 
 
+@router.post("/anchor/run")
+async def run_anchor(
+    payload: AnchorRunIn, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    """给**已有实例**找原文依据（P2）：检索候选切片 → 模型指认 → 逐字校验 → 待审区。
+
+    和 `/extract/run` 的区别：这条**不改值**。实例是人按业务链条梳理的，
+    程序只负责把"库里哪一段支持它"找出来，接不接受由人点。
+    """
+    from app.services.graph.ontology import anchoring
+
+    reg = _registry(payload.profile_id)
+    hits, result = await anchoring.run_anchoring(
+        db,
+        reg,
+        kb_id=payload.kb_id,
+        instance_uids=payload.instance_uids,
+        max_instances=payload.max_instances,
+        top_k=payload.top_k,
+    )
+    saved = 0 if payload.dry_run else await anchoring.save_hits(db, reg.profile_id, hits)
+    if saved:
+        await db.commit()
+
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.anchor.run",
+        target_type="ontology_profile",
+        target_id=reg.profile_id,
+        detail=(
+            f"kb={payload.kb_id} 扫描 {result.scanned} / 通过校验 {result.proposed} "
+            f"/ 拦截 {result.rejected} / 新入库 {saved}"
+        ),
+        client_ip=await get_client_ip(request),
+    )
+    result.saved = saved  # 写进 result 再输出：两边都叫 saved，别让后者把前者盖成 0
+    return {"profile_id": reg.profile_id, "dry_run": payload.dry_run, **result.to_dict()}
+
+
 @router.get("/proposals", response_model=list[ProposalOut])
 async def list_proposals(
     db: DbSession,
     _admin: AdminUser,
     profile: str | None = Query(None),
     status: str = Query("pending", pattern="^(pending|accepted|rejected|all)$"),
+    method: str | None = Query(None, pattern="^(rule|llm|anchor)$", description="只看某类提案"),
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[ProposalOut]:
     from app.db.models import OntologyInstance, OntologyProposal
@@ -261,12 +307,14 @@ async def list_proposals(
     stmt = select(OntologyProposal).where(OntologyProposal.profile_id == reg.profile_id)
     if status != "all":
         stmt = stmt.where(OntologyProposal.status == status)
+    if method:
+        stmt = stmt.where(OntologyProposal.method == method)
     rows = (await db.scalars(stmt.order_by(OntologyProposal.id.desc()).limit(limit))).all()
     return await _proposal_out(db, list(rows))
 
 
 async def _review(
-    db: AsyncSession, ids: list[int], *, accept: bool
+    db: AsyncSession, ids: list[int], *, accept: bool, adopt_value: bool = False
 ) -> dict:
     from app.db.models import OntologyInstance, OntologyProposal
 
@@ -277,7 +325,7 @@ async def _review(
         if row.status != "pending":
             continue
         if accept:
-            ok = await extraction.accept_proposal(db, row)
+            ok = await extraction.accept_proposal(db, row, adopt_value=adopt_value)
             if not ok:
                 missing += 1  # 实例已被删掉：提案失去意义，直接标记
             else:
@@ -297,13 +345,20 @@ async def _review(
 
 @router.post("/proposals/{proposal_id}/accept")
 async def accept_proposal(
-    proposal_id: int, db: DbSession, admin: AdminUser, request: Request
+    proposal_id: int,
+    db: DbSession,
+    admin: AdminUser,
+    request: Request,
+    adopt_value: bool = Query(
+        False, description="锚定提案默认只挂证据；true = 连原文里的值一起写进实例"
+    ),
 ) -> dict:
-    result = await _review(db, [proposal_id], accept=True)
+    result = await _review(db, [proposal_id], accept=True, adopt_value=adopt_value)
     await audit.record_audit(
         actor_id=admin.id, actor_name=admin.username,
         action="ontology.proposal.accept",
         target_type="ontology_proposal", target_id=str(proposal_id),
+        detail="采用原文值" if adopt_value else "",
         client_ip=await get_client_ip(request),
     )
     return result

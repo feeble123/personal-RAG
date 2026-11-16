@@ -16,12 +16,26 @@ BASE = "/api/admin/ontology"
 async def cleanup_instances(_ensure_test_tables):
     """清掉本文件造的测试实例（按名称前缀识别）。"""
     yield
-    from sqlalchemy import delete
+    from sqlalchemy import delete, select
 
-    from app.db.models import OntologyInstance
+    from app.db.models import OntologyInstance, OntologyProposal
     from app.db.session import async_session_factory
 
     async with async_session_factory() as s:
+        # uid 是 `pm:<sha1>`，按名字 like 匹配不到——先取 uid 再删提案
+        uids = [
+            r[0]
+            for r in (
+                await s.execute(
+                    select(OntologyInstance.uid).where(OntologyInstance.name.like("t4%"))
+                )
+            ).all()
+        ]
+        if uids:
+            # 待审区也要清：锚定用例会写提案，留着会污染别的用例对「待审 N 条」的断言
+            await s.execute(
+                delete(OntologyProposal).where(OntologyProposal.instance_uid.in_(uids))
+            )
         await s.execute(delete(OntologyInstance).where(OntologyInstance.name.like("t4%")))
         await s.commit()
 
@@ -172,6 +186,134 @@ class TestEvidenceTraceability:
     async def test_missing_chunk_returns_404(self, client, admin_headers):
         r = await client.get(f"{BASE}/evidence/999999", headers=admin_headers)
         assert r.status_code == 404
+
+
+CHUNK_TEXT = "4.模型参数\n测试参数 自由水蓄水容量 5～50 默认 10\n"
+
+
+class _FakeLLM:
+    """假模型：直接回一段固定 JSON（锚定用例只验证程序侧的闸门）。"""
+
+    def __init__(self, payload: str) -> None:
+        self.payload = payload
+
+    async def ainvoke(self, _messages):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(content=self.payload)
+
+
+class TestEvidenceAnchoring:
+    """P2：给已有实例找原文依据。**不改值**，东西全进待审区。
+
+    用户的口径：实例是人按业务链条梳理的，程序只许指出"哪段原文支持它"，
+    值要不要采用由人另点「采用原文值」。
+    """
+
+    async def _instance(self, client, admin_headers, name="t4_anchor"):
+        r = await client.post(f"{BASE}/instances", headers=admin_headers, json=_instance_payload(name))
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def _stub(self, monkeypatch, items: list[dict]):
+        import json
+        from types import SimpleNamespace
+
+        from app.services.graph.ontology import anchoring
+
+        cand = anchoring.Candidate(
+            chunk_id=901, doc_id=1, doc_name="新安江模型手册.pdf", page=4,
+            section="4.模型参数", content=CHUNK_TEXT,
+        )
+
+        async def fake_candidates(db, query, *, kb_id, top_k=6, doc_ids=None):
+            return [cand]
+
+        monkeypatch.setattr(anchoring, "candidate_chunks", fake_candidates)
+        payload = json.dumps({"items": items}, ensure_ascii=False)
+        monkeypatch.setattr(
+            "app.services.chat.build_chat_model", lambda *a, **kw: _FakeLLM(payload)
+        )
+
+    async def _props(self, client, admin_headers, uid: str) -> dict:
+        r = await client.get(f"{BASE}/instances", headers=admin_headers)
+        row = next(i for i in r.json() if i["uid"] == uid)
+        return row
+
+    async def test_anchor_only_attaches_evidence_unless_adopted(
+        self, client, admin_headers, cleanup_instances, monkeypatch
+    ):
+        inst = await self._instance(client, admin_headers)
+        self._stub(
+            monkeypatch,
+            [
+                # 只是给出处，不改中文名
+                {"chunk": 1, "attribute": "display_zh", "quote": "测试参数 自由水蓄水容量", "value": "自由水蓄水容量"},
+                # 原文里确实写了 5，但实例本来没这个字段
+                {"chunk": 1, "attribute": "range_low", "quote": "测试参数 自由水蓄水容量 5～50 默认 10", "value": 5},
+            ],
+        )
+
+        r = await client.post(
+            f"{BASE}/anchor/run",
+            headers=admin_headers,
+            json={"profile_id": "tuning", "instance_uids": [inst["uid"]]},
+        )
+        assert r.status_code == 200, r.text
+        run = r.json()
+        assert run["proposed"] == 2 and run["saved"] == 2 and run["rejected"] == 0
+
+        r = await client.get(
+            f"{BASE}/proposals", headers=admin_headers,
+            params={"profile": "tuning", "method": "anchor"},
+        )
+        proposals = {p["attribute"]: p for p in r.json() if p["instance_uid"] == inst["uid"]}
+        assert proposals["range_low"]["value"] == 5
+        assert proposals["range_low"]["current_value"] is None  # 实例本来没这个字段
+        assert proposals["display_zh"]["current_value"] == "测试参数"
+
+        # 接受第 1 条：只挂证据，值不动
+        r = await client.post(
+            f"{BASE}/proposals/{proposals['display_zh']['id']}/accept", headers=admin_headers
+        )
+        assert r.status_code == 200
+        row = await self._props(client, admin_headers, inst["uid"])
+        assert row["props"]["display_zh"] == "测试参数"  # 一个字都没改
+        ev = row["evidence"][-1]
+        assert ev["traceable"] is True
+        assert ev["attributes"] == ["display_zh"]
+        assert ev["chunk_id"] == 901
+        assert ev["quote"].startswith("测试参数")
+
+        # 接受第 2 条并选择「采用原文值」：这次才写值
+        r = await client.post(
+            f"{BASE}/proposals/{proposals['range_low']['id']}/accept",
+            headers=admin_headers,
+            params={"adopt_value": "true"},
+        )
+        assert r.status_code == 200
+        row = await self._props(client, admin_headers, inst["uid"])
+        assert row["props"]["range_low"] == 5
+
+    async def test_fabricated_quote_is_dropped(
+        self, client, admin_headers, cleanup_instances, monkeypatch
+    ):
+        """模型编一句原文里没有的话 → 整条丢弃，不进待审区。"""
+        inst = await self._instance(client, admin_headers, name="t4_anchor_fake")
+        self._stub(
+            monkeypatch,
+            [{"chunk": 1, "attribute": "unit", "quote": "本参数经验值一般取 0.9", "value": 0.9}],
+        )
+        r = await client.post(
+            f"{BASE}/anchor/run",
+            headers=admin_headers,
+            json={"profile_id": "tuning", "instance_uids": [inst["uid"]]},
+        )
+        assert r.status_code == 200, r.text
+        run = r.json()
+        assert run["saved"] == 0
+        assert run["rejected"] == 1
+        assert any("原文里找不到" in k for k in run["reject_reasons"])
 
 
 class TestInstanceCrud:
