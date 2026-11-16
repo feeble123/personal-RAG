@@ -407,6 +407,70 @@ class DbEvidenceLookup:
         return None
 
 
+async def resolve_evidence_items(
+    items: Iterable[Any],
+    lookup: EvidenceLookup,
+    *,
+    kb_id: int = 0,
+    subject: str = "",
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """把一批证据的 文档名/页码/摘录 解析成 doc_id / chunk_id。
+
+    `subject` 只用于警告文案（「sm：文档…找不到」）。
+
+    **找不到就标出来，绝不硬指一个切片冒充出处**：
+    - 没写文档名 → 人工来源（台账/经验），标 `resolved_by=none`，这不是错误；
+    - 文档名在库里找不到 → 同样标 `none`，另给一条警告；
+    - 文档找到但定位不到切片 → 标 `doc`（只到文档级），给警告建议补页码/摘录。
+
+    已经解析到切片的条目直接跳过：重存一次实例不该再全表扫一遍 chunks。
+    """
+    out: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for raw in items or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        if item.get("chunk_id") is not None and item.get("traceable"):
+            out.append(item)  # 已经锚定过的，原样保留
+            continue
+        doc_name = str(item.get("doc_name") or "").strip()
+        if not doc_name:
+            item["resolved_by"] = "none"
+            item["traceable"] = False
+            out.append(item)
+            continue
+        doc = await lookup.find_document(doc_name, kb_id)
+        if doc is None:
+            item["resolved_by"] = "none"
+            item["traceable"] = False
+            warnings.append(_prefix(subject, f"依据文档「{doc_name}」在知识库里找不到，已标记为未溯源"))
+            out.append(item)
+            continue
+        item["doc_id"] = doc["id"]
+        item["doc_name"] = doc["filename"]
+        chunk_id = await lookup.find_chunk(doc["id"], item.get("page"), item.get("snippet"))
+        if chunk_id is not None:
+            item["chunk_id"] = chunk_id
+            item["resolved_by"] = "chunk"
+            item["traceable"] = True
+        else:
+            item["resolved_by"] = "doc"
+            item["traceable"] = False
+            warnings.append(
+                _prefix(
+                    subject,
+                    f"文档「{doc['filename']}」已找到，但没定位到具体切片，建议补充页码或原文摘录",
+                )
+            )
+        out.append(item)
+    return out, warnings
+
+
+def _prefix(subject: str, message: str) -> str:
+    return f"{subject}：{message}" if subject else message
+
+
 async def resolve_evidence_with(
     result: PriorBuildResult, lookup: EvidenceLookup, *, kb_id: int = 0
 ) -> PriorBuildResult:
@@ -416,39 +480,10 @@ async def resolve_evidence_with(
         if not draft.evidence:
             resolved_drafts.append(draft)
             continue
-        items: list[dict[str, Any]] = []
-        for raw in draft.evidence:
-            item = dict(raw)
-            doc_name = str(item.get("doc_name") or "").strip()
-            if not doc_name:
-                item["resolved_by"] = "none"
-                item["traceable"] = False
-                items.append(item)
-                continue
-            doc = await lookup.find_document(doc_name, kb_id)
-            if doc is None:
-                item["resolved_by"] = "none"
-                item["traceable"] = False
-                result.warnings.append(
-                    f"{draft.name}：依据文档「{doc_name}」在知识库里找不到，已标记为未溯源"
-                )
-                items.append(item)
-                continue
-            item["doc_id"] = doc["id"]
-            item["doc_name"] = doc["filename"]
-            chunk_id = await lookup.find_chunk(doc["id"], item.get("page"), item.get("snippet"))
-            if chunk_id is not None:
-                item["chunk_id"] = chunk_id
-                item["resolved_by"] = "chunk"
-                item["traceable"] = True
-            else:
-                item["resolved_by"] = "doc"
-                item["traceable"] = False
-                result.warnings.append(
-                    f"{draft.name}：文档「{doc['filename']}」已找到，但没定位到具体切片，"
-                    "建议补充页码或原文摘录"
-                )
-            items.append(item)
+        items, warnings = await resolve_evidence_items(
+            draft.evidence, lookup, kb_id=kb_id, subject=draft.name
+        )
+        result.warnings.extend(warnings)
         resolved_drafts.append(replace(draft, evidence=items))
     result.drafts = resolved_drafts
     return result
@@ -459,3 +494,16 @@ async def resolve_evidence(
 ) -> PriorBuildResult:
     """数据库版证据溯源（导入脚本和接口都用它）。"""
     return await resolve_evidence_with(result, DbEvidenceLookup(session), kb_id=kb_id)
+
+
+async def resolve_evidence_list(
+    session: Any,
+    items: Iterable[Any],
+    *,
+    kb_id: int = 0,
+    subject: str = "",
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """接口层直接用：手工录入 / 实例 Excel 导入的证据都走这里锚定到切片。"""
+    return await resolve_evidence_items(
+        items, DbEvidenceLookup(session), kb_id=kb_id, subject=subject
+    )

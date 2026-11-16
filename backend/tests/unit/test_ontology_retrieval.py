@@ -239,3 +239,18 @@ class TestEvidenceDedupe:
 
         item = {"note": "x", "type": "人工录入"}
         assert len(merge_evidence([item, dict(item)], [])) == 2
+
+    def test_同一切片支持不同属性要并列保留(self):
+        """P1 属性级证据：一段原文同时支持「范围」和「单位」是两条，不能合并成一条。"""
+        from app.services.graph.ontology.instances import dedupe_evidence
+
+        a = {"chunk_id": 7, "note": "手册参数表", "attributes": ["range_low"]}
+        b = {"chunk_id": 7, "note": "手册参数表", "attributes": ["unit"]}
+        assert dedupe_evidence([a, b, dict(a)]) == [a, b]
+
+    def test_normalize_evidence_统一属性写法(self):
+        from app.services.graph.ontology.instances import normalize_evidence
+
+        assert normalize_evidence([{"note": "x", "attributes": "unit"}])[0]["attributes"] == ["unit"]
+        # 老数据没有 attributes：不补空键，免得跟历史 JSON 比出「改过了」
+        assert "attributes" not in normalize_evidence([{"note": "x"}])[0]

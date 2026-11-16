@@ -282,14 +282,19 @@ export interface OntologyInstance {
 export interface OntologyEvidence {
   type?: string
   note?: string
+  /** 这条依据支持哪些属性（属性级证据）；空 = 整条实例 */
+  attributes?: string[]
   doc_id?: number | null
   chunk_id?: number | null
   doc_name?: string | null
   page?: number | null
   locator?: string | null
+  /** 原文摘录：≥6 字时才用于在文档里定位到切片 */
   snippet?: string | null
+  /** 逐字引用（P2 自动锚定时由程序校验后写入） */
+  quote?: string | null
   traceable?: boolean
-  resolved_by?: string
+  resolved_by?: 'chunk' | 'doc' | 'none'
 }
 
 /** 参数推荐卡：range_level 表示范围强度，conflict 时 candidates 并列。 */

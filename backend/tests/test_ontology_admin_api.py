@@ -105,6 +105,75 @@ class TestLibraries:
         assert libs["process_skeleton"]["node_count"] == 0
 
 
+class TestEvidenceTraceability:
+    """P1：手填的「文档名 + 摘录」也要能锚定到具体切片，界面才点得回原文。
+
+    以前只有参数表导入会做这个解析，实例表单和实例 Excel 导入都只是存一段文本，
+    用户看到的「doc 20 · 第5页」既点不开也不保证真有这段。
+    """
+
+    async def _create(self, client, admin_headers, kb_id, evidence, name="t4_ev"):
+        payload = _instance_payload(name, kb_id=kb_id)
+        payload["evidence"] = evidence
+        r = await client.post(f"{BASE}/instances", headers=admin_headers, json=payload)
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    async def test_manual_evidence_resolves_to_chunk(
+        self, client, admin_headers, sample_kb, cleanup_instances
+    ):
+        kb_id, _doc_id = sample_kb
+        data = await self._create(
+            client,
+            admin_headers,
+            kb_id,
+            [
+                {
+                    "type": "手册",
+                    "note": "明渠均匀流的形成条件",
+                    "doc_name": "demo.md",
+                    # 摘录要 ≥6 字才用于定位（更短匹配噪音太大，宁可不定位）
+                    "snippet": "明渠均匀流的形成条件",
+                    "attributes": ["unit"],
+                }
+            ],
+        )
+        ev = data["evidence"][0]
+        assert ev["doc_id"] and ev["chunk_id"]
+        assert ev["traceable"] is True
+        assert ev["resolved_by"] == "chunk"
+        assert ev["attributes"] == ["unit"]  # 属性级证据
+
+        # 点开依据能看到原文
+        r = await client.get(f"{BASE}/evidence/{ev['chunk_id']}", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        chunk = r.json()
+        assert "明渠均匀流" in chunk["content"]
+        assert chunk["doc_name"] == "demo.md"
+
+    async def test_unknown_document_marked_untraceable(
+        self, client, admin_headers, sample_kb, cleanup_instances
+    ):
+        """找不到就如实标未溯源，不硬指一个切片，也不丢用户写的说明。"""
+        kb_id, _doc_id = sample_kb
+        data = await self._create(
+            client,
+            admin_headers,
+            kb_id,
+            [{"type": "手册", "note": "现场台账", "doc_name": "根本没有这本册子.pdf"}],
+            name="t4_ev_missing",
+        )
+        ev = data["evidence"][0]
+        assert ev["traceable"] is False
+        assert ev["resolved_by"] == "none"
+        assert ev["note"] == "现场台账"  # 原文不丢
+        assert "chunk_id" not in ev or ev["chunk_id"] is None
+
+    async def test_missing_chunk_returns_404(self, client, admin_headers):
+        r = await client.get(f"{BASE}/evidence/999999", headers=admin_headers)
+        assert r.status_code == 404
+
+
 class TestInstanceCrud:
     async def test_create_reject_invalid(self, client, admin_headers, cleanup_instances):
         r = await client.post(

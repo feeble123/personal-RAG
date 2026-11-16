@@ -23,6 +23,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   Upload,
 } from 'antd'
@@ -121,7 +122,13 @@ export default function OntologyManager() {
     mutationFn: (values: Record<string, unknown>) => {
       const id = instanceModal.row?.id
       return id
-        ? ontologyApi.updateInstance(id, { props: values.props, evidence: values.evidence })
+        ? ontologyApi.updateInstance(id, {
+            props: values.props,
+            evidence: values.evidence,
+            // 表单给的是完整证据列表：用户删掉一条就该真删，
+            // 所以走替换语义（后端默认是「并集」，为的是重导 Excel 不冲掉其它来源）
+            evidence_replace: true,
+          })
         : ontologyApi.createInstance({ ...values, profile_id: profileId || undefined })
     },
     onSuccess: () => {
@@ -270,8 +277,18 @@ export default function OntologyManager() {
       title: '证据',
       width: 90,
       render: (_: unknown, row: OntologyInstance) => {
-        const count = row.evidence?.length ?? 0
-        return count ? <Tag color="green">{count} 条</Tag> : <Tag color="orange">无</Tag>
+        const list = row.evidence ?? []
+        if (!list.length) return <Tag color="orange">无</Tag>
+        const traceable = list.filter((e) => e.traceable || e.chunk_id).length
+        return (
+          <Tooltip
+            title={`${traceable} 条能点回原文，${list.length - traceable} 条只有说明（台账/经验类属于正常）`}
+          >
+            <Tag color={traceable === list.length ? 'green' : 'gold'}>
+              {traceable}/{list.length}
+            </Tag>
+          </Tooltip>
+        )
       },
     },
     {

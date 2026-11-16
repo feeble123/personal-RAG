@@ -24,12 +24,25 @@ logger = logging.getLogger(__name__)
 _NAME_HEADERS = ("name", "名称", "display_zh", "实例名称")
 _MAX_ROWS = 2000  # 一次导入的上限：再多就该分文件了，别把请求撑爆
 
+# 证据列（都可不填）。和属性列一样按表头识别：表里写了就带上，
+# 导入后再由接口把这些文档名/页码锚定成 doc_id/chunk_id。
+_EVIDENCE_HEADERS: dict[str, str] = {
+    "依据类型": "type",
+    "依据说明": "note",
+    "依据": "note",
+    "依据文档": "doc_name",
+    "文档名": "doc_name",
+    "依据页码": "page",
+    "页码": "page",
+}
+
 
 @dataclass
 class ImportRow:
     row_no: int
     name: str
     props: dict[str, Any] = field(default_factory=dict)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
 
@@ -50,7 +63,13 @@ class ImportPreview:
             "skipped_headers": self.skipped_headers,
             "errors": self.errors,
             "rows": [
-                {"row_no": r.row_no, "name": r.name, "props": r.props, "error": r.error}
+                {
+                    "row_no": r.row_no,
+                    "name": r.name,
+                    "props": r.props,
+                    "evidence": r.evidence,
+                    "error": r.error,
+                }
                 for r in self.rows[:limit]
             ],
         }
@@ -92,6 +111,47 @@ def _match_columns(headers: list[str], entity: EntityTypeDef) -> tuple[dict[str,
     return mapped, skipped
 
 
+def _match_evidence(headers: list[str], mapped: dict[str, str]) -> dict[str, str]:
+    """表头 → 证据字段。属性优先：已经是某个属性的列不抢。"""
+    out: dict[str, str] = {}
+    for header in headers:
+        h = (header or "").strip()
+        if not h or h in mapped:
+            continue
+        target = _EVIDENCE_HEADERS.get(h)
+        if target:
+            out[h] = target
+    return out
+
+
+def _row_evidence(
+    row: tuple[Any, ...], headers: list[str], columns: dict[str, str]
+) -> list[dict[str, Any]]:
+    """把一行里的证据列收成一条证据（没有任何内容就不产生证据）。"""
+    if not columns:
+        return []
+    item: dict[str, Any] = {}
+    for header, target in columns.items():
+        idx = headers.index(header)
+        if idx >= len(row):
+            continue
+        raw = row[idx]
+        text = "" if raw is None else str(raw).strip()
+        if not text:
+            continue
+        if target == "page":
+            try:
+                item["page"] = int(float(text))
+            except ValueError:
+                continue
+        else:
+            item[target] = text
+    if not item.get("note") and not item.get("doc_name"):
+        return []
+    item.setdefault("type", "导入")
+    return [item]
+
+
 def preview_import(
     stream: BinaryIO, reg: OntologyRegistry, entity_type: str
 ) -> ImportPreview:
@@ -121,9 +181,10 @@ def preview_import(
             )
 
         mapped, skipped = _match_columns(headers, entity)
-        # 名称列已经被当作实例名用了，不算「认不出的表头」
+        evidence_cols = _match_evidence(headers, mapped)
+        # 名称列已经被当作实例名用了、证据列有其专门用途，都不算「认不出的表头」
         name_header = headers[name_idx]
-        skipped = [s for s in skipped if s != name_header]
+        skipped = [s for s in skipped if s != name_header and s not in evidence_cols]
         preview = ImportPreview(entity_type=entity_type, mapped=mapped, skipped_headers=skipped)
 
         for offset, row in enumerate(rows, start=2):  # 2 = Excel 行号（表头占 1）
@@ -158,7 +219,14 @@ def preview_import(
             if error:
                 preview.errors.append({"row_no": offset, "name": name, "message": error})
                 continue
-            preview.rows.append(ImportRow(row_no=offset, name=name, props=props))
+            preview.rows.append(
+                ImportRow(
+                    row_no=offset,
+                    name=name,
+                    props=props,
+                    evidence=_row_evidence(row, headers, evidence_cols),
+                )
+            )
         return preview
     finally:
         wb.close()

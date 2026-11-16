@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import logging
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
@@ -64,7 +65,11 @@ from app.services.graph.ontology import extraction
 from app.services.graph.ontology import instance_import
 from app.services.graph.ontology import relations as rel_mod
 from app.services.graph.ontology import tbox_edit
-from app.services.graph.ontology.params import load_prior_excel, resolve_evidence
+from app.services.graph.ontology.params import (
+    load_prior_excel,
+    resolve_evidence,
+    resolve_evidence_list,
+)
 from app.services.graph.ontology.registry import get_registry
 from app.services.graph.ontology.retrieval import retrieve_with_ontology
 from app.services.graph.ontology.validator import validate_entity, validate_relation
@@ -976,10 +981,21 @@ async def import_instances(
             uid=reg.uid_for(entity_type, row.name, kb_id),
             kb_id=kb_id,
             props=row.props,
+            evidence=row.evidence,  # 表里带了依据列就一起进来，稍后锚定到切片
             source="import",
         )
         for row in preview.rows
     ]
+    # 证据定位：文档名/页码 → doc_id/chunk_id，定位不到就标未溯源
+    resolved: list[inst_mod.InstanceDraft] = []
+    for draft in drafts:
+        if draft.evidence:
+            items, _warnings = await resolve_evidence_list(
+                db, draft.evidence, kb_id=kb_id, subject=draft.name
+            )
+            draft = replace(draft, evidence=items)
+        resolved.append(draft)
+    drafts = resolved
     upserted = await inst_mod.upsert_instances(db, drafts)
     await db.commit()
     rows = [
@@ -1025,6 +1041,12 @@ async def create_instance(
             "ONTOLOGY_INSTANCE_EXISTS",
         )
 
+    # 证据的文档名/页码 → doc_id/chunk_id。手填的证据也要能点回原文，
+    # 定位不到就如实标成未溯源（不硬指一个切片）。
+    evidence, _warnings = await resolve_evidence_list(
+        db, payload.evidence, kb_id=payload.kb_id, subject=payload.name
+    )
+
     draft = inst_mod.InstanceDraft(
         profile_id=reg.profile_id,
         entity_type=payload.entity_type,
@@ -1033,7 +1055,7 @@ async def create_instance(
         kb_id=payload.kb_id,
         props=payload.props,
         ranges=payload.ranges,
-        evidence=payload.evidence,
+        evidence=evidence,
         source=payload.source,
         status=payload.status,
     )
@@ -1056,6 +1078,23 @@ async def create_instance(
     return InstanceOut.model_validate(row)
 
 
+def _merge_evidence_payload(
+    row, incoming: list | None, replace: bool
+) -> list | None:
+    """证据怎么落库：默认并集（只增不减），replace=true 时整份替换。
+
+    并集是为了别把人工写的其它来源证据冲掉；替换是为了让界面上「删除依据」真能删掉。
+    没传 incoming 就返回 None，表示这一项不动。
+    """
+    from app.services.graph.ontology import instances as inst_mod
+
+    if incoming is None:
+        return None
+    if replace:
+        return inst_mod.dedupe_evidence(incoming)
+    return inst_mod.dedupe_evidence([*(row.evidence or []), *incoming])
+
+
 @router.patch("/instances/{instance_id}", response_model=InstanceOut)
 async def patch_instance(
     instance_id: int,
@@ -1074,17 +1113,22 @@ async def patch_instance(
     if not check.ok:
         raise BizError("；".join(check.errors), 400, "ONTOLOGY_INVALID_INSTANCE")
 
+    incoming_evidence = payload.evidence
+    if incoming_evidence is not None:
+        # 只对「还没锚定」的条目做定位；已经带 chunk_id 的直接放行
+        incoming_evidence, _warnings = await resolve_evidence_list(
+            db, incoming_evidence, kb_id=row.kb_id, subject=row.name
+        )
+
     changed = inst_mod.apply_changes(
         row,
         props=payload.props,
         ranges=payload.ranges,
-        # 证据是**并集**语义：前端重复提交同一份说明（比如只是改了别的字段）不会越堆越多，
+        # 默认**并集**语义：前端重复提交同一份说明（比如只是改了别的字段）不会越堆越多，
         # 也不会覆盖人工写的证据。用户实测过：改两次实例，证据列变成 3 条。
-        evidence=(
-            inst_mod.dedupe_evidence([*(row.evidence or []), *payload.evidence])
-            if payload.evidence is not None
-            else None
-        ),
+        # 界面提交的是完整列表（可能删掉了某条）→ evidence_replace=true 时整份替换，
+        # 但没传 evidence 时不做任何改动（别把「没提交」当成「清空」）。
+        evidence=_merge_evidence_payload(row, incoming_evidence, payload.evidence_replace),
         status=payload.status,
         source=payload.source,
     )
@@ -1129,6 +1173,35 @@ async def delete_instance(
         detail=f"kb_id={kb_id}；一并删除 {dropped} 条关系",
         client_ip=await get_client_ip(request),
     )
+
+
+@router.get("/evidence/{chunk_id}")
+async def get_evidence_chunk(chunk_id: int, db: DbSession, _admin: AdminUser) -> dict:
+    """点开一条依据时看原文：直接回该切片的正文 + 出处。
+
+    证据里只存了 `chunk_id`，界面上要能点回原文就得有这一跳。
+    文档被重新解析后切片 id 会变，这时明确报 404，别回一段不相干的文字。
+    """
+    from app.db.models import Chunk, Document
+
+    chunk = await db.get(Chunk, chunk_id)
+    if chunk is None:
+        raise BizError(
+            "这段原文已不存在（文档可能重新解析过），请重新定位依据",
+            404,
+            "ONTOLOGY_EVIDENCE_NOT_FOUND",
+        )
+    doc = await db.get(Document, chunk.doc_id)
+    return {
+        "chunk_id": chunk.id,
+        "doc_id": chunk.doc_id,
+        "doc_name": doc.filename if doc is not None else "",
+        "kb_id": chunk.kb_id,
+        "page": chunk.page,
+        "section": chunk.section,
+        "block_type": chunk.block_type,
+        "content": chunk.content,
+    }
 
 
 @router.get("/params", response_model=list[CardOut])

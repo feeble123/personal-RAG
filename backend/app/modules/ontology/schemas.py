@@ -46,6 +46,11 @@ class InstancePatch(BaseModel):
     props: dict[str, Any] | None = None
     ranges: list[Any] | None = None
     evidence: list[Any] | None = None
+    # 默认按**并集**合并（老行为：重导 Excel 不会冲掉别的来源的证据）。
+    # 界面上的证据是列表，用户删掉一条必须真的消失，那时传 true 用整份列表替换。
+    evidence_replace: bool = Field(
+        False, description="true = 用本次提交的证据整份替换（界面上删除依据时用）"
+    )
     status: Literal["active", "archived"] | None = None
     source: str | None = None
 

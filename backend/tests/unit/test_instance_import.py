@@ -77,3 +77,42 @@ class TestPreviewImport:
         buf = _xlsx(["名称"], [["x"]])
         with pytest.raises(ValueError, match="不存在"):
             instance_import.preview_import(buf, _registry(), "no_such_type")
+
+
+class TestEvidenceColumns:
+    """依据列：表里写了就带上，导入后由接口锚定成 doc_id/chunk_id。
+
+    以前实例导入完全不认依据，导进去的实例天生没有出处，
+    界面上再怎么点也只能看到一句手写的话。
+    """
+
+    def test_evidence_columns_are_parsed(self):
+        buf = _xlsx(
+            ["名称", "设计流量", "依据类型", "依据说明", "依据文档", "依据页码"],
+            [["青溪闸", "320", "手册", "设计流量按 20 年一遇", "水闸设计规范.pdf", "12"]],
+        )
+        p = instance_import.preview_import(buf, _registry(), "gate")
+        assert p.skipped_headers == []  # 证据列不该被当成「认不出的表头」
+        assert p.rows[0].evidence == [
+            {
+                "type": "手册",
+                "note": "设计流量按 20 年一遇",
+                "doc_name": "水闸设计规范.pdf",
+                "page": 12,
+            }
+        ]
+
+    def test_blank_evidence_cells_produce_no_evidence(self):
+        buf = _xlsx(
+            ["名称", "设计流量", "依据说明", "依据文档"],
+            [["青溪闸", "320", None, ""]],
+        )
+        p = instance_import.preview_import(buf, _registry(), "gate")
+        assert p.rows[0].evidence == []
+
+    def test_attribute_column_wins_over_evidence_header(self):
+        """表头同时能对上属性时不抢：属性优先，证据列只是补充。"""
+        buf = _xlsx(["名称", "设计流量", "note"], [["青溪闸", "320", "台账"]] )
+        p = instance_import.preview_import(buf, _registry(), "gate")
+        assert p.rows[0].props["note"] == "台账"
+        assert p.rows[0].evidence == []

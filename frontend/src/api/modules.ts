@@ -120,6 +120,21 @@ export const ontologyApi = {
   updateInstance: (id: number, data: Record<string, unknown>) =>
     api.patch(`/admin/ontology/instances/${id}`, data).then((r) => r.data as OntologyInstance),
   deleteInstance: (id: number) => api.delete(`/admin/ontology/instances/${id}`),
+  /** 点开一条依据看原文：返回该切片正文 + 出处 */
+  evidenceChunk: (chunkId: number) =>
+    api.get(`/admin/ontology/evidence/${chunkId}`).then(
+      (r) =>
+        r.data as {
+          chunk_id: number
+          doc_id: number
+          doc_name: string
+          kb_id: number
+          page: number | null
+          section: string | null
+          block_type: string | null
+          content: string
+        },
+    ),
 
   // —— 关系（ABox 的边）——
   relations: (params?: Record<string, unknown>) =>

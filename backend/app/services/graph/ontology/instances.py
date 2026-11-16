@@ -103,9 +103,11 @@ def apply_changes(
     if ranges is not None and list(ranges) != (row.ranges or []):
         row.ranges = list(ranges) or None
         changed = True
-    if evidence is not None and list(evidence) != (row.evidence or []):
-        row.evidence = list(evidence) or None
-        changed = True
+    if evidence is not None:
+        items = normalize_evidence(evidence)
+        if items != (row.evidence or []):
+            row.evidence = items or None
+            changed = True
     if status is not None and status != row.status:
         row.status = status
         changed = True
@@ -151,7 +153,11 @@ async def list_instances(
 
 
 def _evidence_key(item: Any) -> tuple:
-    """证据去重用的键：同一条原文只留一份，不同来源并列保留。"""
+    """证据去重用的键：同一条原文只留一份，不同来源并列保留。
+
+    `attributes` 也进键：同一段原文支持「取值范围」和「初值」是两件事，
+    不进键会被合并成一条，属性归属就丢了（P1 属性级证据的前提）。
+    """
     if not isinstance(item, dict):
         return (str(item),)
     return (
@@ -159,7 +165,41 @@ def _evidence_key(item: Any) -> tuple:
         item.get("chunk_id"),
         item.get("type"),
         item.get("note"),
+        _attr_key(item.get("attributes")),
     )
+
+
+def _attr_key(attributes: Any) -> tuple[str, ...]:
+    """证据「支持哪些属性」归一成有序元组（缺省 = 整条实例，不参与区分）。"""
+    if attributes is None or attributes == "":
+        return ()
+    if isinstance(attributes, str):
+        attributes = [attributes]
+    try:
+        return tuple(sorted(str(a).strip() for a in attributes if str(a or "").strip()))
+    except TypeError:
+        return ()
+
+
+def normalize_evidence(items: Iterable[Any] | None) -> list[Any]:
+    """规范证据条目：`attributes` 统一成去重后的字符串列表。
+
+    前端多选框可能给出字符串、空串或 undefined；统一在这里收口，
+    省得每个调用方各写一遍。空列表不落键，别把老数据改脏。
+    """
+    out: list[Any] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        attrs = _attr_key(item.get("attributes"))
+        clean = dict(item)
+        if attrs:
+            clean["attributes"] = list(attrs)
+        else:
+            clean.pop("attributes", None)
+        out.append(clean)
+    return out
 
 
 def merge_evidence(existing: Iterable[Any], incoming: Iterable[Any]) -> list[Any]:
@@ -194,6 +234,7 @@ async def upsert_instances(session: AsyncSession, drafts: Iterable[InstanceDraft
     """批量写入/更新实例（幂等）。调用方负责 commit。"""
     result = UpsertResult()
     for draft in drafts:
+        draft = replace(draft, evidence=normalize_evidence(draft.evidence))
         existing = await get_instance(
             session, draft.profile_id, draft.entity_type, draft.name, draft.kb_id
         )
