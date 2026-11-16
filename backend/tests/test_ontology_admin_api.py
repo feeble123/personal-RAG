@@ -58,6 +58,53 @@ class TestTypes:
         assert {"Parameter", "Basin", "Metric"} <= names
 
 
+class TestLibraries:
+    """库选择器上的「N 节点」：必须等于切进去能看见几个，不能凭图库统计一头算。
+
+    用户实测的 bug：四个库全显示「0 节点」，可调参本体里明明有 15 个参数。
+    原因是 Neo4j 没启动时 `store.stats()` 降级返回空，按类型求和恒为 0。
+    """
+
+    async def test_node_count_comes_from_instances_when_graph_is_down(
+        self, client, admin_headers, cleanup_instances
+    ):
+        for name in ("t4_lib_a", "t4_lib_b"):
+            r = await client.post(
+                f"{BASE}/instances", headers=admin_headers, json=_instance_payload(name)
+            )
+            assert r.status_code == 201, r.text
+
+        r = await client.get(f"{BASE}/libraries", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        libs = {lib["profile_id"]: lib for lib in r.json()}
+        tuning = libs["tuning"]
+        assert tuning["instance_count"] >= 2
+        # 图库关着 / 没同步 → 节点数就该等于实例数，而不是 0
+        assert tuning["node_count"] == tuning["instance_count"]
+
+    async def test_node_count_keeps_graph_only_nodes(
+        self, client, admin_headers, monkeypatch
+    ):
+        """防洪链那批节点直接导进了图、没有实例行：只数 PG 会把它们漏成 0。"""
+
+        class _Store:
+            async def stats(self, kb_id=None):
+                return {
+                    "nodes": {"total": 25, "by_type": {"engineering_object": 25}},
+                    "edges": {"total": 0, "by_type": {}},
+                }
+
+        monkeypatch.setattr(
+            "app.services.graph.store.get_graph_store", lambda: _Store()
+        )
+        r = await client.get(f"{BASE}/libraries", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        libs = {lib["profile_id"]: lib for lib in r.json()}
+        assert libs["flood_chain"]["node_count"] == 25
+        # 没声明这个类型的库不能被别人的节点算进来
+        assert libs["process_skeleton"]["node_count"] == 0
+
+
 class TestInstanceCrud:
     async def test_create_reject_invalid(self, client, admin_headers, cleanup_instances):
         r = await client.post(

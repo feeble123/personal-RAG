@@ -340,9 +340,13 @@ async def _library_out(
 ) -> LibraryOut:
     """补上库里有多少实例/关系——删库前的判断依据，也是界面上的库简介。
 
-    `node_count` 取**图里真实节点数**（按本库声明的实体类型收口）：
-    只数 PG 实例会让「防洪链本体」显示 0（那些节点是历史导入的，没有实例行），
-    用户切进去却看见 25 个节点，对不上。
+    `node_count` 是「切进去能看见几个节点」，所以**两边都要算**：
+
+    - PG 实例：点进库里画的就是它们（`/graph` 以实例为准），必须算；
+    - 图里多出来的历史节点：防洪链那批直接导进了图、没有实例行，只数 PG 会显示 0。
+
+    两者取较大值。**不能只信图库统计**：Neo4j 没启动（或实例还没同步进图）时它恒为 0，
+    界面会把一个有 15 个参数的库显示成「0 节点」（用户实测：四个库全是 0 节点）。
     """
     from sqlalchemy import func, select
 
@@ -358,10 +362,10 @@ async def _library_out(
         .select_from(OntologyRelation)
         .where(OntologyRelation.profile_id == info.profile_id)
     )
-    node_count = 0
+    node_count = int(instances or 0)
     if graph_stats:
         by_type = (graph_stats.get("nodes") or {}).get("by_type") or {}
-        node_count = sum(int(by_type.get(t, 0)) for t in info.entity_types)
+        node_count = max(node_count, sum(int(by_type.get(t, 0)) for t in info.entity_types))
     return LibraryOut(
         **info.to_dict(),
         instance_count=int(instances or 0),

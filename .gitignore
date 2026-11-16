@@ -55,4 +55,7 @@ evaluation-report.md
 # OS
 Thumbs.db
 .DS_Store
+
+# Excel/WPS 双击打开文件时生成的锁文件
+~$*
 backend/evaluation/answer_report.json

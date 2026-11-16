@@ -154,7 +154,7 @@ class LibraryOut(BaseModel):
     relation_type_count: int = 0
     instance_count: int = 0
     relation_count: int = 0
-    # 图里真实节点数（按本库声明的实体类型收口）；界面上显示的就是它
+    # 切进这个库能看见几个节点 = max(PG 实例数, 图里该库声明类型的节点数)
     node_count: int = 0
     is_default: bool = False
     error: str | None = Field(None, description="TBox 解析失败时的原因")
