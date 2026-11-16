@@ -20,7 +20,9 @@ class CitationOut(ORMModel):
     kb_id: int | None = None
     doc_id: int | None = None
     source: str
-    page: int | None = None
+    page: int | None = None  # PDF 物理页序
+    # 书内印刷页码：前端优先显示它（用户手里那本书印的数字），为空再退回 page
+    printed_page: int | None = None
     section: str | None = None
     snippet: str
     score: float | None = None

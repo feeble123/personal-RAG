@@ -1253,6 +1253,8 @@ async def get_evidence_chunk(chunk_id: int, db: DbSession, _admin: AdminUser) ->
         "doc_name": doc.filename if doc is not None else "",
         "kb_id": chunk.kb_id,
         "page": chunk.page,
+        # 书内印刷页码：界面优先显示它（PDF 物理页通常大十几页）
+        "printed_page": getattr(chunk, "printed_page", None),
         "section": chunk.section,
         "block_type": chunk.block_type,
         "content": chunk.content,

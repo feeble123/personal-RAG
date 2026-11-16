@@ -241,7 +241,10 @@ class Chunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     section: Mapped[str | None] = mapped_column(String(300), nullable=True)  # 章节路径
-    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)  # PDF 物理页序（1 起）
+    # 书内印刷页码（用户手里那本书上印的数字）。解析器认得出页码时才有值，
+    # 与 page 的差就是封面/版权/前言/目录那几页。引用展示优先用它。
+    printed_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # P0-7：content_hash 不再唯一——同内容跨文档保留独立 chunk（来源正确、互不牵连）；
     # embedding 缓存仍按 content_hash 复用向量（见 EmbeddingCache）
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)

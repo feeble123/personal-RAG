@@ -23,8 +23,12 @@ export default function InlineCitations({ citations, onOpen }: Props) {
           <FileTextOutlined style={{ color: '#00c6ff', fontSize: 12, flexShrink: 0 }} />
           <span className="cite-ref-label">{c.source}</span>
           <span className="cite-sep">·</span>
-          <span className="cite-ref-meta">
-            {c.page ? `第 ${c.page} 页` : '未标页码'}
+          <span
+            className="cite-ref-meta"
+            title={c.printed_page && c.page ? `PDF 第 ${c.page} 页` : undefined}
+          >
+            {/* 书里印的页码优先：用户是拿书翻的，PDF 物理页通常大十几页 */}
+            {c.printed_page ?? c.page ? `第 ${c.printed_page ?? c.page} 页` : '未标页码'}
             {c.score != null ? ` · ${(c.score * 100).toFixed(0)}%` : ''}
           </span>
           <span className="cite-arrow" aria-hidden>

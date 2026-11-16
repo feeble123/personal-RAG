@@ -255,6 +255,7 @@ export default function InstanceForm({
                 <Space size={6}>
                   <span style={{ fontSize: 13 }}>依据 {index + 1}</span>
                   <TraceBadge ev={ev} />
+                  {ev.printed_page ? <Tag>书内第 {ev.printed_page} 页</Tag> : null}
                   {ev.chunk_id ? (
                     <Button
                       size="small"
@@ -330,7 +331,11 @@ export default function InstanceForm({
                   </Form.Item>
                 </Col>
                 <Col span={6}>
-                  <Form.Item label="页码（可选）" style={{ marginBottom: 10 }}>
+                  <Form.Item
+                    label="PDF 页码（可选）"
+                    style={{ marginBottom: 10 }}
+                    tooltip="PDF 阅读器里显示的页序；书里印的页码由程序自动识别，不用填"
+                  >
                     <InputNumber
                       style={{ width: '100%' }}
                       min={1}

@@ -287,7 +287,53 @@ def run_mineru(path: Path, out_dir: Path, *, timeout_sec: int | None = None, for
 # =====================================================================
 
 # MinerU 元素类型 → 本项目 ElementType 映射（排除项过滤）
+# page_number 不进正文（否则每段末尾都拖一个「157」），但它**就是页码信息本身**，
+# 由 parse 阶段单独收进 ParsedDocument.page_numbers；这里仍然排除。
 _EXCLUDED_MINERU_TYPES = frozenset({"footer", "page_number"})
+
+# 页码文本：只允许「一个 1~4 位数字」外加两侧少量装饰（·、-、—、空格）
+_PAGE_NO_TEXT = re.compile(r"^\D{0,4}(\d{1,4})\D{0,4}$")
+
+
+def build_page_number_map(content_list: list[dict]) -> dict[int, int]:
+    """MinerU 的 page_number 元素 → {物理页(1起): 书内印刷页码}。
+
+    为什么要这道转化：书上印的是「157」，它在 PDF 第 171 页，差的是封面/版权/前言/目录。
+    用户是拿着书翻的，必须能按书上的页码找到，所以入库时要把这个对应关系留住。
+
+    两道校验（OCR 不可全信）：
+    1. 文本必须基本就是一个数字——实测页码元素里混进过「版权所有·侵权必究」；
+    2. 绝大多数页的「印刷页 - 物理页」偏移要一致；不一致的页整页丢弃
+       ——宁可没有页码，也不能给一个错的（错的引用比没有引用更坑人）。
+    """
+    raw: dict[int, int] = {}
+    for item in content_list or []:
+        if item.get("type") != "page_number":
+            continue
+        idx = item.get("page_idx")
+        text = str(item.get("text") or "").strip()
+        if not isinstance(idx, int) or not text:
+            continue
+        m = _PAGE_NO_TEXT.match(text)
+        if not m:
+            continue
+        number = int(m.group(1))
+        if number <= 0:
+            continue
+        raw[idx + 1] = number  # 物理页从 1 起，与 Chunk.page 同口径
+    if not raw:
+        return {}
+
+    from collections import Counter
+
+    offsets = Counter(printed - page for page, printed in raw.items())
+    offset, count = offsets.most_common(1)[0]
+    # 至少 3 页、且覆盖 60% 以上：样本太少说明页码识别本身不可靠
+    if count < max(3, int(len(raw) * 0.6)):
+        return {}
+    return {page: printed for page, printed in raw.items() if printed - page == offset}
+
+
 # 正则：检测编号标题（MinerU 漏标 text_level 时的回退）
 # 「6 避洪转移分析」→ level 1；「4.4.2 基础资料」→ level 3；「附录A」→ level 1
 _HEADING_GUESS = re.compile(r"^(?:(?:附录)?[A-Z])|(?:(\d+(?:\.\d+)*)\s+\S)")
@@ -1122,4 +1168,11 @@ class MinerUPDFParser:
             "blocks": len(blocks),
             "mineru_version": (middle or {}).get("_version_name", "unknown"),
         }
-        return ParsedDocument(blocks=blocks, page_count=quality["pages"], quality=quality, elements=elements)
+        return ParsedDocument(
+            blocks=blocks,
+            page_count=quality["pages"],
+            quality=quality,
+            elements=elements,
+            # 书内页码：用户拿着书翻，引用要能对上
+            page_numbers=build_page_number_map(content),
+        )

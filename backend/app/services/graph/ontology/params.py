@@ -373,6 +373,13 @@ class DbEvidenceLookup:
             return {"id": doc.id, "filename": doc.filename, "kb_id": doc.kb_id}
         return None
 
+    async def printed_page_for(self, chunk_id: int) -> int | None:
+        """切片的书内印刷页码（解析器认得出才有；旧数据/快速解析为 None）。"""
+        from app.db.models import Chunk
+
+        chunk = await self._session.get(Chunk, chunk_id)
+        return getattr(chunk, "printed_page", None) if chunk is not None else None
+
     async def find_chunk(
         self, doc_id: int, page: int | None, snippet: str | None
     ) -> int | None:
@@ -454,6 +461,10 @@ async def resolve_evidence_items(
             item["chunk_id"] = chunk_id
             item["resolved_by"] = "chunk"
             item["traceable"] = True
+            # 书内印刷页码：用户手里那本书印的才是「157」，PDF 物理页是「171」
+            printed = await _printed_page_for(lookup, chunk_id)
+            if printed is not None:
+                item["printed_page"] = printed
         else:
             item["resolved_by"] = "doc"
             item["traceable"] = False
@@ -469,6 +480,21 @@ async def resolve_evidence_items(
 
 def _prefix(subject: str, message: str) -> str:
     return f"{subject}：{message}" if subject else message
+
+
+async def _printed_page_for(lookup: EvidenceLookup, chunk_id: int) -> int | None:
+    """取切片的书内印刷页码。
+
+    `printed_page_for` 是可选能力（测试里的假 lookup 不必实现），没有就返回 None，
+    界面回退显示 PDF 物理页——绝不猜。
+    """
+    getter = getattr(lookup, "printed_page_for", None)
+    if getter is None:
+        return None
+    try:
+        return await getter(chunk_id)
+    except Exception:  # noqa: BLE001 - 拿不到页码不影响证据本身是否可用
+        return None
 
 
 async def resolve_evidence_with(

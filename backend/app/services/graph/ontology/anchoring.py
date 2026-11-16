@@ -59,9 +59,10 @@ class Candidate:
     chunk_id: int
     doc_id: int
     doc_name: str
-    page: int | None
+    page: int | None  # PDF 物理页序
     section: str | None
     content: str
+    printed_page: int | None = None  # 书内印刷页码（用户拿书翻的是这个）
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,7 @@ class AnchorHit:
             "chunk_id": self.candidate.chunk_id,
             "doc_name": self.candidate.doc_name,
             "page": self.candidate.page,
+            "printed_page": self.candidate.printed_page,
             "quote": self.quote,
             "snippet": self.quote[:220],
             "verified": True,
@@ -221,7 +223,13 @@ async def candidate_chunks(
     rows = (
         await db.execute(
             select(
-                Chunk.id, Chunk.doc_id, Chunk.page, Chunk.section, Chunk.content, Document.filename
+                Chunk.id,
+                Chunk.doc_id,
+                Chunk.page,
+                Chunk.section,
+                Chunk.content,
+                Document.filename,
+                Chunk.printed_page,
             ).join(Document, Chunk.doc_id == Document.id).where(Chunk.id.in_(ids))
         )
     ).all()
@@ -233,6 +241,7 @@ async def candidate_chunks(
             section=r[3],
             content=r[4] or "",
             doc_name=r[5] or "",
+            printed_page=r[6],
         )
         for r in rows
     }

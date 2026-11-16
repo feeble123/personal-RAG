@@ -64,7 +64,13 @@ export default function EvidenceChunkModal({ open, chunkId, quote, onClose }: Pr
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <Space size={6} wrap>
             <Tag color="blue">{data.doc_name || '未知文档'}</Tag>
-            {data.page != null && <Tag>第 {data.page} 页</Tag>}
+            {/* 书里印的页码优先：能按书上页码翻到你手里那本书 */}
+            {(data.printed_page ?? data.page) != null && (
+              <Tag>第 {data.printed_page ?? data.page} 页</Tag>
+            )}
+            {data.printed_page != null && data.page != null && data.printed_page !== data.page && (
+              <Tag color="default">PDF 第 {data.page} 页</Tag>
+            )}
             {data.section && <Tag>{data.section}</Tag>}
             {data.block_type && <Tag color="default">{data.block_type}</Tag>}
             <Text type="secondary" style={{ fontSize: 11 }}>

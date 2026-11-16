@@ -130,6 +130,7 @@ export const ontologyApi = {
           doc_name: string
           kb_id: number
           page: number | null
+          printed_page?: number | null
           section: string | null
           block_type: string | null
           content: string

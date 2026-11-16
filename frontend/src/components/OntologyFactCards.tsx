@@ -35,7 +35,8 @@ function EvidenceLines({ items }: { items?: OntologyEvidence[] }) {
           {ev.note ? ` · ${ev.note}` : ''}
           {/* 显示文档名而不是 doc_id：用户认的是书名，不是数据库主键 */}
           {ev.doc_name ? ` · ${ev.doc_name}` : ''}
-          {ev.page ? ` 第${ev.page}页` : ''}
+          {/* 书内页码优先（用户拿书翻的是它），没有才退回 PDF 物理页 */}
+          {ev.printed_page ?? ev.page ? ` 第${ev.printed_page ?? ev.page}页` : ''}
           {ev.attributes?.length ? ` · 支持 ${ev.attributes.join('、')}` : ''}
           {ev.chunk_id ? '' : ev.doc_name ? '（未定位到原文片段）' : ''}
         </Text>

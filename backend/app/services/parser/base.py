@@ -81,6 +81,9 @@ class ParsedDocument:
     outline: Any = None
     # 目录页原文（物理页 → 页文本）：PDF 新策略下单独成「目录」切片，内容永不丢弃
     toc_texts: dict[int, str] = field(default_factory=dict)
+    # 物理页（1 起）→ 书内印刷页码。只有能可靠认出页码的解析器才填（目前只有 MinerU）。
+    # 用户是拿着书翻的：书里印的「157」和 PDF 的「171」差的就是封面/版权/前言/目录那 14 页。
+    page_numbers: dict[int, int] = field(default_factory=dict)
     # P1-1：统一 IR（DocumentElement 列表）；解析器产出后填充，chunker 可选消费
     elements: list[DocumentElement] = field(default_factory=list)
 

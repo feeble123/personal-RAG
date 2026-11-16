@@ -129,7 +129,10 @@ export interface Citation {
   kb_id: number | null
   doc_id: number | null
   source: string
+  /** PDF 物理页序 */
   page: number | null
+  /** 书内印刷页码：用户拿书翻的是这个数，优先展示（空则退回 page） */
+  printed_page?: number | null
   section: string | null
   snippet: string
   score: number | null
@@ -287,7 +290,10 @@ export interface OntologyEvidence {
   doc_id?: number | null
   chunk_id?: number | null
   doc_name?: string | null
+  /** PDF 物理页序 */
   page?: number | null
+  /** 书内印刷页码（解析器认得出才有） */
+  printed_page?: number | null
   locator?: string | null
   /** 原文摘录：≥6 字时才用于在文档里定位到切片 */
   snippet?: string | null

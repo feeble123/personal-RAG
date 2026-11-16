@@ -83,7 +83,9 @@ class RetrievedChunk:
     kb_id: int
     doc_id: int
     source: str
-    page: int | None = None
+    page: int | None = None  # PDF 物理页序
+    # 书内印刷页码：用户拿书翻的是这个数（PDF 物理页常比它大十几页）
+    printed_page: int | None = None
     section: str | None = None
     snippet: str = ""
     score: float = 0.0
@@ -101,6 +103,7 @@ class RetrievedChunk:
             doc_id=self.doc_id,
             source=self.source,
             page=self.page,
+            printed_page=self.printed_page,
             section=self.section,
             snippet=self.snippet,
             score=self.score,
@@ -630,6 +633,7 @@ async def _hydrate(
                 doc_id=chunk.doc_id,
                 source=doc.filename,
                 page=chunk.page,
+                printed_page=chunk.printed_page,
                 section=chunk.section,
                 snippet=snippet,
                 score=round(score, 4),
@@ -688,6 +692,7 @@ async def retrieve_document_wide(
                 doc_id=chunk.doc_id,
                 source=doc.filename,
                 page=chunk.page,
+                printed_page=chunk.printed_page,
                 section=chunk.section,
                 snippet=chunk.content,
                 score=0.0,

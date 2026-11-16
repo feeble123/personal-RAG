@@ -782,7 +782,10 @@ async def _process_document(doc_id: int) -> None:
                 comp["missing_pages"],
             )
         target.quality_json = doc.quality
-        await _write_chunks(db, doc, target, chunks)
+        # 书内印刷页码：物理页 → 印刷页的映射由解析器给（目前只有 MinerU 认得出）
+        await _write_chunks(
+            db, doc, target, chunks, page_numbers=getattr(parsed, "page_numbers", None)
+        )
 
         # P0-9：嵌入+落库完成 → job 推进到 indexing；索引构建前最后取消检查
         await _update_job_stage(db, doc.id, "indexing")
@@ -802,7 +805,12 @@ async def _process_document(doc_id: int) -> None:
 
 
 async def _write_chunks(
-    db, doc: Document, target: DocumentVersion, chunks: list[Any]
+    db,
+    doc: Document,
+    target: DocumentVersion,
+    chunks: list[Any],
+    *,
+    page_numbers: dict[int, int] | None = None,
 ) -> None:
     """写入 target 版本的 DB chunks + embedding 缓存。
 
@@ -810,7 +818,10 @@ async def _write_chunks(
     版本原样保留（故障时旧版可查）。embedding 缓存按 content_hash 复用（P0-7）。
     P1-4：支持 ParentChildChunk——父块与子块同表，父块先插拿 id，子块回填 parent_chunk_id
     + parent_context（父全文冗余）。旧 chunks（无 parent）走单遍插入，兼容。
+    `page_numbers`：物理页 → 书内印刷页码；拿不到就留空（界面回退显示物理页）。
     """
+    printed = page_numbers or {}
+
     async with _write_lock:
         # 检测是否 parent-child 模式
         is_parent_child = any(getattr(c, "parent_content", None) for c in chunks)
@@ -849,6 +860,7 @@ async def _write_chunks(
                     content=c.parent_content,
                     section=(c.section or "")[:300] or None,
                     page=c.page,
+                    printed_page=printed.get(c.page) if c.page else None,
                     content_hash=c.parent_hash,
                     block_type="parent",
                     clause_no=_extract_clause_no(c.section),
@@ -869,6 +881,7 @@ async def _write_chunks(
                     content=c.content,
                     section=(c.section or "")[:300] or None,
                     page=c.page,
+                    printed_page=printed.get(c.page) if c.page else None,
                     content_hash=c.child_hash,
                     block_type=getattr(c, "block_type", "text") or "text",
                     clause_no=_extract_clause_no(c.section),
@@ -894,6 +907,7 @@ async def _write_chunks(
                     content=c.content,
                     section=c.section,
                     page=c.page,
+                    printed_page=printed.get(c.page) if c.page else None,
                     content_hash=c.content_hash,
                     block_type=getattr(c, "block_type", "text") or "text",
                     clause_no=_extract_clause_no(c.section),
