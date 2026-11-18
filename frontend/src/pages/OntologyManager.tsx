@@ -62,6 +62,8 @@ export default function OntologyManager() {
   const { message } = App.useApp()
   const qc = useQueryClient()
 
+  // 受控页签：导入完流程链条后要能自动切到「实例」让人看见结果
+  const [activeTab, setActiveTab] = useState('instances')
   const [typeFilter, setTypeFilter] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [instanceModal, setInstanceModal] = useState<{ open: boolean; row: OntologyInstance | null }>(
@@ -402,7 +404,8 @@ export default function OntologyManager() {
 
       <Content style={{ padding: 24, overflowY: 'auto' }}>
         <Tabs
-          defaultActiveKey="instances"
+          activeKey={activeTab}
+          onChange={setActiveTab}
           items={[
             {
               key: 'instances',
@@ -500,7 +503,15 @@ export default function OntologyManager() {
             {
               key: 'flow',
               label: '流程链条',
-              children: <FlowImportPanel profileId={profileId} />,
+              children: (
+                <FlowImportPanel
+                  profileId={profileId}
+                  onImported={() => {
+                    refreshAll()
+                    setActiveTab('instances') // 导完直接让人看到建出来的东西
+                  }}
+                />
+              ),
             },
             {
               key: 'relations',

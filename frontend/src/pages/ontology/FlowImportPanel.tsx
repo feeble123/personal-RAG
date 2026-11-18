@@ -18,9 +18,11 @@ const { Text } = Typography
 
 interface Props {
   profileId: string
+  /** 导入成功回调：刷新实例/关系缓存并切到「实例」页签 */
+  onImported?: () => void
 }
 
-export default function FlowImportPanel({ profileId }: Props) {
+export default function FlowImportPanel({ profileId, onImported }: Props) {
   const { message } = App.useApp()
   const [file, setFile] = useState<File | null>(null)
   const [result, setResult] = useState<FlowImportResult | null>(null)
@@ -42,9 +44,10 @@ export default function FlowImportPanel({ profileId }: Props) {
         message.success('预演完成，确认无误再点「正式导入」')
       } else {
         message.success(
-          `导入完成：新增 ${data.created ?? 0} 个实例、更新 ${data.updated ?? 0} 个`,
+          `导入完成：实例新增 ${data.created ?? 0} 个、关系 ${data.relations} 条`,
         )
         setFile(null)
+        onImported?.()
       }
     } catch (e) {
       message.error(errMsg(e))
@@ -94,6 +97,14 @@ export default function FlowImportPanel({ profileId }: Props) {
 
       {result && (
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          {!result.dry_run && (
+            <Alert
+              type="success"
+              showIcon
+              message={`已写入：实例新增 ${result.created ?? 0} 个、更新 ${result.updated ?? 0} 个，关系 ${result.relations} 条`}
+              description="到「实例」页签按类型筛选（Stage / Action / Tool / DataAsset）就能看到；打开「知识图谱」页能看到整条链。"
+            />
+          )}
           <Space wrap>
             <Tag color="blue">阶段 {result.stages}</Tag>
             <Tag color="blue">动作 {result.actions}</Tag>
