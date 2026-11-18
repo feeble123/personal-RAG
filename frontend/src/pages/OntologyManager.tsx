@@ -10,13 +10,11 @@
  */
 import { useMemo, useState } from 'react'
 import {
-  Alert,
   App,
   Button,
   Card,
   Input,
   Layout,
-  Modal,
   Popconfirm,
   Select,
   Space,
@@ -25,7 +23,6 @@ import {
   Tag,
   Tooltip,
   Typography,
-  Upload,
 } from 'antd'
 import {
   ApartmentOutlined,
@@ -44,13 +41,8 @@ import { ontologyApi } from '@/api/modules'
 import { useOntologyLibrary } from '@/stores/ontologyLibrary'
 import TBoxPanel from './ontology/TBoxPanel'
 import ExtractionPanel from './ontology/ExtractionPanel'
-import FlowImportPanel from './ontology/FlowImportPanel'
-import type {
-  InstanceImportResult,
-  OntologyImportResult,
-  OntologyInstance,
-  OntologyRelation,
-} from '@/api/types'
+import ImportCenter from './ontology/ImportCenter'
+import type { OntologyInstance, OntologyRelation } from '@/api/types'
 import InstanceForm from './ontology/InstanceForm'
 import RelationForm from './ontology/RelationForm'
 
@@ -72,16 +64,6 @@ export default function OntologyManager() {
   const [relationModal, setRelationModal] = useState<{ open: boolean; row: OntologyRelation | null }>(
     { open: false, row: null },
   )
-  const [importFile, setImportFile] = useState<File | null>(null)
-  // 通用实例批量导入（F3-3）：先预演，确认再写入
-  const [instImport, setInstImport] = useState<{
-    open: boolean
-    file: File | null
-    entityType: string
-    result: InstanceImportResult | null
-    loading: boolean
-  }>({ open: false, file: null, entityType: '', result: null, loading: false })
-  const [importResult, setImportResult] = useState<OntologyImportResult | null>(null)
 
   // 当前图谱库：换库时三类查询全部重取，实体/关系/参数表互不串库
   const { profileId } = useOntologyLibrary()
@@ -175,37 +157,6 @@ export default function OntologyManager() {
     onError: (e) => message.error(errMsg(e)),
   })
 
-  const runInstanceImport = async (file: File, entityType: string, dryRun: boolean) => {
-    setInstImport((s) => ({ ...s, loading: true }))
-    try {
-      const result = await ontologyApi.importInstances(file, {
-        entityType,
-        profile: profileId || undefined,
-        dryRun,
-      })
-      if (dryRun) {
-        setInstImport((s) => ({ ...s, result, loading: false }))
-      } else {
-        message.success(`导入完成：新增 ${result.created ?? 0} / 更新 ${result.updated ?? 0}`)
-        setInstImport({ open: false, file: null, entityType: '', result: null, loading: false })
-        refreshAll()
-      }
-    } catch (e) {
-      setInstImport((s) => ({ ...s, loading: false }))
-      message.error(errMsg(e))
-    }
-  }
-
-  const importMutation = useMutation({
-    mutationFn: (dryRun: boolean) =>
-      ontologyApi.importParams(importFile as File, { dryRun, profile: profileId || undefined }),
-    onSuccess: (data) => {
-      setImportResult(data)
-      message.success(data.dry_run ? '预演完成，确认无误后再点「正式导入」' : '导入完成')
-      if (!data.dry_run) refreshAll()
-    },
-    onError: (e) => message.error(errMsg(e)),
-  })
 
   const filteredInstances = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
@@ -444,15 +395,7 @@ export default function OntologyManager() {
                     </Button>
                     <Button
                       icon={<UploadOutlined />}
-                      onClick={() =>
-                        setInstImport({
-                          open: true,
-                          file: null,
-                          entityType: entityTypes[0]?.name ?? '',
-                          result: null,
-                          loading: false,
-                        })
-                      }
+                      onClick={() => setActiveTab('import')}
                     >
                       Excel 批量导入
                     </Button>
@@ -501,11 +444,13 @@ export default function OntologyManager() {
               children: <ExtractionPanel profileId={profileId} />,
             },
             {
-              key: 'flow',
-              label: '流程链条',
+              key: 'import',
+              label: '导入',
               children: (
-                <FlowImportPanel
+                <ImportCenter
                   profileId={profileId}
+                  entityTypes={entityTypes}
+                  libraryName={typesQuery.data?.display_name ?? profileId}
                   onImported={() => {
                     refreshAll()
                     setActiveTab('instances') // 导完直接让人看到建出来的东西
@@ -541,218 +486,9 @@ export default function OntologyManager() {
                 </Card>
               ),
             },
-            {
-              key: 'import',
-              label: '参数表导入',
-              children: (
-                <Card size="small">
-                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="先预演，确认无误再正式导入"
-                      description="预演只解析不写库；正式导入会按名称覆盖更新（证据只增不减）。"
-                    />
-                    {!entityTypes.some((t) => t.name === 'Parameter') && (
-                      <Alert
-                        type="warning"
-                        showIcon
-                        message={`当前图谱库「${typesQuery.data?.display_name ?? profileId}」没有「参数」类型`}
-                        description="参数表只认 Parameter 类型。请先在上方切换到「调参本体」这类含参数类型的库，再导入。"
-                      />
-                    )}
-                    <Upload
-                      accept=".xlsx,.xlsm"
-                      maxCount={1}
-                      beforeUpload={(file) => {
-                        setImportFile(file)
-                        setImportResult(null)
-                        return false
-                      }}
-                      onRemove={() => setImportFile(null)}
-                    >
-                      <Button icon={<UploadOutlined />}>选择参数表（.xlsx）</Button>
-                    </Upload>
-                    <Space>
-                      <Button
-                        disabled={!importFile}
-                        loading={importMutation.isPending}
-                        onClick={() => importMutation.mutate(true)}
-                      >
-                        预演
-                      </Button>
-                      <Button
-                        type="primary"
-                        disabled={!importFile}
-                        loading={importMutation.isPending}
-                        onClick={() => importMutation.mutate(false)}
-                      >
-                        正式导入
-                      </Button>
-                    </Space>
-                    {importResult && (
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <Space wrap>
-                          <Tag>行数 {importResult.rows}</Tag>
-                          <Tag color="green">新增 {importResult.created}</Tag>
-                          <Tag color="blue">更新 {importResult.updated}</Tag>
-                          <Tag>无变化 {importResult.unchanged}</Tag>
-                          {importResult.dry_run && <Tag color="orange">预演</Tag>}
-                        </Space>
-                        {importResult.errors.length === 0 &&
-                          importResult.created === 0 &&
-                          importResult.updated === 0 && (
-                            <Alert
-                              type="success"
-                              showIcon
-                              message="表里的参数都已在库中，且内容完全一致"
-                              description="所以「新增/更新」都是 0——说明之前已经导入过，不是导入失败。"
-                            />
-                          )}
-                        {importResult.warnings.length > 0 && (
-                          <Alert
-                            type="warning"
-                            message={`${importResult.warnings.length} 条告警`}
-                            description={
-                              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                                {importResult.warnings.slice(0, 8).map((w) => (
-                                  <li key={w}>{w}</li>
-                                ))}
-                              </ul>
-                            }
-                          />
-                        )}
-                        {importResult.errors.length > 0 && (
-                          <Alert
-                            type="error"
-                            message={`${importResult.errors.length} 行被跳过`}
-                            description={
-                              <ul style={{ margin: 0, paddingLeft: 18 }}>
-                                {importResult.errors.slice(0, 8).map((w) => (
-                                  <li key={w}>{w}</li>
-                                ))}
-                              </ul>
-                            }
-                          />
-                        )}
-                        <Table
-                          rowKey="name"
-                          size="small"
-                          dataSource={importResult.preview}
-                          pagination={{ pageSize: 10 }}
-                          columns={[
-                            { title: '参数', dataIndex: 'name', width: 100 },
-                            { title: '中文名', dataIndex: 'display_zh', width: 140 },
-                            {
-                              title: '范围',
-                              render: (_: unknown, row: OntologyImportResult['preview'][0]) =>
-                                row.range ? `[${row.range[0]}, ${row.range[1]}]` : '—',
-                            },
-                            { title: '初值', dataIndex: 'initial', width: 80 },
-                            {
-                              title: '证据等级',
-                              dataIndex: 'evidence_level',
-                              width: 120,
-                              render: (v: string) => <Tag>{v}</Tag>,
-                            },
-                          ]}
-                        />
-                      </Space>
-                    )}
-                  </Space>
-                </Card>
-              ),
-            },
           ]}
         />
       </Content>
-
-      <Modal
-        open={instImport.open}
-        title="Excel 批量导入实例"
-        width={760}
-        okText={instImport.result ? '确认导入' : '先预演'}
-        cancelText="取消"
-        confirmLoading={instImport.loading}
-        onCancel={() =>
-          setInstImport({ open: false, file: null, entityType: '', result: null, loading: false })
-        }
-        onOk={() => {
-          if (!instImport.file) {
-            message.warning('先选一个 Excel 文件')
-            return
-          }
-          if (!instImport.entityType) {
-            message.warning('先选这批数据属于哪个实体类型')
-            return
-          }
-          runInstanceImport(instImport.file, instImport.entityType, !instImport.result)
-        }}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            message="表头写属性名或属性的中文说明，程序只认对得上的列"
-            description="必须有一列叫 名称 / display_zh；对不上的列会被跳过并在下面列出来（不猜）。默认先预演，确认无误再写入。"
-          />
-          <Space wrap>
-            <Select
-              value={instImport.entityType || undefined}
-              onChange={(v) => setInstImport((s) => ({ ...s, entityType: v, result: null }))}
-              style={{ width: 220 }}
-              placeholder="这批数据属于哪个类型"
-              options={entityTypes.map((t) => ({ value: t.name, label: t.display_name }))}
-            />
-            <Upload
-              accept=".xlsx,.xls"
-              showUploadList={false}
-              beforeUpload={(f) => {
-                setInstImport((s) => ({ ...s, file: f, result: null }))
-                return false
-              }}
-            >
-              <Button icon={<UploadOutlined />}>
-                {instImport.file ? instImport.file.name : '选择文件'}
-              </Button>
-            </Upload>
-          </Space>
-
-          {instImport.result && (
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Space wrap>
-                <Tag color="blue">共 {instImport.result.total} 行</Tag>
-                <Tag color="green">可导入 {instImport.result.valid}</Tag>
-                {instImport.result.rejected > 0 && (
-                  <Tag color="red">有问题 {instImport.result.rejected}</Tag>
-                )}
-              </Space>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                对上的列：
-                {Object.entries(instImport.result.mapped)
-                  .map(([h, a]) => `${h}→${a}`)
-                  .join('，') || '—'}
-              </Text>
-              {instImport.result.skipped_headers.length > 0 && (
-                <Text type="warning" style={{ fontSize: 12 }}>
-                  跳过的列（没对上属性）：{instImport.result.skipped_headers.join('、')}
-                </Text>
-              )}
-              {instImport.result.errors.length > 0 && (
-                <div style={{ maxHeight: 160, overflow: 'auto' }}>
-                  {instImport.result.errors.slice(0, 20).map((e, i) => (
-                    <div key={i}>
-                      <Text type="danger" style={{ fontSize: 12 }}>
-                        第 {e.row_no} 行{e.name ? `（${e.name}）` : ''}：{e.message}
-                      </Text>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Space>
-          )}
-        </Space>
-      </Modal>
 
       <InstanceForm
         open={instanceModal.open}
