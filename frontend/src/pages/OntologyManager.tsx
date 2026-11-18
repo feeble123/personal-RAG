@@ -44,6 +44,7 @@ import { ontologyApi } from '@/api/modules'
 import { useOntologyLibrary } from '@/stores/ontologyLibrary'
 import TBoxPanel from './ontology/TBoxPanel'
 import ExtractionPanel from './ontology/ExtractionPanel'
+import FlowImportPanel from './ontology/FlowImportPanel'
 import type {
   InstanceImportResult,
   OntologyImportResult,
@@ -495,6 +496,11 @@ export default function OntologyManager() {
               key: 'extract',
               label: '抽值 / 找依据',
               children: <ExtractionPanel profileId={profileId} />,
+            },
+            {
+              key: 'flow',
+              label: '流程链条',
+              children: <FlowImportPanel profileId={profileId} />,
             },
             {
               key: 'relations',

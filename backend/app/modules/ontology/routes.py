@@ -1077,6 +1077,87 @@ async def import_instances(
     return result
 
 
+@router.post("/flow/import")
+async def import_flow(
+    db: DbSession,
+    admin: AdminUser,
+    request: Request,
+    file: UploadFile = File(..., description="Excel：一行 = 一个动作（阶段 / 动作 / 工具 / 数据）"),
+    profile: str | None = Query(None),
+    kb_id: int = Query(0, ge=0),
+    dry_run: bool = Query(True, description="默认只预演，确认无误再改成 false"),
+) -> dict:
+    """一张表把「阶段 → 动作 → 工具 / 数据」整条流水线建好（O8-1）。
+
+    流程长什么样是人定的：这里只把表里写的东西落成实例和边，
+    不做任何推断；表里没写的类型/关系缺一个就直接报错。
+    """
+    from app.db.models import OntologyInstance, OntologyRelation
+    from app.services.graph.ontology import flow_import
+
+    reg = _registry(profile)
+    raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise BizError("文件过大", 413, "PAYLOAD_TOO_LARGE")
+    try:
+        plan = flow_import.build_plan(io.BytesIO(raw), reg)
+    except Exception as exc:  # noqa: BLE001 - 用户上传的表，什么错都要给可读提示
+        raise BizError(str(exc), 400, "ONTOLOGY_FLOW_INVALID") from exc
+
+    result = plan.to_dict()
+    result.update({"dry_run": dry_run, "profile_id": reg.profile_id})
+    if dry_run:
+        return result
+
+    upserted = await inst_mod.upsert_instances(db, plan.instances)
+    for draft in plan.relations:
+        await rel_mod.upsert_relation(
+            db, replace(draft, kb_id=kb_id) if kb_id else draft
+        )
+    await db.commit()
+
+    # 图库只是索引：把这次建的节点和边推过去（失败只记日志）
+    uids = [d.uid for d in plan.instances]
+    nodes = [
+        inst_mod.to_node(r)
+        for r in (
+            await db.scalars(
+                select(OntologyInstance).where(OntologyInstance.uid.in_(uids))
+            )
+        ).all()
+    ] if uids else []
+    edge_rows = []
+    if plan.relations:
+        keys = [(d.subject_uid, d.predicate, d.object_uid) for d in plan.relations]
+        edge_rows = [
+            rel_mod.to_edge(r)
+            for r in (
+                await db.scalars(
+                    select(OntologyRelation).where(
+                        OntologyRelation.profile_id == reg.profile_id,
+                        OntologyRelation.status == "active",
+                    )
+                )
+            ).all()
+            if (r.subject_uid, r.predicate, r.object_uid) in set(keys)
+        ]
+    await _sync_graph(nodes=nodes, edges=edge_rows)
+
+    await audit.record_audit(
+        actor_id=admin.id, actor_name=admin.username,
+        action="ontology.flow.import",
+        target_type="ontology_profile", target_id=reg.profile_id,
+        detail=(
+            f"阶段 {len(plan.stages)} / 动作 {result['actions']} / "
+            f"关系 {len(plan.relations)}；新增实例 {upserted.created} 更新 {upserted.updated}"
+        ),
+        client_ip=await get_client_ip(request),
+    )
+    result["created"] = upserted.created
+    result["updated"] = upserted.updated
+    return result
+
+
 @router.post("/instances", response_model=InstanceOut, status_code=201)
 async def create_instance(
     payload: InstanceCreate, admin: AdminUser, db: DbSession, request: Request

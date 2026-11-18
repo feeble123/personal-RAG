@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
+import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -149,6 +149,24 @@ export const ontologyApi = {
   // —— 自动抽取（F4）：规则先跑 → LLM 补漏 → 结果进待审区，人工确认才落实例 ——
   extractRun: (data: { profile_id?: string; kb_id?: number | null; use_llm?: boolean; dry_run?: boolean }) =>
     api.post('/admin/ontology/extract/run', data).then((r) => r.data as ExtractRunResult),
+  /** 流程链条导入（O8-1）：一张 Excel 建「阶段 → 动作 → 工具 / 数据」 */
+  importFlow: (
+    file: File,
+    opts: { profile?: string; kbId?: number; dryRun: boolean },
+  ) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api
+      .post('/admin/ontology/flow/import', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        params: {
+          profile: opts.profile,
+          kb_id: opts.kbId ?? 0,
+          dry_run: opts.dryRun,
+        },
+      })
+      .then((r) => r.data as FlowImportResult)
+  },
   /** 证据锚定（P2）：给已有实例找原文出处，不改值 */
   anchorRun: (data: {
     profile_id?: string

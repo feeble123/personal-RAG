@@ -316,6 +316,94 @@ class TestEvidenceAnchoring:
         assert any("原文里找不到" in k for k in run["reject_reasons"])
 
 
+class TestFlowImport:
+    """O8-1：一张表把流程链条建好（阶段 → 动作 → 工具 / 数据）。"""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _cleanup(self, _ensure_test_tables):
+        yield
+        from sqlalchemy import delete
+
+        from app.db.models import OntologyInstance, OntologyRelation
+        from app.db.session import async_session_factory
+
+        async with async_session_factory() as s:
+            await s.execute(
+                delete(OntologyRelation).where(
+                    OntologyRelation.profile_id == "process_skeleton"
+                )
+            )
+            await s.execute(
+                delete(OntologyInstance).where(
+                    OntologyInstance.profile_id == "process_skeleton"
+                )
+            )
+            await s.commit()
+
+    def _file(self):
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["阶段", "阶段序号", "动作", "工具", "工具来源", "需要的数据", "数据格式"])
+        ws.append(["数据准备", 1, "下载边界", "站网API", "外部", "边界矢量", "shp"])
+        ws.append([None, None, "整理降雨", "整理脚本", "内部", "逐时降雨", "csv"])
+        ws.append(["建模", 2, "装配模型", "装配器", "内部", "参数表", "xlsx"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return ("flow.xlsx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    async def test_dry_run_then_apply(self, client, admin_headers):
+        r = await client.post(
+            f"{BASE}/flow/import",
+            headers=admin_headers,
+            files={"file": self._file()},
+            params={"profile": "process_skeleton", "dry_run": "true"},
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["stages"] == 2 and data["actions"] == 3
+        assert data["relations"] == 1 + 3 + 3 + 3  # 阶段链 + 三类悬挂边
+        assert data["dry_run"] is True
+
+        r = await client.post(
+            f"{BASE}/flow/import",
+            headers=admin_headers,
+            files={"file": self._file()},
+            params={"profile": "process_skeleton", "dry_run": "false"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["created"] >= 8
+
+        r = await client.get(
+            f"{BASE}/instances", headers=admin_headers, params={"profile": "process_skeleton"}
+        )
+        rows = r.json()
+        types = {i["entity_type"] for i in rows}
+        assert {"Stage", "Action", "Tool", "DataAsset"} <= types
+        orders = {
+            i["name"]: i["props"].get("order") for i in rows if i["entity_type"] == "Stage"
+        }
+        assert orders == {"数据准备": 1, "建模": 2}
+
+        r = await client.get(
+            f"{BASE}/relations", headers=admin_headers, params={"profile": "process_skeleton"}
+        )
+        predicates = {x["predicate"] for x in r.json()}
+        assert {"NEXT_STAGE", "PERFORMED_BY", "USES_TOOL", "REQUIRES_DATA"} <= predicates
+
+    async def test_rejects_library_without_flow_types(self, client, admin_headers):
+        r = await client.post(
+            f"{BASE}/flow/import",
+            headers=admin_headers,
+            files={"file": self._file()},
+            params={"profile": "tuning", "dry_run": "true"},
+        )
+        assert r.status_code == 400
+        assert "缺少流程类型" in r.json()["message"]
+
+
 class TestInstanceCrud:
     async def test_create_reject_invalid(self, client, admin_headers, cleanup_instances):
         r = await client.post(

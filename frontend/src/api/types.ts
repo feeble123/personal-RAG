@@ -453,6 +453,32 @@ export interface OntologyProposalItem {
   created_at: string | null
 }
 
+/** 流程链条导入结果（O8-1）：一行 = 一个动作，程序推导出四类边。 */
+export interface FlowImportResult {
+  dry_run: boolean
+  profile_id: string
+  rows: number
+  stages: number
+  actions: number
+  tools: number
+  data_assets: number
+  relations: number
+  mapped: Record<string, string>
+  skipped_headers: string[]
+  errors: { row_no?: number; message: string }[]
+  stage_order: Record<string, number>
+  /** 行预览（rows 是行数，别混） */
+  preview: {
+    row_no: number
+    stage: string
+    action: string
+    tool: string
+    data_asset: string
+  }[]
+  created?: number
+  updated?: number
+}
+
 /** 一次证据锚定的结果统计（P2）。 */
 export interface AnchorRunResult {
   profile_id: string
