@@ -246,6 +246,27 @@ class ProposalAcceptIn(BaseModel):
     ids: list[int] = Field(..., min_length=1, max_length=200)
 
 
+class RunRecordIn(BaseModel):
+    """一次运行记录（O8-2）：建模 agent 跑完率定后上报。
+
+    `run_id` 是幂等键：同一个 id 重复上报只更新值，不会堆出第二个 Run 节点。
+    """
+
+    profile_id: str | None = None
+    run_id: str = Field(..., min_length=1, max_length=120, description="幂等键，上报方生成")
+    started_at: str | None = Field(None, max_length=40, description="如 2026-11-18T10:00:00")
+    objective: str | None = Field(None, max_length=500, description="目标函数 / 本次目标")
+    strategy: str | None = Field(None, max_length=100, description="率定策略，如 SCE-UA")
+    parameters: dict[str, Any] = Field(
+        default_factory=dict, description="{参数名: 取值}；参数必须已在库中"
+    )
+    metrics: dict[str, Any] = Field(
+        default_factory=dict, description="{指标名: 取值}；库里没有的指标会自动建空节点"
+    )
+    note: str | None = Field(None, max_length=2000)
+    kb_id: int = Field(0, ge=0)
+
+
 class AnchorRunIn(BaseModel):
     """P2 证据自动锚定：给已有实例找原文出处（不改值）。"""
 

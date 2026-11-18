@@ -453,6 +453,29 @@ export interface OntologyProposalItem {
   created_at: string | null
 }
 
+/** 一次运行记录（O8-2）：率定跑完后上报，落成 Run 节点 + 参数/指标边。 */
+export interface OntologyRunRecord {
+  uid: string
+  name: string
+  started_at: string | null
+  strategy: string | null
+  objective: string | null
+  parameters: { name: string; value: unknown }[]
+  metrics: { name: string; value: unknown }[]
+}
+
+/** 上报运行记录的返回：缺了哪些参数、自动建了哪些指标。 */
+export interface RunRecordResult {
+  run_uid: string
+  created: boolean
+  updated: boolean
+  used: { parameter: string; value: unknown }[]
+  achieved: { metric: string; value: unknown }[]
+  missing_parameters: string[]
+  created_metrics: string[]
+  warnings: string[]
+}
+
 /** 流程链条导入结果（O8-1）：一行 = 一个动作，程序推导出四类边。 */
 export interface FlowImportResult {
   dry_run: boolean

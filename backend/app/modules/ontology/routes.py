@@ -56,6 +56,7 @@ from app.modules.ontology.schemas import (
     RelationPatch,
     RelationTypeIn,
     ReloadOut,
+    RunRecordIn,
 )
 from app.services import audit
 from app.services.graph.ontology import instances as inst_mod
@@ -290,6 +291,87 @@ async def run_anchor(
     )
     result.saved = saved  # 写进 result 再输出：两边都叫 saved，别让后者把前者盖成 0
     return {"profile_id": reg.profile_id, "dry_run": payload.dry_run, **result.to_dict()}
+
+
+# ---------------- 运行记录（O8-2）：一次率定 → Run 节点 + 参数 + 指标 ----
+
+
+async def _sync_after_run(db: AsyncSession, run_uid: str) -> None:
+    """把这次运行的节点和边推给图库（失败只记日志，PG 才是真相源）。"""
+    from app.db.models import OntologyInstance, OntologyRelation
+
+    rels = list(
+        (
+            await db.scalars(
+                select(OntologyRelation).where(
+                    OntologyRelation.subject_uid == run_uid,
+                    OntologyRelation.predicate.in_(("USED", "ACHIEVED")),
+                    OntologyRelation.status == "active",
+                )
+            )
+        ).all()
+    )
+    uids = [run_uid, *[r.object_uid for r in rels]]
+    rows = (
+        await db.scalars(select(OntologyInstance).where(OntologyInstance.uid.in_(uids)))
+    ).all()
+    await _sync_graph(
+        nodes=[inst_mod.to_node(r) for r in rows],
+        edges=[rel_mod.to_edge(r) for r in rels],
+    )
+
+
+async def _store_run(db: AsyncSession, payload: RunRecordIn, reg) -> dict:
+    """管理端和对外接口共用的一套写入逻辑。"""
+    from app.services.graph.ontology import runs as runs_mod
+
+    try:
+        result = await runs_mod.record_run(
+            db,
+            reg,
+            runs_mod.RunInput(
+                run_id=payload.run_id,
+                started_at=payload.started_at,
+                objective=payload.objective,
+                strategy=payload.strategy,
+                parameters=payload.parameters,
+                metrics=payload.metrics,
+                note=payload.note,
+                kb_id=payload.kb_id,
+            ),
+        )
+    except ValueError as exc:
+        raise BizError(str(exc), 400, "ONTOLOGY_RUN_INVALID") from exc
+    await db.commit()
+    await _sync_after_run(db, result.run_uid)
+    return result.to_dict()
+
+
+@router.post("/runs")
+async def record_run(
+    payload: RunRecordIn, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    """登记一次运行（手工补录或管理端调用）。同一 run_id 重复上报只更新值。"""
+    reg = _registry(payload.profile_id)
+    data = await _store_run(db, payload, reg)
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.run.record",
+        target_type="ontology_run",
+        target_id=payload.run_id,
+        detail=f"参数 {len(data['used'])} 个 / 指标 {len(data['achieved'])} 个",
+        client_ip=await get_client_ip(request),
+    )
+    return data
+
+
+@router.get("/runs")
+async def list_runs(db: DbSession, _admin: AdminUser, profile: str | None = Query(None)) -> list[dict]:
+    """运行记录列表（按开始时间倒序），带用到的参数和达到的指标。"""
+    from app.services.graph.ontology import runs as runs_mod
+
+    return await runs_mod.list_runs(db, _registry(profile))
 
 
 @router.get("/proposals", response_model=list[ProposalOut])
@@ -1725,6 +1807,18 @@ async def public_neighbors(
 ) -> dict:
     """纯图查询：某个节点周围 1~2 跳的子图。"""
     return await queries.graph_neighbors(uid, depth=depth, limit=limit)
+
+
+@public_router.post("/runs")
+@limiter.limit(settings.external_rate_limit)
+async def public_record_run(request: Request, payload: RunRecordIn, db: DbSession) -> dict:
+    """建模 agent 上报一次运行（O8-2）：写入 Run 节点 + USED/ACHIEVED 边。
+
+    和管理端 `/admin/ontology/runs` 走同一套逻辑，只是鉴权换成 API Key。
+    参数必须已在库里；指标缺了会自动建空节点。
+    """
+    reg = _registry(payload.profile_id)
+    return await _store_run(db, payload, reg)
 
 
 @public_router.post("/ask")

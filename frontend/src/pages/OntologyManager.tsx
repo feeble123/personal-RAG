@@ -19,6 +19,7 @@ import {
   Select,
   Space,
   Table,
+  Collapse,
   Tabs,
   Tag,
   Tooltip,
@@ -29,6 +30,7 @@ import {
   ArrowLeftOutlined,
   DeleteOutlined,
   EditOutlined,
+  HistoryOutlined,
   PlusOutlined,
   UploadOutlined,
 } from '@ant-design/icons'
@@ -42,7 +44,8 @@ import { useOntologyLibrary } from '@/stores/ontologyLibrary'
 import TBoxPanel from './ontology/TBoxPanel'
 import ExtractionPanel from './ontology/ExtractionPanel'
 import ImportCenter from './ontology/ImportCenter'
-import type { OntologyInstance, OntologyRelation } from '@/api/types'
+import RunForm from './ontology/RunForm'
+import type { OntologyInstance, OntologyRelation, OntologyRunRecord } from '@/api/types'
 import InstanceForm from './ontology/InstanceForm'
 import RelationForm from './ontology/RelationForm'
 
@@ -64,6 +67,7 @@ export default function OntologyManager() {
   const [relationModal, setRelationModal] = useState<{ open: boolean; row: OntologyRelation | null }>(
     { open: false, row: null },
   )
+  const [runModalOpen, setRunModalOpen] = useState(false)
 
   // 当前图谱库：换库时三类查询全部重取，实体/关系/参数表互不串库
   const { profileId } = useOntologyLibrary()
@@ -79,6 +83,30 @@ export default function OntologyManager() {
     queryKey: ['ontology-relations', profileId],
     queryFn: () =>
       ontologyApi.relations({ profile: profileId || undefined, status: 'all', limit: 5000 }),
+  })
+  // 运行记录（O8-2）：只有库里有 Run 类型时才查，别的库查了也是空
+  const hasRunType = (typesQuery.data?.entity_types ?? []).some((t) => t.name === 'Run')
+  const runsQuery = useQuery({
+    queryKey: ['ontology-runs', profileId],
+    queryFn: () => ontologyApi.runs({ profile: profileId || undefined }),
+    enabled: hasRunType,
+  })
+
+  const recordRun = useMutation({
+    mutationFn: (values: Parameters<typeof ontologyApi.recordRun>[0]) =>
+      ontologyApi.recordRun({ ...values, profile_id: profileId || undefined }),
+    onSuccess: (data) => {
+      const extra = data.missing_parameters.length
+        ? `；缺失参数 ${data.missing_parameters.join('、')}（已跳过）`
+        : ''
+      message.success(
+        `已登记：参数 ${data.used.length} 个 / 指标 ${data.achieved.length} 个${extra}`,
+      )
+      setRunModalOpen(false)
+      refreshAll()
+      qc.invalidateQueries({ queryKey: ['ontology-runs'] })
+    },
+    onError: (e) => message.error(errMsg(e)),
   })
 
   const entityTypes = typesQuery.data?.entity_types ?? []
@@ -399,7 +427,55 @@ export default function OntologyManager() {
                     >
                       Excel 批量导入
                     </Button>
+                    {hasRunType && (
+                      <Button icon={<HistoryOutlined />} onClick={() => setRunModalOpen(true)}>
+                        登记运行记录
+                      </Button>
+                    )}
                   </Space>
+
+                  {hasRunType && (runsQuery.data?.length ?? 0) > 0 && (
+                    <Collapse
+                      size="small"
+                      style={{ marginBottom: 12 }}
+                      items={[
+                        {
+                          key: 'runs',
+                          label: `最近运行记录（${runsQuery.data?.length}）`,
+                          children: (
+                            <Table
+                              size="small"
+                              rowKey="uid"
+                              dataSource={runsQuery.data ?? []}
+                              pagination={{ pageSize: 5 }}
+                              columns={[
+                                { title: '运行', dataIndex: 'name', width: 180 },
+                                { title: '开始时间', dataIndex: 'started_at', width: 170 },
+                                { title: '策略', dataIndex: 'strategy', width: 110 },
+                                {
+                                  title: '指标',
+                                  render: (_: unknown, row: OntologyRunRecord) =>
+                                    row.metrics.length
+                                      ? row.metrics
+                                          .map((m) => `${m.name}=${String(m.value)}`)
+                                          .join('，')
+                                      : '—',
+                                },
+                                {
+                                  title: '参数',
+                                  width: 200,
+                                  render: (_: unknown, row: OntologyRunRecord) =>
+                                    row.parameters.length
+                                      ? `${row.parameters.length} 个`
+                                      : '—',
+                                },
+                              ]}
+                            />
+                          ),
+                        },
+                      ]}
+                    />
+                  )}
                   <Table
                     rowKey="id"
                     size="small"
@@ -506,6 +582,18 @@ export default function OntologyManager() {
         submitting={saveRelation.isPending}
         onCancel={() => setRelationModal({ open: false, row: null })}
         onSubmit={(values) => saveRelation.mutate(values)}
+      />
+      <RunForm
+        open={runModalOpen}
+        submitting={recordRun.isPending}
+        parameters={instances
+          .filter((i) => i.entity_type === 'Parameter')
+          .map((i) => ({
+            value: i.name,
+            label: `${String(i.props?.display_zh ?? i.name)}（${i.name}）`,
+          }))}
+        onCancel={() => setRunModalOpen(false)}
+        onSubmit={(values) => recordRun.mutate(values)}
       />
     </Layout>
   )

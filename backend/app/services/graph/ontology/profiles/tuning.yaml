@@ -78,6 +78,7 @@ entity_types:
     scope: local
     attributes:
       - {name: started_at, type: string}
+      - {name: strategy, type: string, description: "这次运行用的率定策略（如 SCE-UA）"}
       - {name: objective_text, type: text}
       - {name: note, type: text}
 

@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyTypes, SystemStats, TokenOut, User } from './types'
+import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, OntologyTypes, RunRecordResult, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -149,6 +149,21 @@ export const ontologyApi = {
   // —— 自动抽取（F4）：规则先跑 → LLM 补漏 → 结果进待审区，人工确认才落实例 ——
   extractRun: (data: { profile_id?: string; kb_id?: number | null; use_llm?: boolean; dry_run?: boolean }) =>
     api.post('/admin/ontology/extract/run', data).then((r) => r.data as ExtractRunResult),
+  /** 运行记录（O8-2）：登记一次率定，落成 Run 节点 + USED/ACHIEVED 边 */
+  recordRun: (data: {
+    profile_id?: string
+    run_id: string
+    started_at?: string
+    objective?: string
+    strategy?: string
+    parameters?: Record<string, unknown>
+    metrics?: Record<string, unknown>
+    note?: string
+    kb_id?: number
+  }) => api.post('/admin/ontology/runs', data).then((r) => r.data as RunRecordResult),
+  runs: (params?: { profile?: string }) =>
+    api.get('/admin/ontology/runs', { params }).then((r) => r.data as OntologyRunRecord[]),
+
   /** 流程链条导入（O8-1）：一张 Excel 建「阶段 → 动作 → 工具 / 数据」 */
   importFlow: (
     file: File,

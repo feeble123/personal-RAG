@@ -16,13 +16,13 @@ BASE = "/api/admin/ontology"
 async def cleanup_instances(_ensure_test_tables):
     """清掉本文件造的测试实例（按名称前缀识别）。"""
     yield
-    from sqlalchemy import delete, select
+    from sqlalchemy import delete, or_, select
 
-    from app.db.models import OntologyInstance, OntologyProposal
+    from app.db.models import OntologyInstance, OntologyProposal, OntologyRelation
     from app.db.session import async_session_factory
 
     async with async_session_factory() as s:
-        # uid 是 `pm:<sha1>`，按名字 like 匹配不到——先取 uid 再删提案
+        # uid 是 `pm:<sha1>`，按名字 like 匹配不到——先取 uid 再删提案和边
         uids = [
             r[0]
             for r in (
@@ -35,6 +35,15 @@ async def cleanup_instances(_ensure_test_tables):
             # 待审区也要清：锚定用例会写提案，留着会污染别的用例对「待审 N 条」的断言
             await s.execute(
                 delete(OntologyProposal).where(OntologyProposal.instance_uid.in_(uids))
+            )
+            # 运行记录会造 USED/ACHIEVED 边，不清会留下悬空边
+            await s.execute(
+                delete(OntologyRelation).where(
+                    or_(
+                        OntologyRelation.subject_uid.in_(uids),
+                        OntologyRelation.object_uid.in_(uids),
+                    )
+                )
             )
         await s.execute(delete(OntologyInstance).where(OntologyInstance.name.like("t4%")))
         await s.commit()
@@ -314,6 +323,50 @@ class TestEvidenceAnchoring:
         assert run["saved"] == 0
         assert run["rejected"] == 1
         assert any("原文里找不到" in k for k in run["reject_reasons"])
+
+
+class TestRunRecords:
+    """O8-2：一次率定 → Run 节点 + 用到的参数 + 达到的指标。"""
+
+    async def test_record_and_list(self, client, admin_headers, cleanup_instances):
+        created = await client.post(
+            f"{BASE}/instances", headers=admin_headers, json=_instance_payload("t4_run_sm")
+        )
+        assert created.status_code == 201, created.text
+
+        payload = {
+            "profile_id": "tuning",
+            "run_id": "t4-run-1",
+            "started_at": "2026-11-18T10:00:00",
+            "strategy": "SCE-UA",
+            "objective": "NSE 最大化",
+            "parameters": {"t4_run_sm": 22, "t4_missing": 1},
+            "metrics": {"t4_NSE": 0.82},
+        }
+        r = await client.post(f"{BASE}/runs", headers=admin_headers, json=payload)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["created"] is True
+        assert [u["parameter"] for u in data["used"]] == ["t4_run_sm"]
+        assert data["missing_parameters"] == ["t4_missing"]
+        assert data["achieved"] == [{"metric": "t4_NSE", "value": 0.82}]
+        assert data["created_metrics"] == ["t4_NSE"]
+
+        r = await client.get(f"{BASE}/runs", headers=admin_headers, params={"profile": "tuning"})
+        assert r.status_code == 200, r.text
+        row = next(x for x in r.json() if x["name"] == "t4-run-1")
+        assert row["strategy"] == "SCE-UA"
+        assert row["parameters"][0]["value"] == 22
+        assert row["metrics"][0]["value"] == 0.82
+
+    async def test_library_without_run_type_is_rejected(self, client, admin_headers):
+        r = await client.post(
+            f"{BASE}/runs",
+            headers=admin_headers,
+            json={"profile_id": "process_skeleton", "run_id": "t4-run-x", "parameters": {}},
+        )
+        assert r.status_code == 400
+        assert "缺少类型" in r.json()["message"]
 
 
 class TestFlowImport:

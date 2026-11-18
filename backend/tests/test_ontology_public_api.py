@@ -118,3 +118,46 @@ class TestAsk:
             f"{BASE}/ask", headers={"X-API-Key": external_key}, json={"question": ""}
         )
         assert r.status_code == 422
+
+
+class TestRunReport:
+    """O8-2：建模 agent 用 API Key 上报一次运行（和管理端同一套逻辑）。"""
+
+    async def _cleanup(self, client, admin_headers):
+        r = await client.get(
+            "/api/admin/ontology/instances",
+            headers=admin_headers,
+            params={"profile": "tuning"},
+        )
+        for row in r.json():
+            name = str(row.get("name") or "")
+            if name.startswith("t5-run") or name.startswith("t5_NSE"):
+                await client.delete(
+                    f"/api/admin/ontology/instances/{row['id']}", headers=admin_headers
+                )
+
+    async def test_agent_can_report_run(self, client, external_key, sample_param, admin_headers):
+        try:
+            r = await client.post(
+                f"{BASE}/runs",
+                headers={"X-API-Key": external_key},
+                json={
+                    "profile_id": "tuning",
+                    "run_id": "t5-run-1",
+                    "started_at": "2026-11-18T10:00:00",
+                    "strategy": "SCE-UA",
+                    "parameters": {"t5_sm": 20},
+                    "metrics": {"t5_NSE": 0.75},
+                },
+            )
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert [u["parameter"] for u in data["used"]] == ["t5_sm"]
+            assert data["achieved"] == [{"metric": "t5_NSE", "value": 0.75}]
+            assert data["run_uid"].startswith("rn:")
+        finally:
+            await self._cleanup(client, admin_headers)
+
+    async def test_missing_key_rejected(self, client, external_key):
+        r = await client.post(f"{BASE}/runs", json={"run_id": "t5-run-2"})
+        assert r.status_code == 401
