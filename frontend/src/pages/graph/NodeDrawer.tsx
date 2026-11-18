@@ -1,5 +1,12 @@
-/** 点开一个节点后的右侧详情面板：属性、证据、邻居。 */
-import { Drawer, Descriptions, Empty, List, Space, Tag, Typography } from 'antd'
+/**
+ * 点开一个节点后的右侧详情面板：属性、证据、邻居。
+ *
+ * 证据要点开时再取：`/graph` 返回的节点只带 `evidence_count`（列表型数据不进节点标量），
+ * 直接读 `props.evidence` 会永远显示「依据 0」——用户实测踩过这个坑。
+ */
+import { Drawer, Descriptions, Empty, List, Space, Spin, Tag, Typography } from 'antd'
+import { useQuery } from '@tanstack/react-query'
+import { ontologyApi } from '@/api/modules'
 import type { OntologyEvidence } from '@/api/types'
 import type { GraphLink, GraphNode } from './canvasTheme'
 
@@ -24,7 +31,18 @@ function evidenceTag(item: OntologyEvidence) {
 }
 
 export default function NodeDrawer({ node, color, relationLabels, typeLabels, neighbors, onClose, onPick }: Props) {
-  const evidence = (node?.props?.evidence as OntologyEvidence[] | undefined) ?? []
+  // 只有「本体实例」来源的节点才有证据可取；图库节点（graph）没有实例行
+  const canFetch = Boolean(node?.uid) && node?.source !== 'graph'
+  const detail = useQuery({
+    queryKey: ['ontology-instance-uid', node?.uid],
+    queryFn: () => ontologyApi.instanceByUid(node!.uid),
+    enabled: canFetch,
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  const evidence: OntologyEvidence[] =
+    detail.data?.evidence ?? (node?.props?.evidence as OntologyEvidence[] | undefined) ?? []
   const displayProps = Object.entries(node?.props ?? {}).filter(([key]) => key !== 'evidence')
 
   return (
@@ -86,10 +104,14 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
           </div>
 
           <div>
-            <Text strong>依据（{evidence.length}）</Text>
-            {evidence.length === 0 ? (
+            <Text strong>依据（{detail.isFetching ? '…' : evidence.length}）</Text>
+            {detail.isFetching ? (
+              <div style={{ marginTop: 8 }}>
+                <Spin size="small" />
+              </div>
+            ) : evidence.length === 0 ? (
               <Paragraph type="secondary" style={{ marginTop: 8 }}>
-                这条实例没有证据，推荐卡里不会输出它的数值。
+                这条实例还没有依据。到「本体管理 → 实例」里编辑它就能补上。
               </Paragraph>
             ) : (
               <List
@@ -103,10 +125,14 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
                         {evidenceTag(item)}
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           {item.doc_name || item.type || '—'}
-                          {item.page ? ` · 第${item.page}页` : ''}
+                          {/* 书内印刷页码优先（用户拿书翻的是它） */}
+                          {item.printed_page ?? item.page
+                            ? ` · 第${item.printed_page ?? item.page}页`
+                            : ''}
                         </Text>
                       </Space>
-                      <Text style={{ fontSize: 13 }}>{item.note || item.snippet || '—'}</Text>
+                      {/* 锚定证据的说明是固定一句，真正有信息量的是逐字引用 */}
+                      <Text style={{ fontSize: 13 }}>{item.quote || item.note || item.snippet || '—'}</Text>
                     </Space>
                   </List.Item>
                 )}
@@ -118,7 +144,7 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
             <Text strong>关系（{neighbors.length}）</Text>
             {neighbors.length === 0 ? (
               <Paragraph type="secondary" style={{ marginTop: 8 }}>
-                图库里没有与它相连的边。关系维护会在「本体管理」里做。
+                还没有和它相连的关系。到「本体管理 → 关系」里可以连。
               </Paragraph>
             ) : (
               <List

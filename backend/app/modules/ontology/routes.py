@@ -1063,6 +1063,19 @@ async def list_instances(
     return [InstanceOut.model_validate(r) for r in rows]
 
 
+@router.get("/instances/by-uid/{uid}", response_model=InstanceOut)
+async def get_instance_by_uid(uid: str, _admin: AdminUser, db: DbSession) -> InstanceOut:
+    """按 uid 取一条实例（带完整证据）。
+
+    图谱页点节点时需要它：`/graph` 返回的节点只带 `evidence_count`（列表型数据不进
+    节点标量），不带证据本身，所以点开只能重新取一次——否则抽屉永远显示「依据 0」。
+    """
+    row = await inst_mod.get_instance_by_uid(db, uid)
+    if row is None:
+        raise BizError("实例不存在（可能已删除）", 404, "ONTOLOGY_INSTANCE_NOT_FOUND")
+    return InstanceOut.model_validate(row)
+
+
 @router.post("/instances/import")
 async def import_instances(
     db: DbSession,

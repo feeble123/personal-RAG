@@ -196,6 +196,27 @@ class TestEvidenceTraceability:
         r = await client.get(f"{BASE}/evidence/999999", headers=admin_headers)
         assert r.status_code == 404
 
+    async def test_instance_by_uid_returns_evidence(
+        self, client, admin_headers, cleanup_instances
+    ):
+        """图谱抽屉点开节点要能够拿到证据：/graph 节点只带 evidence_count，不带证据本身。"""
+        created = await client.post(
+            f"{BASE}/instances",
+            headers=admin_headers,
+            json=_instance_payload("t4_drawer"),
+        )
+        assert created.status_code == 201, created.text
+        uid = created.json()["uid"]
+
+        r = await client.get(f"{BASE}/instances/by-uid/{uid}", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["uid"] == uid
+        assert r.json()["evidence"]  # 抽屉里「依据（0）」的根因就是这里取不到
+
+    async def test_instance_by_uid_missing(self, client, admin_headers):
+        r = await client.get(f"{BASE}/instances/by-uid/pn:not-exist", headers=admin_headers)
+        assert r.status_code == 404
+
 
 CHUNK_TEXT = "4.模型参数\n测试参数 自由水蓄水容量 5～50 默认 10\n"
 

@@ -155,16 +155,23 @@ async def list_instances(
 def _evidence_key(item: Any) -> tuple:
     """证据去重用的键：同一条原文只留一份，不同来源并列保留。
 
-    `attributes` 也进键：同一段原文支持「取值范围」和「初值」是两件事，
-    不进键会被合并成一条，属性归属就丢了（P1 属性级证据的前提）。
+    两个细节：
+
+    - `attributes` 也进键：同一段原文支持「取值范围」和「初值」是两件事，
+      不进键会被合并成一条，属性归属就丢了（P1 属性级证据的前提）。
+    - **引用原文优先于说明**：锚定证据的说明是固定的一句「大模型按原文指认」，
+      真正区分它们的是逐字引用（`quote`）。只按说明去重会把同一页上不同的
+      两句引用当成重复，反过来又把同一句引用记成好几条（用户实测：一个参数
+      攒出十几条长得一样的依据）。
     """
     if not isinstance(item, dict):
         return (str(item),)
+    quote = str(item.get("quote") or "").strip()
     return (
         item.get("doc_id"),
         item.get("chunk_id"),
         item.get("type"),
-        item.get("note"),
+        quote or item.get("note"),
         _attr_key(item.get("attributes")),
     )
 

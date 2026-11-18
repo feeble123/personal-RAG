@@ -110,6 +110,11 @@ export const ontologyApi = {
   /** ABox 实例列表 */
   instances: (params?: Record<string, unknown>) =>
     api.get('/admin/ontology/instances', { params }).then((r) => r.data as OntologyInstance[]),
+  /** 按 uid 取一条实例（带完整证据）：图谱节点抽屉用，/graph 只带 evidence_count */
+  instanceByUid: (uid: string) =>
+    api
+      .get(`/admin/ontology/instances/by-uid/${uid}`)
+      .then((r) => r.data as OntologyInstance),
   /** 参数推荐卡 */
   params: (params?: Record<string, unknown>) =>
     api.get('/admin/ontology/params', { params }).then((r) => r.data as OntologyParamCard[]),
