@@ -153,26 +153,29 @@ async def list_instances(
 
 
 def _evidence_key(item: Any) -> tuple:
-    """证据去重用的键：同一条原文只留一份，不同来源并列保留。
+    """证据去重用的键：**同一段原文只留一份**，不同来源并列保留。
 
     两个细节：
 
-    - `attributes` 也进键：同一段原文支持「取值范围」和「初值」是两件事，
-      不进键会被合并成一条，属性归属就丢了（P1 属性级证据的前提）。
     - **引用原文优先于说明**：锚定证据的说明是固定的一句「大模型按原文指认」，
       真正区分它们的是逐字引用（`quote`）。只按说明去重会把同一页上不同的
-      两句引用当成重复，反过来又把同一句引用记成好几条（用户实测：一个参数
-      攒出十几条长得一样的依据）。
+      两句引用当成重复，反过来又把同一句引用记成好几条。
+    - **有引用时不看 chunk_id**：同一页常被切成几个内容相同的切片，带上
+      chunk_id 会让同一句话在列表里出现两三遍（用户实测）。
+    - `attributes` **不进键**：同一句原文同时支持「中文名 / 分组 / 敏感度」时，
+      应该合成一条、把三个属性并进 `attributes` 列表，而不是显示三遍同样的话
+      （用户实测：一个参数攒出十几条长得一样的依据）。
     """
     if not isinstance(item, dict):
         return (str(item),)
     quote = str(item.get("quote") or "").strip()
+    if quote:
+        return (item.get("doc_id"), quote, item.get("type"))
     return (
         item.get("doc_id"),
         item.get("chunk_id"),
         item.get("type"),
-        quote or item.get("note"),
-        _attr_key(item.get("attributes")),
+        item.get("note"),
     )
 
 
@@ -217,13 +220,29 @@ def merge_evidence(existing: Iterable[Any], incoming: Iterable[Any]) -> list[Any
     溯源信息一旦丢了就再也找不回来。要删证据请走 PATCH 接口显式删除。
     """
     out = list(existing or [])
-    seen = {_evidence_key(i) for i in out}
+    # 键 → 在 out 里的位置：同一条原文再出现时，要把「支持哪些属性」并进去，
+    # 而不是再摆一条一模一样的依据（用户实测：同一句话显示三遍）。
+    index = {_evidence_key(item): pos for pos, item in enumerate(out)}
     for item in incoming or []:
         key = _evidence_key(item)
-        if key not in seen:
+        pos = index.get(key)
+        if pos is None:
             out.append(item)
-            seen.add(key)
+            index[key] = len(out) - 1
+            continue
+        out[pos] = _with_merged_attributes(out[pos], item)
     return out
+
+
+def _with_merged_attributes(existing: Any, incoming: Any) -> Any:
+    """同一条原文的两份记录：只并属性，其它字段保留已有那份（含锚点 chunk_id）。"""
+    if not isinstance(existing, dict) or not isinstance(incoming, dict):
+        return existing
+    merged = _attr_key(existing.get("attributes")) + _attr_key(incoming.get("attributes"))
+    attrs = tuple(sorted(set(merged)))
+    if not attrs:
+        return existing
+    return {**existing, "attributes": list(attrs)}
 
 
 def _differs(row: OntologyInstance, draft: InstanceDraft) -> bool:

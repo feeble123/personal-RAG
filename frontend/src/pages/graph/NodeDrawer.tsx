@@ -4,8 +4,10 @@
  * 证据要点开时再取：`/graph` 返回的节点只带 `evidence_count`（列表型数据不进节点标量），
  * 直接读 `props.evidence` 会永远显示「依据 0」——用户实测踩过这个坑。
  */
-import { Drawer, Descriptions, Empty, List, Space, Spin, Tag, Typography } from 'antd'
+import { useState } from 'react'
+import { Drawer, Descriptions, Empty, List, Space, Spin, Tag, Tooltip, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
+import EvidenceChunkModal from '@/components/EvidenceChunkModal'
 import { ontologyApi } from '@/api/modules'
 import type { OntologyEvidence } from '@/api/types'
 import type { GraphLink, GraphNode } from './canvasTheme'
@@ -24,8 +26,17 @@ interface Props {
   onPick: (uid: string) => void
 }
 
+/** 证据状态标签：有 chunk_id 的能点开看原文（见下面的 onClick）。 */
 function evidenceTag(item: OntologyEvidence) {
-  if (item.chunk_id) return <Tag color="success">可点回原文</Tag>
+  if (item.chunk_id) {
+    return (
+      <Tooltip title="点这一条查看原文片段">
+        <Tag color="success" style={{ cursor: 'pointer' }}>
+          查看原文
+        </Tag>
+      </Tooltip>
+    )
+  }
   if (item.doc_id) return <Tag color="warning">仅到文档</Tag>
   return <Tag>仅说明</Tag>
 }
@@ -44,6 +55,9 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
   const evidence: OntologyEvidence[] =
     detail.data?.evidence ?? (node?.props?.evidence as OntologyEvidence[] | undefined) ?? []
   const displayProps = Object.entries(node?.props ?? {}).filter(([key]) => key !== 'evidence')
+
+  // 点依据开原文：之前这里只画了一个「可点回原文」的标签，压根没接点击事件
+  const [preview, setPreview] = useState<{ chunkId: number; quote?: string | null } | null>(null)
 
   return (
     <Drawer
@@ -119,7 +133,14 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
                 style={{ marginTop: 8 }}
                 dataSource={evidence}
                 renderItem={(item) => (
-                  <List.Item>
+                  <List.Item
+                    style={item.chunk_id ? { cursor: 'pointer' } : undefined}
+                    onClick={() => {
+                      if (item.chunk_id) {
+                        setPreview({ chunkId: Number(item.chunk_id), quote: item.quote })
+                      }
+                    }}
+                  >
                     <Space direction="vertical" size={2} style={{ width: '100%' }}>
                       <Space>
                         {evidenceTag(item)}
@@ -165,6 +186,13 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
           </div>
         </Space>
       )}
+
+      <EvidenceChunkModal
+        open={Boolean(preview)}
+        chunkId={preview?.chunkId ?? null}
+        quote={preview?.quote}
+        onClose={() => setPreview(null)}
+      />
     </Drawer>
   )
 }

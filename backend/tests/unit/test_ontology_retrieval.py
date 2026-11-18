@@ -240,13 +240,36 @@ class TestEvidenceDedupe:
         item = {"note": "x", "type": "人工录入"}
         assert len(merge_evidence([item, dict(item)], [])) == 2
 
-    def test_同一切片支持不同属性要并列保留(self):
-        """P1 属性级证据：一段原文同时支持「范围」和「单位」是两条，不能合并成一条。"""
+    def test_同一段原文支持多个属性时合成一条(self):
+        """一段原文同时证明「范围」和「单位」：留一条，把两个属性并进去。
+
+        以前按属性拆成两条，界面上就是同一句话显示两遍（用户实测：一个参数
+        攒出十几条长得一样的依据）。
+        """
         from app.services.graph.ontology.instances import dedupe_evidence
 
         a = {"chunk_id": 7, "note": "手册参数表", "attributes": ["range_low"]}
         b = {"chunk_id": 7, "note": "手册参数表", "attributes": ["unit"]}
-        assert dedupe_evidence([a, b, dict(a)]) == [a, b]
+        merged = dedupe_evidence([a, b, dict(a)])
+        assert len(merged) == 1
+        assert merged[0]["attributes"] == ["range_low", "unit"]
+
+    def test_同一引用不同切片只留一条(self):
+        """同一页被切成内容相同的几个切片：引用一样就算同一条。"""
+        from app.services.graph.ontology.instances import dedupe_evidence
+
+        a = {"chunk_id": 7, "doc_id": 20, "quote": "CI | 壤中流消退系数 | 敏感 |", "type": "自动锚定"}
+        b = {"chunk_id": 8, "doc_id": 20, "quote": "CI | 壤中流消退系数 | 敏感 |", "type": "自动锚定"}
+        merged = dedupe_evidence([a, b])
+        assert len(merged) == 1
+        assert merged[0]["chunk_id"] == 7  # 保留第一个锚点，能点回原文
+
+    def test_同一页不同引用都保留(self):
+        from app.services.graph.ontology.instances import dedupe_evidence
+
+        a = {"chunk_id": 7, "doc_id": 20, "quote": "CI | 壤中流消退系数", "type": "自动锚定"}
+        b = {"chunk_id": 7, "doc_id": 20, "quote": "若退水历时远大于3d", "type": "自动锚定"}
+        assert len(dedupe_evidence([a, b])) == 2
 
     def test_normalize_evidence_统一属性写法(self):
         from app.services.graph.ontology.instances import normalize_evidence
