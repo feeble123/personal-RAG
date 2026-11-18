@@ -261,7 +261,12 @@ export default function InstanceForm({
                       size="small"
                       type="link"
                       icon={<FileSearchOutlined />}
-                      onClick={() => setPreview({ chunkId: ev.chunk_id as number, quote: ev.quote })}
+                      onClick={() =>
+                        setPreview({
+                          chunkId: ev.chunk_id as number,
+                          quote: ev.quote || ev.snippet,
+                        })
+                      }
                     >
                       原文
                     </Button>

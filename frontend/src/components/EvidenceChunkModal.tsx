@@ -12,6 +12,7 @@ import { Alert, Modal, Space, Spin, Tag, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { errMsg } from '@/api/client'
 import { ontologyApi } from '@/api/modules'
+import { findQuoteRange } from '@/utils/quoteHighlight'
 
 const { Text, Paragraph } = Typography
 
@@ -25,17 +26,16 @@ interface Props {
 
 /** 把引用片段在正文里标出来；找不到就原样返回（不假装高亮成功）。 */
 function highlight(content: string, quote?: string | null): ReactNode {
-  const needle = (quote || '').trim()
-  if (!needle) return content
-  const idx = content.indexOf(needle)
-  if (idx < 0) return content
+  const range = findQuoteRange(content, quote)
+  if (!range) return content
+  const [start, end] = range
   return (
     <>
-      {content.slice(0, idx)}
+      {content.slice(0, start)}
       <mark style={{ background: 'rgba(255, 214, 102, 0.45)', color: 'inherit' }}>
-        {content.slice(idx, idx + needle.length)}
+        {content.slice(start, end)}
       </mark>
-      {content.slice(idx + needle.length)}
+      {content.slice(end)}
     </>
   )
 }
@@ -77,6 +77,14 @@ export default function EvidenceChunkModal({ open, chunkId, quote, onClose }: Pr
               切片 #{data.chunk_id}
             </Text>
           </Space>
+          {(quote ?? '').trim() && !findQuoteRange(data.content, quote) && (
+            <Alert
+              type="info"
+              showIcon
+              message="这段引用在切片里没找到原句"
+              description="下面显示的是整段原文。可能是切片被重新解析过，或引用是模型概括的（不是逐字抄的）。"
+            />
+          )}
           <Paragraph
             style={{
               maxHeight: 420,

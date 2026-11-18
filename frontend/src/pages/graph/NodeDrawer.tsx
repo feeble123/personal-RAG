@@ -137,7 +137,11 @@ export default function NodeDrawer({ node, color, relationLabels, typeLabels, ne
                     style={item.chunk_id ? { cursor: 'pointer' } : undefined}
                     onClick={() => {
                       if (item.chunk_id) {
-                        setPreview({ chunkId: Number(item.chunk_id), quote: item.quote })
+                        // 没有逐字引用时退回摘录：至少能定位到大概那句
+                        setPreview({
+                          chunkId: Number(item.chunk_id),
+                          quote: item.quote || item.snippet,
+                        })
                       }
                     }}
                   >
