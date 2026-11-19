@@ -444,14 +444,27 @@ async def chat(
 
             # 5) 流式生成（按回答风格组装 SYSTEM_PROMPT + 对应温度；证据较弱/不足时追加据实约束）
             llm = build_chat_model(style_temp)
-            messages = build_prompt(
-                body.content,
-                cites,
-                history,
-                style=style,
-                evidence_weak=(evidence_level in ("weak", "none")),
-                ontology_facts=(ontology_pack.facts if ontology_hit else None),
-            )
+            # 本体命中且链路可用：按「骨架 + 定点原文」生成，不再走相似度检索的拼装。
+            # 这是本体真正接管回答的地方——它决定讲什么、按什么顺序、引用哪一段。
+            plan = None
+            if ontology_hit and ontology_pack is not None and ontology_pack.chain:
+                from app.services.graph.ontology.answer import (
+                    build_answer_plan,
+                    build_plan_prompt,
+                )
+
+                plan = await build_answer_plan(sdb, ontology_pack)
+            if plan is not None and plan.steps:
+                messages = build_plan_prompt(body.content, plan, history=history)
+            else:
+                messages = build_prompt(
+                    body.content,
+                    cites,
+                    history,
+                    style=style,
+                    evidence_weak=(evidence_level in ("weak", "none")),
+                    ontology_facts=(ontology_pack.facts if ontology_hit else None),
+                )
             buffer = ""
             usage_in = usage_out = None
             finish_reason = None

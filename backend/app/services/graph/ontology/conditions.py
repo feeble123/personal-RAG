@@ -135,8 +135,16 @@ def extract_conditions(question: str) -> list[Condition]:
     return found
 
 
+#: **重现期**量纲的键（年）；和概率类键分开，避免把 5 年一遇读成 5%
+PERIOD_KEYS = ("return_period", "recurrence")
 #: 属性里可能表示"频率/重现期"的键
-_FREQ_KEYS = ("frequency", "freq", "p", "p_level", "exceedance", "return_period", "recurrence")
+_FREQ_KEYS = ("frequency", "freq", "p", "p_level", "exceedance", *PERIOD_KEYS)
+#: 区间工况的上下界键（引擎约定，不是领域词）：
+#: 文档里写「20~50 年一遇」，用户只会说「50 年一遇」；声明这两个属性后，
+#: 问题的重现期落在 [low, high] 里就算命中。任何本体都能用，不需要改引擎。
+INTERVAL_KEYS = ("return_period_low", "return_period_high")
+#: 供检索层判断"哪些实体类型算工况"用（声明了频率或区间属性的类型）
+FREQUENCY_KEYS: tuple[str, ...] = (*_FREQ_KEYS, *INTERVAL_KEYS)
 #: 文本里的「20年一遇」「5%」
 _FREQ_TEXT_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?|[零〇一二两三四五六七八九十百千万]+)\s*年\s*一\s*遇")
 _PERCENT_TEXT_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*%")
@@ -154,7 +162,37 @@ def _numbers_in_text(text: str) -> tuple[set[float], set[float]]:
 
 
 def _close(a: float, b: float, tol: float = 0.02) -> bool:
-    return abs(a - b) <= max(tol, abs(b) * tol)
+    """数值是否"差不多相等"。
+
+    容差必须相对化：超越概率是 0.05 / 0.02 / 0.01 / 0.0033 这种量级，
+    绝对容差 0.02 会把 0.01 和 0.0033（100 年一遇 vs 300 年一遇）判成相等，
+    后果是把 300 年一遇的方案挂到 100 年一遇的问题上。
+    """
+    return abs(a - b) <= max(1e-3, abs(b) * tol)
+
+
+def as_float(value: Any) -> float | None:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _in_interval(props: dict[str, Any], cond: "Condition") -> bool:
+    """区间工况：问题的重现期落在 (low, high] 里就算命中。
+
+    为什么是左开右闭：文档写的是「20 年以上 50 年以下」——上界不含、下界含。
+    用闭区间的话，20 年一遇会同时落进「10~20」和「20~50」两档，
+    一条问题里冒出两个响应等级（Ⅳ 和 Ⅲ），答案自相矛盾（实测踩过）。
+    """
+    if not cond.return_period:
+        return False
+    low = as_float(props.get(INTERVAL_KEYS[0]))
+    high = as_float(props.get(INTERVAL_KEYS[1]))
+    if low is None or high is None:
+        return False
+    lo, hi = min(low, high), max(low, high)
+    return lo + 1e-9 < cond.return_period <= hi + 1e-9
 
 
 def matches(props: dict[str, Any] | None, name: str, cond: Condition) -> bool:
@@ -164,10 +202,15 @@ def matches(props: dict[str, Any] | None, name: str, cond: Condition) -> bool:
     宁可判"不是"，也不要把别的工况硬套上来（讲错方案的代价比不回答高）。
     """
     props = props or {}
-    text = " ".join(str(v) for v in props.values() if isinstance(v, (str, int, float)))
-    text = f"{name or ''} {text}"
+    # 只认**名字**里的工况说法，不去扫任意文本属性（note/description/mode…）。
+    # 反例（实测）：某条工况的备注写着「超过下游防护对象防洪标准（20年一遇）」，
+    # 扫文本时它就被判成"20 年一遇工况"，把超标准削峰方案混进了 20 年一遇的答案。
+    text = name or ""
 
     if cond.kind == "frequency":
+        # 区间工况优先：「20~50 年一遇」这条属性上的区间，能接住用户说的「50 年一遇」
+        if _in_interval(props, cond):
+            return True
         for key in _FREQ_KEYS:
             if key not in props:
                 continue
@@ -178,10 +221,21 @@ def matches(props: dict[str, Any] | None, name: str, cond: Condition) -> bool:
                 continue
             if str(raw).strip().endswith("%"):
                 number /= 100.0
-            # 同一个键可能存概率(0.05)、百分比(5)、重现期(20)，三种都比一遍
-            if _close(number, cond.value) or _close(number, cond.value * 100) or (
-                cond.return_period and _close(number, cond.return_period)
-            ):
+
+            # **按属性名决定量纲**，不要对每个键都三种量纲各比一遍。
+            # 反例（实测）：`return_period: 5`（5 年一遇）会被当成「5%」，
+            # 于是 20 年一遇（P=5%）把 3~5 年一遇那条工况也拉进了答案。
+            if key in PERIOD_KEYS:
+                if cond.return_period and _close(number, cond.return_period):
+                    return True
+                continue
+
+            # 概率类键：可能存概率(0.05)、百分比(5)、甚至重现期(20)，三种都比。
+            # 百分比只在数值明显大于 1 时才算——`frequency: 1.0`（1 年一遇=100%）
+            # 与「P=1%」的 1.0 长得一样，不加限制 100 年一遇会拉进 1 年一遇。
+            if _close(number, cond.value) or (
+                number > 1 and _close(number, cond.value * 100)
+            ) or (cond.return_period and number > 1 and _close(number, cond.return_period)):
                 return True
         periods, percents = _numbers_in_text(text)
         if cond.return_period and any(_close(p, cond.return_period) for p in periods):

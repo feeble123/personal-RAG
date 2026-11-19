@@ -49,6 +49,11 @@ entity_types:
       # 频率用超越概率存（20 年一遇 → 0.05），重现期另存一份，两种写法都能匹配
       - {name: frequency, type: number, description: "超越概率（0.05 = 20 年一遇）"}
       - {name: return_period, type: number, description: "重现期（年）"}
+      # 区间工况（「20~50 年一遇」这种）：用户只会说「50 年一遇」，
+      # 引擎拿问题的重现期落在 [low, high] 里就算命中。属性名是引擎约定，
+      # 不是领域词——任何本体只要声明这两个属性，就能被工况检索认出来。
+      - {name: return_period_low, type: number, description: "区间下界（年一遇）"}
+      - {name: return_period_high, type: number, description: "区间上界（年一遇）"}
       - {name: rainfall_24h_mm, type: string, description: "24h 降雨量区间（mm）"}
       - {name: rainfall_6h_mm, type: string, description: "6h 降雨量阈值（mm）"}
       - {name: level_m, type: number, description: "判别用库水位（m）"}

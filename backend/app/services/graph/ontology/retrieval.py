@@ -212,6 +212,101 @@ async def _expand_graph(
     return collected
 
 
+async def _resolve_profile_id(db: AsyncSession, kb_id: int | None) -> str | None:
+    """按知识库推断该用哪套本体。
+
+    为什么要有这一步：问答页只传 kb_id，不传 profile。以前一律回落到全局默认
+    `ONTOLOGY_PROFILE`，于是问高洞子水库的问题用的却是调参本体——TBox 对不上，
+    阶段划分和属性标签全错。这里改成**看数据**：某个库里只灌了一套本体的实例，
+    那就用那一套；多套并存时不猜，交回全局默认。
+    """
+    if db is None or kb_id is None:
+        return None
+    from sqlalchemy import select
+
+    try:
+        rows = (
+            await db.execute(
+                select(inst_mod.OntologyInstance.profile_id)
+                .where(inst_mod.OntologyInstance.kb_id == kb_id)
+                .distinct()
+            )
+        ).scalars().all()
+    except Exception:  # noqa: BLE001 - 推断失败不该影响问答
+        return None
+    return rows[0] if len(rows) == 1 else None
+
+
+def _condition_like_types(reg: Any) -> list[str]:
+    """哪些实体类型算「工况」——声明了频率或区间属性的类型。
+
+    这是一个**引擎约定**，不是领域词：任何本体只要在 TBox 里给某个类型声明
+    `frequency` / `return_period` / `return_period_low|high` 之类的属性，
+    它的实例就会被工况检索当成候选。引擎不需要知道「水库」两个字。
+    """
+    if reg is None:
+        return []
+    keys = set(conditions_mod.FREQUENCY_KEYS)
+    return [
+        name
+        for name, entity in reg.entity_types.items()
+        if any(attr.name in keys for attr in entity.attributes.values())
+    ]
+
+
+async def _link_conditions_by_value(
+    db: AsyncSession,
+    conds: list[conditions_mod.Condition],
+    reg: Any,
+    *,
+    limit: int = _MAX_LINKED,
+) -> list[LinkedEntity]:
+    """用问题里抽到的工况去**找**实例，而不是等实例名恰好是问题的子串。
+
+    为什么必须补这一步：「20 年以上 50 年以下一遇」是文档的说法，用户只会说
+    「50 年一遇」。名字对不上时，原来的链接器一个工况都连不上，链路直接断掉，
+    用户看到的就是「本体什么都没给」。
+    """
+    if db is None or reg is None or not conds:
+        return []
+    candidates: list[tuple[tuple, LinkedEntity]] = []
+    for entity_type in _condition_like_types(reg):
+        rows = await inst_mod.list_instances(
+            db, profile_id=reg.profile_id, entity_type=entity_type, status="active", limit=500
+        )
+        for row in rows:
+            hit = next(
+                (c for c in conds if conditions_mod.matches(row.props, row.name, c)), None
+            )
+            if hit is None:
+                continue
+            # 越具体越先讲：精确重现期 > 窄区间 > 宽区间。
+            # 「20 年一遇」会同时落在 10~20、20~50 两档上，不排序的话
+            # 讲哪个全看遍历顺序，答案就不稳定了。
+            props = row.props or {}
+            exact = conditions_mod.as_float(props.get("return_period")) == hit.return_period
+            low = conditions_mod.as_float(props.get("return_period_low"))
+            high = conditions_mod.as_float(props.get("return_period_high"))
+            width = abs(high - low) if (low is not None and high is not None) else 1e9
+            key = (0 if exact else 1, width, row.name)
+            candidates.append(
+                (
+                    key,
+                    LinkedEntity(
+                        uid=row.uid,
+                        entity_type=row.entity_type,
+                        name=row.name,
+                        display=row.name,
+                        matched=hit.raw,
+                        score=1.0 if exact else 0.9,
+                        source="instance",
+                    ),
+                )
+            )
+    candidates.sort(key=lambda item: item[0])
+    return [entity for _key, entity in candidates[:limit]]
+
+
 async def _graph_facts(
     db: AsyncSession,
     question: str,
@@ -225,13 +320,6 @@ async def _graph_facts(
     store = get_graph_store()
     if store is None:
         return [], [], []
-    linked = await link_graph_entities(db, question, kb_id=kb_id)
-    if not linked:
-        return [], [], []
-
-    facts: list[dict] = []
-    evidence: list[dict] = []
-    nodes: dict[str, Any] = {}  # uid → Node，边两端的名字从这里取
 
     # 工况条件（20 年一遇 / P=5% / 3200 m³/s）决定"讲哪个分支的方案"，
     # 命中工况的节点排在前面，并标出来供编排层使用。
@@ -240,6 +328,19 @@ async def _graph_facts(
         if question_conditions is not None
         else conditions_mod.extract_conditions(question)
     )
+
+    linked = await link_graph_entities(db, question, kb_id=kb_id)
+    matched_by_value = await _link_conditions_by_value(db, conds, reg)
+    if matched_by_value:
+        seen = {e.uid for e in matched_by_value}
+        linked = matched_by_value + [e for e in linked if e.uid not in seen]
+    if not linked:
+        return [], [], []
+
+    facts: list[dict] = []
+    evidence: list[dict] = []
+    nodes: dict[str, Any] = {}  # uid → Node，边两端的名字从这里取
+
     seeds = linked[:_MAX_LINKED]
     node_facts: list[dict] = []
     for entity in seeds:
@@ -379,7 +480,8 @@ async def retrieve_with_ontology(
 ) -> FactPack:
     """本体优先的检索编排。任何一环失败都不抛给调用方，只降级。"""
     started = time.perf_counter()
-    reg = get_registry(profile_id or settings.ontology_profile)
+    resolved = profile_id or await _resolve_profile_id(db, kb_id) or settings.ontology_profile
+    reg = get_registry(resolved)
     pack = FactPack(question=question)
 
     # 工况条件（20 年一遇 / P=5% / 3200 m³/s）：同一座水库不同频率的方案完全不同，

@@ -90,3 +90,39 @@ class TestMatch:
     def test_没有任何线索时判不是(self):
         cond = C.extract_conditions("20年一遇")[0]
         assert C.matches({}, "青溪水库", cond) is False
+
+
+class TestIntervalBuckets:
+    """区间工况：文档写「20 年以上 50 年以下」，用户只说「50 年一遇」。"""
+
+    def _c(self, years: float) -> Condition:
+        return C.Condition(
+            kind="frequency", raw=f"{years:g}年一遇",
+            value=round(1.0 / years, 6), return_period=years,
+        )
+
+    def test_50年一遇落在20到50档(self):
+        props = {"return_period_low": 20, "return_period_high": 50}
+        assert C.matches(props, "20~50年一遇降雨（170~210mm）", self._c(50))
+
+    def test_20年一遇只落在10到20档(self):
+        """左开右闭：20 年一遇属于 10~20，不属于 20~50。
+
+        闭区间会让一条问题里同时冒出 Ⅳ 级和 Ⅲ 级两个响应，答案自相矛盾。
+        """
+        assert C.matches(
+            {"return_period_low": 10, "return_period_high": 20}, "10~20年一遇降雨", self._c(20)
+        )
+        assert not C.matches(
+            {"return_period_low": 20, "return_period_high": 50}, "20~50年一遇降雨", self._c(20)
+        )
+
+    def test_重现期不会被当成百分比(self):
+        """`return_period: 5` 是 5 年一遇，不是 5%；否则 20 年一遇（P=5%）会误命中。"""
+        assert not C.matches({"return_period": 5}, "3~5年一遇降雨", self._c(20))
+        assert not C.matches({"frequency": 0.2}, "3~5年一遇降雨", self._c(20))
+
+    def test_备注里的工况字样不参与匹配(self):
+        """备注写着「防洪标准（20 年一遇）」，不代表这条实例就是 20 年一遇工况。"""
+        props = {"note": "超过下游防护对象防洪标准（20年一遇），转以 480m³/s 削峰"}
+        assert not C.matches(props, "超下游标准洪水", self._c(20))

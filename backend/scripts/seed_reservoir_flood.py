@@ -95,25 +95,25 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
 
     # ---------- 工况：按 24h 降雨分档 ----------
     ("condition", "24h降雨小于85mm（1年一遇）",
-     {"display_zh": "1年一遇", "return_period": 1, "frequency": 1.0, "rainfall_24h_mm": "<85", "season": "汛期"},
+     {"display_zh": "1年一遇", "return_period": 1, "return_period_low": 0.1, "return_period_high": 1, "frequency": 1.0, "rainfall_24h_mm": "<85", "season": "汛期"},
      [(S, "预计24h降雨量小于85mm（1年一遇）")]),
     ("condition", "1~2年一遇降雨（85~100mm）",
-     {"display_zh": "1~2年一遇", "return_period": 2, "frequency": 0.5, "rainfall_24h_mm": "85~100", "season": "汛期"},
+     {"display_zh": "1~2年一遇", "return_period": 2, "return_period_low": 1, "return_period_high": 2, "frequency": 0.5, "rainfall_24h_mm": "85~100", "season": "汛期"},
      [(S, "预计 24h降雨量大于85mm且小于100mm（1~2年一遇）")]),
     ("condition", "2~3年一遇降雨（100~110mm）",
-     {"display_zh": "2~3年一遇", "return_period": 3, "frequency": 0.333, "rainfall_24h_mm": "100~110", "season": "汛期"},
+     {"display_zh": "2~3年一遇", "return_period": 3, "return_period_low": 2, "return_period_high": 3, "frequency": 0.333, "rainfall_24h_mm": "100~110", "season": "汛期"},
      [(S, "预计24h降雨量大于100mm且小于110mm（2~3年一遇）")]),
     ("condition", "3~5年一遇降雨（110~130mm）",
-     {"display_zh": "3~5年一遇", "return_period": 5, "frequency": 0.2, "rainfall_24h_mm": "110~130", "season": "汛期"},
+     {"display_zh": "3~5年一遇", "return_period": 5, "return_period_low": 3, "return_period_high": 5, "frequency": 0.2, "rainfall_24h_mm": "110~130", "season": "汛期"},
      [(S, "大于 110mm且小于130mm（3~5年一遇）")]),
     ("condition", "5~10年一遇降雨（130~155mm）",
-     {"display_zh": "5~10年一遇", "return_period": 10, "frequency": 0.1, "rainfall_24h_mm": "130~155", "season": "汛期"},
+     {"display_zh": "5~10年一遇", "return_period": 10, "return_period_low": 5, "return_period_high": 10, "frequency": 0.1, "rainfall_24h_mm": "130~155", "season": "汛期"},
      [(S, "大于130mm且小于155mm（5~10年一遇）")]),
     ("condition", "10~20年一遇降雨（155~170mm）",
-     {"display_zh": "10~20年一遇", "return_period": 20, "frequency": 0.05, "rainfall_24h_mm": "155~170", "season": "汛期"},
+     {"display_zh": "10~20年一遇", "return_period": 20, "return_period_low": 10, "return_period_high": 20, "frequency": 0.05, "rainfall_24h_mm": "155~170", "season": "汛期"},
      [(S, "24h大于155mm且小于170mm(10~20年一遇)")]),
     ("condition", "20~50年一遇降雨（170~210mm）",
-     {"display_zh": "20~50年一遇", "return_period": 50, "frequency": 0.02, "rainfall_24h_mm": "170~210", "season": "汛期"},
+     {"display_zh": "20~50年一遇", "return_period": 50, "return_period_low": 20, "return_period_high": 50, "frequency": 0.02, "rainfall_24h_mm": "170~210", "season": "汛期"},
      [(S, "24h大于170mm且小于210mm(20~50年一遇)")]),
 
     # ---------- 工况：按重现期 / 水位判别 ----------
@@ -122,17 +122,31 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
       "note": "下游防护对象的防洪标准；也是 Ⅳ 级响应的启动条件之一"},
      [(F, "根据洪水预报，可能遭遇20年一遇的洪水")]),
     ("condition", "20~50年一遇洪水",
-     {"return_period": 50, "frequency": 0.02},
+     {"display_zh": "20~50年一遇", "return_period": 50, "frequency": 0.02,
+      "return_period_low": 20, "return_period_high": 50},
      [(F, "可能遭遇20年以上50年以下一遇的洪水")]),
     ("condition", "50~1000年一遇洪水",
-     {"return_period": 1000, "frequency": 0.001},
+     {"display_zh": "50~1000年一遇", "return_period": 1000, "frequency": 0.001,
+      "return_period_low": 50, "return_period_high": 1000},
      [(F, "可能遭遇50年以上1000年以下一遇的洪水")]),
     ("condition", "1000年以上一遇洪水",
-     {"return_period": 1000, "frequency": 0.001},
+     {"display_zh": "1000年一遇", "return_period": 1000, "frequency": 0.001,
+      "return_period_low": 1000, "return_period_high": 100000},
      [(F, "可能遭遇1000年以上一遇的洪水")]),
+    ("condition", "300年一遇洪水（正常年）",
+     {"display_zh": "300年一遇", "return_period": 300, "frequency": 0.0033, "season": "正常年",
+      "return_period_low": 300, "return_period_high": 300,
+      "note": "正常年，起调水位 338.5m 时水库最大可削峰的量级"},
+     [(S, "水库最大能对300年一遇（P=0.33%）的洪水进行削峰")]),
+    ("condition", "100年一遇洪水（干旱年）",
+     {"display_zh": "100年一遇", "return_period": 100, "frequency": 0.01, "season": "干旱年",
+      "return_period_low": 100, "return_period_high": 100,
+      "note": "干旱年，起调水位 340m 时水库最大可削峰的量级"},
+     [(S, "水库最大能对100年一遇（P=1.00%）的洪水进行削峰")]),
     ("condition", "超下游标准洪水",
-     {"return_period": 20, "frequency": 0.05,
-      "note": "超过下游防护对象防洪标准（20年一遇），转以 480m³/s 为最大允许下泄量削峰"},
+     # 不声明 frequency / return_period：它描述的是"超过标准"这个关系，不是一个具体量级。
+     # 声明了数值会让「20 年一遇」这一类问题把它一起拉进来。
+     {"note": "超过下游防护对象防洪标准（20年一遇），转以 480m³/s 为最大允许下泄量削峰"},
      [(S, "由于下游防护对象的防洪标准为20年一遇")]),
     ("condition", "校核洪水（1000年一遇）",
      {"return_period": 1000, "frequency": 0.001, "inflow_m3s": 1000},
@@ -327,6 +341,10 @@ RELATIONS: list[tuple[str, str, str, str, str, list[tuple[str, str]]]] = [
     # 超标准 / 保坝
     ("condition", "超下游标准洪水", "STIPULATES", "dispatch_plan", "超标准洪水削峰方案",
      [(S, "由于下游防护对象的防洪标准为20年一遇")]),
+    ("condition", "300年一遇洪水（正常年）", "STIPULATES", "dispatch_plan", "超标准洪水削峰方案",
+     [(S, "水库最大能对300年一遇（P=0.33%）的洪水进行削峰")]),
+    ("condition", "100年一遇洪水（干旱年）", "STIPULATES", "dispatch_plan", "超标准洪水削峰方案",
+     [(S, "水库最大能对100年一遇（P=1.00%）的洪水进行削峰")]),
     ("condition", "校核洪水（1000年一遇）", "STIPULATES", "dispatch_plan", "保坝泄洪方案",
      [(S, "入库流量达到乃至超过校核洪峰流量1000m³/s时，水位仍继续上涨，为保大坝安全")]),
 
@@ -350,19 +368,19 @@ RELATIONS: list[tuple[str, str, str, str, str, list[tuple[str, str]]]] = [
     ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "加强安全巡查",
      [(F, "加大安全巡查力度")]),
     ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "专家组到场",
-     [(F, "专家组成员在接到信息后2h内赴现场进行技术指导")]),
+     [(F, "专家组成员在接到信息后2h内赴现场进行技术指导", 51)]),
     ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "传达应急响应命令",
-     [(F, "高洞子水库管理处人员应在1h内将应急响应命令和有关信息传送到")]),
+     [(F, "高洞子水库管理处人员应在1h内将应急响应命令和有关信息传送到", 51)]),
     ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情")]),
+     [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 51)]),
     ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "专家组到场",
-     [(F, "专家组成员在接到信息后30min内赴现场进行技术指导")]),
+     [(F, "专家组成员在接到信息后30min内赴现场进行技术指导", 52)]),
     ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "传达应急响应命令",
-     [(F, "高洞子水库管理处人员应在30min内将应急响应命令和有关信息传送到")]),
+     [(F, "高洞子水库管理处人员应在30min内将应急响应命令和有关信息传送到", 52)]),
     ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每1h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情")]),
+     [(F, "每1h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 52)]),
     ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每0.5h向巴南区防汛抗旱应急指挥部办公室汇报水库水情、工情及险情")]),
+     [(F, "每0.5h向巴南区防汛抗旱应急指挥部办公室汇报水库水情、工情及险情", 53)]),
     ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "启动防洪抢险应急预案",
      [(F, "水库库水位超过校核洪水位343.54m时，由高洞子水库管理处向上级上报水库当前险情")]),
 
@@ -459,14 +477,32 @@ async def _load_chunks(db) -> dict[str, list[tuple[int, str, int | None]]]:
 
 
 def _resolve(
-    index: dict[str, list[tuple[int, str, int | None]]], doc: str, quote: str
+    index: dict[str, list[tuple[int, str, int | None]]],
+    doc: str,
+    quote: str,
+    page: int | None = None,
 ) -> dict[str, Any] | None:
-    """按文件 + 引句找切片；找不到返回 None（调用方记为错误）。"""
+    """按文件 + 引句（+ 印刷页码）找切片；找不到返回 None（调用方记为错误）。
+
+    为什么需要页码约束：预警四个等级的处置措施**句式几乎一模一样**
+    （「应在 1h 内将应急响应命令传送到……」「每 2h 汇报……」），
+    只按引句匹配会取到第一处——Ⅲ级的关系被挂上 Ⅳ级的原文，回答里就张冠李戴。
+    """
     needle = norm(quote)
     if not needle:
         return None
-    for chunk_id, body, printed in index.get(doc, []):
-        if needle in body:
+    candidates = [
+        (chunk_id, body, printed)
+        for chunk_id, body, printed in index.get(doc, [])
+        if needle in body
+    ]
+    if page is not None:
+        candidates = [c for c in candidates if c[2] == page]
+    # 取最短的那片：同一段话常同时存在于父块和子块里，父块会把整节都带进来，
+    # 喂给模型时前面的无关内容会把真正要引的那句挤掉。
+    candidates.sort(key=lambda c: len(c[1]))
+    for chunk_id, body, printed in candidates:
+        if True:
             return {
                 "type": "原文",
                 "doc_name": doc,
@@ -478,14 +514,53 @@ def _resolve(
     return None
 
 
+async def _reset_profile(db) -> None:
+    """清空本 profile 的实例与关系（含图库节点）。
+
+    为什么需要：证据是**只增不减**的（避免重导 Excel 冲掉别的来源）。这保证了
+    日常使用的安全，但种子脚本改了口径之后，旧证据会赖着不走——比如给「Ⅲ级」
+    关系补了正确页码，旧的那条错误出处仍然在列表里，回答照样引错段。
+    种子是全量定义，用 --reset 让库和定义严格一致。
+    """
+    from sqlalchemy import delete
+
+    from app.db.models import OntologyInstance, OntologyRelation
+
+    async with db.begin():
+        uids = [
+            row[0]
+            for row in (
+                await db.execute(
+                    select(OntologyInstance.uid).where(OntologyInstance.profile_id == PROFILE)
+                )
+            ).all()
+        ]
+        await db.execute(delete(OntologyRelation).where(OntologyRelation.profile_id == PROFILE))
+        await db.execute(delete(OntologyInstance).where(OntologyInstance.profile_id == PROFILE))
+    store = get_graph_store()
+    if store is not None and uids:
+        try:
+            await store.delete_nodes(uids)
+        except Exception as exc:  # noqa: BLE001
+            print(f"图库清理失败（PG 已清空，重放可修正）：{exc}", file=sys.stderr)
+    print(f"已清空 profile={PROFILE}：实例 {len(uids)} 个")
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser(description="导入高洞子水库防汛处置本体实例")
     ap.add_argument("--dry-run", action="store_true", help="只解析出处，不写库")
     ap.add_argument("--kb", default=KB_NAME, help="知识库名称")
+    ap.add_argument(
+        "--reset",
+        action="store_true",
+        help="先清空该本体的实例与关系再写（证据只会按定义重建，不会残留旧条目）",
+    )
     args = ap.parse_args()
 
     reg = get_registry(PROFILE)
     async with async_session_factory() as db:
+        if args.reset:
+            await _reset_profile(db)
         kb_id = (
             await db.execute(select(Document.kb_id).where(Document.filename == S).limit(1))
         ).scalar()
@@ -499,8 +574,8 @@ async def main() -> int:
         used_evidence = 0
         for etype, name, props, evs in INSTANCES:
             evidence = []
-            for doc, quote in evs:
-                hit = _resolve(index, doc, quote)
+            for doc, quote, *rest in evs:
+                hit = _resolve(index, doc, quote, rest[0] if rest else None)
                 if hit is None:
                     errors.append(f"实例「{name}」出处找不到：{doc} ← {quote[:40]}")
                 else:
@@ -533,8 +608,8 @@ async def main() -> int:
                 continue
             seen_rel.add(key)
             evidence = []
-            for doc, quote in evs:
-                hit = _resolve(index, doc, quote)
+            for doc, quote, *rest in evs:
+                hit = _resolve(index, doc, quote, rest[0] if rest else None)
                 if hit is None:
                     errors.append(f"关系「{sn}-{pred}->{on}」出处找不到：{doc} ← {quote[:40]}")
                 else:
