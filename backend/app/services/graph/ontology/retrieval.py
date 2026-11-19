@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.graph.ontology import conditions as conditions_mod
 from app.services.graph.ontology import instances as inst_mod
 from app.services.graph.ontology.cards import build_card
 from app.services.graph.ontology.linking import (
@@ -171,7 +172,11 @@ async def _expand_graph(
 
 
 async def _graph_facts(
-    db: AsyncSession, question: str, *, kb_id: int | None
+    db: AsyncSession,
+    question: str,
+    *,
+    kb_id: int | None,
+    question_conditions: list[conditions_mod.Condition] | None = None,
 ) -> tuple[list[dict], list[LinkedEntity], list[dict]]:
     from app.services.graph.store import get_graph_store
 
@@ -186,30 +191,47 @@ async def _graph_facts(
     evidence: list[dict] = []
     nodes: dict[str, Any] = {}  # uid → Node，边两端的名字从这里取
 
+    # 工况条件（20 年一遇 / P=5% / 3200 m³/s）决定"讲哪个分支的方案"，
+    # 命中工况的节点排在前面，并标出来供编排层使用。
+    conds = (
+        question_conditions
+        if question_conditions is not None
+        else conditions_mod.extract_conditions(question)
+    )
     seeds = linked[:_MAX_LINKED]
+    node_facts: list[dict] = []
     for entity in seeds:
         node = await store.get_node(entity.uid)
         if node is None:
             continue
         nodes[node.uid] = node
-        facts.append(
-            {
-                "kind": "graph_node",
-                "subject": node.uid,
-                "name": node.name,
-                "entity_type": node.type_name,
-                "entity_type_label": entity_label_zh(node.type_name),
-                "props": node.props,
-                "matched_text": entity.matched,
-                "hop": 0,
-                "source": "graph",
-            }
-        )
+        matched = conditions_mod.any_match(node.props, node.name, conds)
+        fact = {
+            "kind": "graph_node",
+            "subject": node.uid,
+            "name": node.name,
+            "entity_type": node.type_name,
+            "entity_type_label": entity_label_zh(node.type_name),
+            "props": node.props,
+            "matched_text": entity.matched,
+            "hop": 0,
+            "condition_matched": matched,
+            "source": "graph",
+        }
+        if matched:
+            fact["conditions"] = [c.to_dict() for c in conds]
+        node_facts.append(fact)
+    # 命中工况的先讲，其余保持链接顺序
+    facts.extend(sorted(node_facts, key=lambda f: 0 if f.get("condition_matched") else 1))
 
     depth, max_nodes, max_edges, rel_types = _graph_limits()
+    # 剪枝：如果问题指定了工况、且有节点命中，就只从命中的那个分支往外走。
+    # 否则同一座水库的 5% 与 1% 两套方案会被一起展开，答案里混着两个方案。
+    matched_uids = [f["subject"] for f in facts if f.get("condition_matched")]
+    frontier_seeds = matched_uids or list(nodes)
     edges = await _expand_graph(
         store,
-        list(nodes),
+        frontier_seeds,
         nodes=nodes,
         depth=depth,
         max_nodes=max_nodes,
@@ -288,6 +310,12 @@ async def retrieve_with_ontology(
     reg = get_registry(profile_id or settings.ontology_profile)
     pack = FactPack(question=question)
 
+    # 工况条件（20 年一遇 / P=5% / 3200 m³/s）：同一座水库不同频率的方案完全不同，
+    # 先抽出来，图上命中它的节点排前面，也让调用方看到程序是怎么理解问题的。
+    question_conditions = conditions_mod.extract_conditions(question)
+    if question_conditions:
+        pack.notes.append("识别到工况：" + "、".join(c.describe() for c in question_conditions))
+
     try:
         facts, param_entities = await _parameter_facts(
             db, question, profile_id=reg.profile_id, kb_id=kb_id, conditions=conditions
@@ -303,7 +331,9 @@ async def retrieve_with_ontology(
         pack.notes.append("本体查询失败，已降级")
 
     try:
-        g_facts, g_entities, g_evidence = await _graph_facts(db, question, kb_id=kb_id)
+        g_facts, g_entities, g_evidence = await _graph_facts(
+            db, question, kb_id=kb_id, question_conditions=question_conditions
+        )
         if g_facts:
             _add_source(pack, "graph")
         pack.facts.extend(g_facts)

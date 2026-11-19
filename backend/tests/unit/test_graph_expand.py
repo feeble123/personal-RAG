@@ -150,3 +150,75 @@ def test_深度非法时至少走一跳(monkeypatch, bad_depth):
     monkeypatch.setattr(settings, "ontology_graph_depth", bad_depth)
     depth, *_ = retrieval._graph_limits()
     assert depth == 1
+
+
+class TestConditionOnNodes:
+    """命中工况的节点排在前面并被标出来——编排层要靠它决定讲哪个分支的方案。"""
+
+    async def test_命中20年一遇的节点排在前并打标(self, monkeypatch):
+        class _Store:
+            async def get_node(self, uid):
+                return _Node(
+                    uid,
+                    {"cd:5": "20年一遇工况", "cd:1": "100年一遇工况"}[uid],
+                    type_name="condition",
+                    props={"frequency": 0.05 if uid == "cd:5" else 0.01},
+                )
+
+            async def neighbors(self, *a, **kw):
+                return _Slice([], [])
+
+        monkeypatch.setattr("app.services.graph.store.get_graph_store", lambda: _Store())
+
+        async def fake_link(db, question, kb_id=None):
+            return [
+                retrieval.LinkedEntity(uid="cd:1", entity_type="condition", name="100年一遇工况",
+                                       display="", matched="", score=1.0, source="graph"),
+                retrieval.LinkedEntity(uid="cd:5", entity_type="condition", name="20年一遇工况",
+                                       display="", matched="", score=1.0, source="graph"),
+            ]
+
+        monkeypatch.setattr(retrieval, "link_graph_entities", fake_link)
+        facts, _, _ = await retrieval._graph_facts(None, "20年一遇怎么调度", kb_id=None)
+
+        nodes = [f for f in facts if f["kind"] == "graph_node"]
+        assert nodes[0]["name"] == "20年一遇工况"
+        assert nodes[0]["condition_matched"] is True
+        assert nodes[1]["condition_matched"] is False
+
+
+class TestConditionPruning:
+    """命中工况后只走那条分支——不把 100 年方案混进 20 年的答案里。"""
+
+    async def test_只从命中工况的节点展开(self, monkeypatch):
+        calls: list[str] = []
+
+        class _Store:
+            PROPS = {"cd:5": {"frequency": 0.05}, "cd:1": {"frequency": 0.01}}
+
+            async def get_node(self, uid):
+                return _Node(uid, f"{uid} 工况", type_name="condition", props=self.PROPS[uid])
+
+            async def neighbors(self, uid, depth=1, rel_types=None, limit=200):
+                calls.append(uid)
+                target = f"{uid}:plan"
+                return _Slice([_Node(target, f"{uid} 的方案")], [_Edge(uid, "STIPULATES", target)])
+
+        monkeypatch.setattr("app.services.graph.store.get_graph_store", lambda: _Store())
+
+        async def fake_link(db, question, kb_id=None):
+            return [
+                retrieval.LinkedEntity(uid="cd:1", entity_type="condition", name="100年一遇工况",
+                                       display="", matched="", score=1.0, source="graph"),
+                retrieval.LinkedEntity(uid="cd:5", entity_type="condition", name="20年一遇工况",
+                                       display="", matched="", score=1.0, source="graph"),
+            ]
+
+        monkeypatch.setattr(retrieval, "link_graph_entities", fake_link)
+        facts, _, _ = await retrieval._graph_facts(None, "20年一遇怎么调度", kb_id=None)
+
+        # 命中分支会继续往下一跳走，这是对的；关键是**另一条分支一步都没走**
+        assert "cd:5" in calls
+        assert not any(uid.startswith("cd:1") for uid in calls), "不该展开 100 年一遇那条分支"
+        edges = [f for f in facts if f["kind"] == "graph_edge"]
+        assert all(e["subject_uid"].startswith("cd:5") for e in edges)

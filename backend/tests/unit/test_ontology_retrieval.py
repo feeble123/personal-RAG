@@ -277,3 +277,26 @@ class TestEvidenceDedupe:
         assert normalize_evidence([{"note": "x", "attributes": "unit"}])[0]["attributes"] == ["unit"]
         # 老数据没有 attributes：不补空键，免得跟历史 JSON 比出「改过了」
         assert "attributes" not in normalize_evidence([{"note": "x"}])[0]
+
+
+class TestQuestionConditions:
+    """工况条件：问题里带「20 年一遇」时，要让调用方看到程序是这么理解的。"""
+
+    async def test_识别到工况会写进notes(self, stub, monkeypatch):
+        seen: dict = {}
+
+        async def fake_graph(db, question, *, kb_id=None, question_conditions=None):
+            seen["conditions"] = question_conditions
+            return [], [], []
+
+        monkeypatch.setattr(retrieval, "_graph_facts", fake_graph)
+        stub["params"] = [_param_fact("sm")]
+        pack = await retrieval.retrieve_with_ontology(None, "20年一遇的洪水怎么调度", min_facts=1)
+
+        assert any("识别到工况" in note for note in pack.notes)
+        assert seen["conditions"] and seen["conditions"][0].return_period == 20
+
+    async def test_没有工况时不加噪音(self, stub):
+        stub["params"] = [_param_fact("sm")]
+        pack = await retrieval.retrieve_with_ontology(None, "自由水蓄水容量是多少", min_facts=1)
+        assert not any("识别到工况" in note for note in pack.notes)
