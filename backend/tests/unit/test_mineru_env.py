@@ -71,6 +71,29 @@ class TestModelsDir:
         assert str(fake_snapshot) in cfg["models-dir"]["pipeline"]
 
 
+class TestCliPathOverride:
+    """借用同机其它环境的 MinerU（本 venv 没装、磁盘也不够再装一份）。"""
+
+    def test_显式配置优先于当前环境(self, monkeypatch, tmp_path):
+        fake = tmp_path / "mineru.exe"
+        fake.write_text("", encoding="utf-8")
+        monkeypatch.setattr(settings, "mineru_cli_path", str(fake))
+        assert mineru._mineru_cli_path() == fake
+
+    def test_配置指向不存在的文件直接报错(self, monkeypatch, tmp_path):
+        """配错了要立刻炸，不能静默退回别的引擎——那样解析质量会悄悄变差。"""
+        monkeypatch.setattr(settings, "mineru_cli_path", str(tmp_path / "nope.exe"))
+        with pytest.raises(RuntimeError, match="MINERU_CLI_PATH"):
+            mineru._mineru_cli_path()
+
+    def test_配置了路径就不再要求本进程能_import(self, monkeypatch, tmp_path):
+        fake = tmp_path / "mineru.exe"
+        fake.write_text("", encoding="utf-8")
+        monkeypatch.setattr(settings, "mineru_cli_path", str(fake))
+        # 本 venv 里 import mineru 会失败，但借用场景下这不算"不可用"
+        assert mineru.mineru_available() is True
+
+
 class TestRunMineru:
     def test_run_mineru_idempotent_skips(self, tmp_path):
         """产物已存在 → 跳过重跑（不调 subprocess）。"""

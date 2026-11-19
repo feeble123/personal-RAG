@@ -262,6 +262,11 @@ class Settings(BaseSettings):
     mineru_enabled: bool = False          # 启用后扫描 PDF 才可能走 MinerU
     mineru_model_source: str = "local"    # 模型来源：local（本地模型目录）
     mineru_model_dir: str = ""            # 模型目录；空则用 MinerU 默认 cache，可指向 data/mineru_models
+    # MinerU CLI 可执行文件路径；空则按「当前 venv → PATH」自动找。
+    # 用途：本 venv 没装 MinerU、但同机另一个环境装了时直接指过去借用——
+    # MinerU 依赖 torch（动辄 2~3G），磁盘紧张时不必重复安装；
+    # CLI 是独立子进程，用它自己环境的解释器和依赖，本进程只读它吐出的 JSON。
+    mineru_cli_path: str = ""
     mineru_timeout_sec: int = 1800        # 整文档解析超时（秒）
     mineru_page_timeout_sec: int = 300    # 单页解析超时（秒）
     mineru_device: str = "gpu"            # 设备：gpu（用户有 RTX 4070，加速 MinerU）；cpu 备选

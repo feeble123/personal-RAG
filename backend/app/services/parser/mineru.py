@@ -60,9 +60,22 @@ _TOOLS_CONFIG_NAME = "mineru-tools.json"
 def _mineru_cli_path() -> Path | None:
     """定位 mineru CLI 可执行文件。
 
-    优先当前 Python 环境的 Scripts 目录（venv 未激活时 PATH 可能不含它），
-    其次全局 PATH。
+    查找顺序：
+    1. `settings.mineru_cli_path`（显式配置，借用同机其它环境的 MinerU 时用）；
+    2. 当前 Python 环境的 Scripts 目录（venv 未激活时 PATH 可能不含它）；
+    3. 全局 PATH。
+
+    为什么允许"借用"：MinerU 拖 torch（2~3G），本机磁盘紧张时装第二份不划算。
+    CLI 是独立子进程，用它自己环境的解释器与依赖，本进程只读它写出的 JSON，
+    所以跨环境借用是安全的；配错路径时这里直接报错，不会静默退回别的引擎。
     """
+    explicit = (settings.mineru_cli_path or "").strip()
+    if explicit:
+        path = Path(explicit)
+        if not path.exists():
+            raise RuntimeError(f"MINERU_CLI_PATH 指向的文件不存在：{explicit}")
+        return path
+
     import sys
 
     # 当前 venv 的 Scripts（Windows）或 bin（Unix）
@@ -77,7 +90,16 @@ def _mineru_cli_path() -> Path | None:
 
 
 def mineru_available() -> bool:
-    """MinerU 是否已安装（CLI 可用）。"""
+    """MinerU 是否可用（CLI 可执行）。
+
+    显式配置了 `mineru_cli_path` 时只认文件存在——此时包可能装在另一个环境里，
+    本进程 `import mineru` 必然失败，不代表不可用（借用场景就是这么用的）。
+    """
+    if (settings.mineru_cli_path or "").strip():
+        try:
+            return _mineru_cli_path() is not None
+        except RuntimeError:
+            return False
     if _mineru_cli_path() is None:
         return False
     try:
