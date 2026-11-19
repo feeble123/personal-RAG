@@ -12,6 +12,7 @@ import { Alert, Modal, Space, Spin, Tag, Typography } from 'antd'
 import { useQuery } from '@tanstack/react-query'
 import { errMsg } from '@/api/client'
 import { ontologyApi } from '@/api/modules'
+import OriginLink from '@/components/origin/OriginLink'
 import { findQuoteRange } from '@/utils/quoteHighlight'
 
 const { Text, Paragraph } = Typography
@@ -76,6 +77,14 @@ export default function EvidenceChunkModal({ open, chunkId, quote, onClose }: Pr
             <Text type="secondary" style={{ fontSize: 11 }}>
               切片 #{data.chunk_id}
             </Text>
+            {/* 切片只是片段，要看上下文就跳到原文件对应位置 */}
+            <OriginLink
+              docId={data.doc_id}
+              page={data.page}
+              chunkId={data.chunk_id}
+              quote={quote ?? null}
+              text="在原文件里看"
+            />
           </Space>
           {(quote ?? '').trim() && !findQuoteRange(data.content, quote) && (
             <Alert

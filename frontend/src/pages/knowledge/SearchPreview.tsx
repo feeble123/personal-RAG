@@ -9,6 +9,7 @@ import { Button, Empty, Input, List, Space, Tag, Typography } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { useQuery } from '@tanstack/react-query'
 import { kbApi } from '@/api/modules'
+import OriginLink from '@/components/origin/OriginLink'
 import type { Citation } from '@/api/types'
 
 export default function SearchPreview({ kbId }: { kbId: number | null }) {
@@ -43,6 +44,7 @@ export default function SearchPreview({ kbId }: { kbId: number | null }) {
                   <Typography.Text strong>{h.source}</Typography.Text>
                   {h.page && <Tag>第{h.page}页</Tag>}
                   <Tag>相关度 {h.score?.toFixed(3)}</Tag>
+                  <OriginLink docId={h.doc_id} page={h.page} quote={h.snippet} chunkId={h.chunk_id} />
                 </Space>
                 {h.section && (
                   <Typography.Paragraph type="secondary" style={{ margin: 0, fontSize: 12 }}>

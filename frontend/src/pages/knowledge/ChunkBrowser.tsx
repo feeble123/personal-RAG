@@ -6,6 +6,7 @@
  */
 import { useState } from 'react'
 import { Empty, List, Select, Space, Tag, Typography } from 'antd'
+import OriginLink from '@/components/origin/OriginLink'
 import { useQuery } from '@tanstack/react-query'
 import { kbApi } from '@/api/modules'
 import type { ChunkItem, DocumentItem } from '@/api/types'
@@ -88,6 +89,7 @@ export default function ChunkBrowser({ kbId, allDocs }: Props) {
                   {c.block_type && c.block_type !== 'parent' && <Tag>{c.block_type}</Tag>}
                   {c.page != null && <Tag>第{c.page}页</Tag>}
                   {c.section && <Tag color="blue">{c.section}</Tag>}
+                  <OriginLink docId={c.doc_id} page={c.page} chunkId={c.id} quote={c.content} />
                 </Space>
                 <div className="citation-snippet" style={{ fontSize: 13 }}>
                   {c.content}
