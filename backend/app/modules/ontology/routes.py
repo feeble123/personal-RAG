@@ -1748,7 +1748,18 @@ async def admin_ask(body: AskIn, _admin: AdminUser, db: DbSession) -> dict:
         conditions={"climate": body.climate, "flood_type": body.flood_type},
         min_facts=body.min_facts,
     )
-    return pack.to_dict()
+    data = pack.to_dict()
+
+    # C 方案 B 步：只有明确要求时才写正文，且正文失败不影响事实包
+    if body.narrative and data.get("chain"):
+        from app.services.graph.ontology.chain_narrative import write_narrative
+
+        text, reason = await write_narrative(body.question, data["chain"])
+        if text:
+            data["chain"]["narrative"] = text
+        elif reason:
+            data.setdefault("notes", []).append(f"链路正文未生成：{reason}")
+    return data
 
 
 # ==================== 对外接口（agent 用，X-API-Key） ====================
@@ -1846,4 +1857,15 @@ async def public_ask(request: Request, body: AskIn, db: DbSession) -> dict:
         conditions={"climate": body.climate, "flood_type": body.flood_type},
         min_facts=body.min_facts,
     )
-    return pack.to_dict()
+    data = pack.to_dict()
+
+    # C 方案 B 步：只有明确要求时才写正文，且正文失败不影响事实包
+    if body.narrative and data.get("chain"):
+        from app.services.graph.ontology.chain_narrative import write_narrative
+
+        text, reason = await write_narrative(body.question, data["chain"])
+        if text:
+            data["chain"]["narrative"] = text
+        elif reason:
+            data.setdefault("notes", []).append(f"链路正文未生成：{reason}")
+    return data

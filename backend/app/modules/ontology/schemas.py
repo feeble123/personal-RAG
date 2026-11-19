@@ -101,6 +101,10 @@ class AskIn(BaseModel):
     climate: str | None = Field(None, description="湿润/半湿润/半干旱/干旱")
     flood_type: str | None = Field(None, description="单峰/多峰")
     min_facts: int | None = Field(None, ge=0, le=50, description="事实条数门槛，低于则回退向量检索")
+    narrative: bool = Field(
+        False,
+        description="是否让模型把链路骨架写成一段话（事实/顺序/出处仍以骨架为准；默认关闭以免每次问答都多一次模型调用）",
+    )
 
 
 # ===== 关系（ABox 的边）=====

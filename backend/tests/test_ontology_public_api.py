@@ -161,3 +161,56 @@ class TestRunReport:
     async def test_missing_key_rejected(self, client, external_key):
         r = await client.post(f"{BASE}/runs", json={"run_id": "t5-run-2"})
         assert r.status_code == 401
+
+
+class TestAskNarrative:
+    """`narrative=true` 时把链路写成正文；默认关闭，避免每次问答都多一次模型调用。"""
+
+    CHAIN = {
+        "subject": "青溪水库",
+        "conditions": ["20年一遇（P≈5.0%）"],
+        "steps": [
+            {
+                "phase": "basis", "phase_label": "工况与依据", "hop": 1,
+                "subject": "青溪水库", "predicate": "STIPULATES", "predicate_label": "规定",
+                "object": "预泄方案A", "evidence": [],
+            }
+        ],
+        "gaps": [],
+        "outline": ["【起点】青溪水库"],
+    }
+
+    async def _ask(self, client, key, monkeypatch, narrative: bool):
+        from app.modules.ontology import routes as ontology_routes
+        from app.services.graph.ontology.retrieval import FactPack
+
+        calls = {"n": 0}
+
+        async def fake_retrieve(db, question, **kw):
+            return FactPack(question=question, chain=dict(self.CHAIN))
+
+        async def fake_narrative(question, chain, **kw):
+            calls["n"] += 1
+            return "青溪水库按 20 年一遇预泄。", None
+
+        monkeypatch.setattr(ontology_routes, "retrieve_with_ontology", fake_retrieve)
+        monkeypatch.setattr(
+            "app.services.graph.ontology.chain_narrative.write_narrative", fake_narrative
+        )
+        payload = {"question": "20年一遇怎么调度", "narrative": narrative}
+        r = await client.post(
+            f"{BASE}/ask", headers={"X-API-Key": key}, json=payload
+        )
+        return r, calls
+
+    async def test_开启时返回正文(self, client, external_key, monkeypatch):
+        r, calls = await self._ask(client, external_key, monkeypatch, narrative=True)
+        assert r.status_code == 200, r.text
+        assert r.json()["chain"]["narrative"].startswith("青溪水库")
+        assert calls["n"] == 1
+
+    async def test_默认不调用模型(self, client, external_key, monkeypatch):
+        r, calls = await self._ask(client, external_key, monkeypatch, narrative=False)
+        assert r.status_code == 200
+        assert "narrative" not in r.json()["chain"]
+        assert calls["n"] == 0
