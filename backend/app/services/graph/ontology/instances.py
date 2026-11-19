@@ -127,6 +127,22 @@ def dedupe_evidence(items: Iterable[Any]) -> list[Any]:
 
 
 async def delete_instance(session: AsyncSession, row: OntologyInstance) -> None:
+    """删实例，并清掉挂在它身上的别名与关系。
+
+    只删实例行会留下"幽灵"：别名表还指着已经消失的 uid，实体链接照样能从问题里
+    认出这个名字，但图上一查节点不存在——链路问答会静默少一环（实测库里曾有
+    26 条这样的孤儿别名，全部指向早已删除的演示实例）。
+    """
+    from sqlalchemy import delete as sa_delete, or_
+
+    from app.db.models import GraphEntityAlias, OntologyRelation
+
+    await session.execute(sa_delete(GraphEntityAlias).where(GraphEntityAlias.node_uid == row.uid))
+    await session.execute(
+        sa_delete(OntologyRelation).where(
+            or_(OntologyRelation.subject_uid == row.uid, OntologyRelation.object_uid == row.uid)
+        )
+    )
     await session.delete(row)
 
 

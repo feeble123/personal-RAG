@@ -106,6 +106,70 @@ async def _parameter_facts(
     return facts, linked[:_MAX_LINKED]
 
 
+def _graph_limits() -> tuple[int, int, int, list[Any] | None]:
+    """读取图上展开的边界。深度的硬上限写在这里，配置写错也炸不了图。"""
+    depth = max(1, min(int(settings.ontology_graph_depth), int(settings.ontology_graph_max_depth)))
+    max_nodes = max(1, int(settings.ontology_graph_max_nodes))
+    max_edges = max(1, int(settings.ontology_graph_max_edges))
+    raw = (settings.ontology_graph_relations or "").strip()
+    rel_types = [item.strip() for item in raw.split(",") if item.strip()] or None
+    return depth, max_nodes, max_edges, rel_types
+
+
+async def _expand_graph(
+    store: Any,
+    seed_uids: list[str],
+    *,
+    nodes: dict[str, Any],
+    depth: int,
+    max_nodes: int,
+    max_edges: int,
+    rel_types: list[Any] | None,
+) -> list[tuple[int, Any]]:
+    """从种子出发逐跳展开，返回 [(跳数, 边)]。
+
+    为什么逐跳而不是直接 `neighbors(depth=N)`：
+
+    1. 存储层的内存实现把深度钳在 1~2 跳，逐跳调用才不受它限制；
+    2. 链路问题的图是"长而窄"的（水库→方案→动作→村镇→响应），逐跳可以
+       在每一跳上限制节点数，避免某一跳扇出几百个下游村把响应撑爆；
+    3. 每跳的边都带 hop，编排回答时才能按顺序排（下一单元要用）。
+    """
+    seen_edges: set[tuple[str, str, str]] = set()
+    collected: list[tuple[int, Any]] = []
+    visited = set(seed_uids)
+    frontier = list(seed_uids)
+
+    for hop in range(1, depth + 1):
+        if not frontier or len(collected) >= max_edges or len(visited) >= max_nodes:
+            break
+        next_frontier: list[str] = []
+        for uid in frontier:
+            try:
+                slice_ = await store.neighbors(uid, depth=1, rel_types=rel_types, limit=60)
+            except Exception:  # noqa: BLE001 - 单点失败不该拖垮整条链路
+                logger.warning("图谱展开失败 uid=%s", uid, exc_info=True)
+                continue
+            for node in getattr(slice_, "nodes", []):
+                nodes.setdefault(node.uid, node)
+                if node.uid not in visited and len(visited) < max_nodes:
+                    visited.add(node.uid)
+                    next_frontier.append(node.uid)
+            for edge in getattr(slice_, "edges", []):
+                key = (edge.subject_uid, edge.predicate_name, edge.object_uid)
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                collected.append((hop, edge))
+                if len(collected) >= max_edges:
+                    break
+            if len(collected) >= max_edges:
+                break
+        frontier = next_frontier
+
+    return collected
+
+
 async def _graph_facts(
     db: AsyncSession, question: str, *, kb_id: int | None
 ) -> tuple[list[dict], list[LinkedEntity], list[dict]]:
@@ -120,10 +184,14 @@ async def _graph_facts(
 
     facts: list[dict] = []
     evidence: list[dict] = []
-    for entity in linked[:_MAX_LINKED]:
+    nodes: dict[str, Any] = {}  # uid → Node，边两端的名字从这里取
+
+    seeds = linked[:_MAX_LINKED]
+    for entity in seeds:
         node = await store.get_node(entity.uid)
         if node is None:
             continue
+        nodes[node.uid] = node
         facts.append(
             {
                 "kind": "graph_node",
@@ -133,37 +201,52 @@ async def _graph_facts(
                 "entity_type_label": entity_label_zh(node.type_name),
                 "props": node.props,
                 "matched_text": entity.matched,
+                "hop": 0,
                 "source": "graph",
             }
         )
-        slice_ = await store.neighbors(entity.uid, depth=1, limit=30)
-        names = {n.uid: n.name for n in slice_.nodes}
-        for edge in slice_.edges[:10]:
-            facts.append(
+
+    depth, max_nodes, max_edges, rel_types = _graph_limits()
+    edges = await _expand_graph(
+        store,
+        list(nodes),
+        nodes=nodes,
+        depth=depth,
+        max_nodes=max_nodes,
+        max_edges=max_edges,
+        rel_types=rel_types,
+    )
+
+    names = {uid: node.name for uid, node in nodes.items()}
+    for hop, edge in edges:
+        facts.append(
+            {
+                "kind": "graph_edge",
+                "subject": names.get(edge.subject_uid, edge.subject_uid),
+                "subject_uid": edge.subject_uid,
+                "predicate": edge.predicate_name,
+                "predicate_label": relation_label_zh(edge.predicate_name),
+                "object": names.get(edge.object_uid, edge.object_uid),
+                "object_uid": edge.object_uid,
+                "evidence_text": edge.evidence_text,
+                "chunk_ids": edge.chunk_ids,
+                "hop": hop,
+                "source": "graph",
+            }
+        )
+        if edge.evidence_text or edge.chunk_ids:
+            evidence.append(
                 {
                     "kind": "graph_edge",
                     "subject": names.get(edge.subject_uid, edge.subject_uid),
-                    "subject_uid": edge.subject_uid,
                     "predicate": edge.predicate_name,
-                    "predicate_label": relation_label_zh(edge.predicate_name),
                     "object": names.get(edge.object_uid, edge.object_uid),
-                    "object_uid": edge.object_uid,
-                    "evidence_text": edge.evidence_text,
+                    "text": edge.evidence_text,
                     "chunk_ids": edge.chunk_ids,
-                    "source": "graph",
+                    "hop": hop,
                 }
             )
-            if edge.evidence_text or edge.chunk_ids:
-                evidence.append(
-                    {
-                        "kind": "graph_edge",
-                        "subject": names.get(edge.subject_uid, edge.subject_uid),
-                        "predicate": edge.predicate_name,
-                        "object": names.get(edge.object_uid, edge.object_uid),
-                        "text": edge.evidence_text,
-                        "chunk_ids": edge.chunk_ids,
-                    }
-                )
+
     return facts, linked[:_MAX_LINKED], evidence
 
 

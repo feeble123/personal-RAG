@@ -228,6 +228,17 @@ class Settings(BaseSettings):
     # 必须是 1：一个参数问题的正确形态就是「一张参数卡」= 一条事实，
     # 设成 3 会把每个参数问题都判成"本体不够"而白白回退（实测 2ms → 22s）。
     ontology_min_facts: int = 1
+    # 图上展开几跳。调参/水闸这类问题是 1 跳就够；"20 年一遇怎么应对"是链路问题
+    # （水库→频率→调度方案→闸门动作→下游村镇→响应等级），1 跳只能看到第一环。
+    # 默认 3，硬上限由 ONTOLOGY_GRAPH_MAX_DEPTH 钳住。
+    ontology_graph_depth: int = 3
+    ontology_graph_max_depth: int = 4
+    # 每跳的爆量保护：一次展开最多留多少节点 / 多少条边。
+    # 图稀疏时用不上，扇出大的库（几百个村）靠它兜底，不至于把响应撑爆。
+    ontology_graph_max_nodes: int = 40
+    ontology_graph_max_edges: int = 120
+    # 只走这些关系（逗号分隔，留空=不过滤）。链路问答里用它把无关关系剪掉。
+    ontology_graph_relations: str = ""
 
     # ---- OCR / PDF 质量检测（默认 RapidOCR；可选 paddle）----
     ocr_engine: str = "rapid"

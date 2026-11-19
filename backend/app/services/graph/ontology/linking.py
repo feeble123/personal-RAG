@@ -97,6 +97,17 @@ def link_instances(rows: Iterable[OntologyInstance], question: str) -> list[Link
     return sorted(best.values(), key=lambda x: -x.score)
 
 
+async def _link_by_instance_names(session: Any, question: str, limit: int) -> list[LinkedEntity]:
+    """兜底：直接按实例名/中文名匹配本体实例。
+
+    为什么需要：别名表 `graph_entity_aliases` 只有早期防洪链导入写过，**本体接口
+    创建的实例从来不写别名**。只认别名表的话，通过本体建的实例在问答里几乎
+    链接不上，链路问答第一环就断。这里按实例名再捞一遍，与别名命中合并。
+    """
+    rows = (await session.execute(select(OntologyInstance).limit(2000))).scalars().all()
+    return link_instances(rows, question)[:limit]
+
+
 async def link_graph_entities(
     session: Any, question: str, *, kb_id: int | None = None, limit: int = 10
 ) -> list[LinkedEntity]:
@@ -130,5 +141,10 @@ async def link_graph_entities(
         current = best.get(alias.node_uid)
         if current is None or found.score > current.score:
             best[alias.node_uid] = found
+
+    # 别名表命中的实体可能已经不存在（删实例曾没清别名），按 uid 去重后再补实例名匹配
+    if len(best) < limit:
+        for found in await _link_by_instance_names(session, question, limit):
+            best.setdefault(found.uid, found)
 
     return sorted(best.values(), key=lambda x: -x.score)[:limit]
