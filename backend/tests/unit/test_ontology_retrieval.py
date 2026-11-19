@@ -300,3 +300,42 @@ class TestQuestionConditions:
         stub["params"] = [_param_fact("sm")]
         pack = await retrieval.retrieve_with_ontology(None, "自由水蓄水容量是多少", min_facts=1)
         assert not any("识别到工况" in note for note in pack.notes)
+
+
+class TestChainInPack:
+    """链路骨架要进事实包：调用方（前端/agent）直接渲染，不用自己排顺序。"""
+
+    async def test_有图边时生成链路(self, stub, monkeypatch):
+        async def fake_graph(db, question, *, kb_id=None, question_conditions=None):
+            return (
+                [
+                    {"kind": "graph_node", "subject": "uid:x", "name": "青溪水库",
+                     "entity_type": "engineering_object", "entity_type_label": "工程对象",
+                     "condition_matched": False},
+                    {"kind": "graph_edge", "subject": "青溪水库", "predicate": "STIPULATES",
+                     "predicate_label": "规定", "object": "泄洪方案A", "hop": 1,
+                     "evidence_text": "调度规程第 8 页", "chunk_ids": []},
+                    {"kind": "graph_edge", "subject": "泄洪方案A", "predicate": "PERFORMED_BY",
+                     "predicate_label": "由…执行", "object": "青溪县水务局", "hop": 2,
+                     "evidence_text": "", "chunk_ids": []},
+                ],
+                [],
+                [],
+            )
+
+        monkeypatch.setattr(retrieval, "_graph_facts", fake_graph)
+        pack = await retrieval.retrieve_with_ontology(None, "20年一遇怎么调度", min_facts=1)
+
+        assert pack.chain is not None
+        assert pack.chain["subject"] == "青溪水库"
+        assert [s["phase"] for s in pack.chain["steps"]] == ["basis", "actor"]
+        assert pack.chain["outline"][0] == "【起点】青溪水库"
+        assert len(pack.chain["gaps"]) == 1  # 水务局那条没证据
+        assert any("没有证据" in note for note in pack.notes)
+        # to_dict 必须带上，前端才拿得到
+        assert pack.to_dict()["chain"]["steps"]
+
+    async def test_没有图边时链为none(self, stub):
+        stub["params"] = [_param_fact("sm")]
+        pack = await retrieval.retrieve_with_ontology(None, "sm 取值范围", min_facts=1)
+        assert pack.chain is None

@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.services.graph.ontology import chain as chain_mod
 from app.services.graph.ontology import conditions as conditions_mod
 from app.services.graph.ontology import instances as inst_mod
 from app.services.graph.ontology.cards import build_card
@@ -41,6 +42,8 @@ class FactPack:
     entities: list[dict[str, Any]] = field(default_factory=list)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     fallback_used: bool = False
+    #: 链路骨架（把多跳事实按人讲的顺序排好，附带证据）；没有图边时为 None
+    chain: dict[str, Any] | None = None
     sources: list[str] = field(default_factory=list)
     latency_ms: int = 0
     notes: list[str] = field(default_factory=list)
@@ -52,6 +55,7 @@ class FactPack:
             "entities": self.entities,
             "evidence": self.evidence,
             "fallback_used": self.fallback_used,
+            "chain": self.chain,
             "sources": self.sources,
             "latency_ms": self.latency_ms,
             "notes": self.notes,
@@ -105,6 +109,33 @@ async def _parameter_facts(
         }
         facts.append(fact)
     return facts, linked[:_MAX_LINKED]
+
+
+async def _resolve_chunk_evidence(db: AsyncSession, chunk_ids: list[int]) -> dict[int, dict]:
+    """chunk_id → 文档名 / 页码 / 片段。链路每一步都要能点回原文，所以必须先解析。"""
+    if not chunk_ids or db is None:
+        return {}
+    from sqlalchemy import select
+
+    from app.db.models import Chunk, Document
+
+    rows = (
+        await db.execute(
+            select(Chunk.id, Chunk.page, Chunk.printed_page, Chunk.content, Document.filename)
+            .join(Document, Document.id == Chunk.doc_id)
+            .where(Chunk.id.in_(chunk_ids))
+        )
+    ).all()
+    return {
+        int(r[0]): {
+            "chunk_id": int(r[0]),
+            "doc_name": r[4] or "",
+            "page": r[1],
+            "printed_page": r[2],
+            "snippet": (r[3] or "")[:160],
+        }
+        for r in rows
+    }
 
 
 def _graph_limits() -> tuple[int, int, int, list[Any] | None]:
@@ -339,6 +370,25 @@ async def retrieve_with_ontology(
         pack.facts.extend(g_facts)
         pack.entities.extend(e.to_dict() for e in g_entities)
         pack.evidence.extend(g_evidence)
+
+        # 把图事实排成链路骨架（顺序与证据由程序定死，措辞以后再说）
+        edge_chunk_ids = [
+            int(cid)
+            for fact in g_facts
+            if fact.get("kind") == "graph_edge"
+            for cid in (fact.get("chunk_ids") or [])
+            if str(cid).isdigit()
+        ]
+        resolved = await _resolve_chunk_evidence(db, sorted(set(edge_chunk_ids)))
+        built = chain_mod.build_chain(
+            g_facts,
+            conditions=[c.describe() for c in question_conditions],
+            evidence_lookup=lambda ids: [resolved[i] for i in ids if i in resolved],
+        )
+        if built.steps:
+            pack.chain = built.to_dict()
+            if built.gaps:
+                pack.notes.append(f"链路有 {len(built.gaps)} 个环节没有证据，已单列")
     except Exception as exc:  # noqa: BLE001
         logger.warning("图事实获取失败：%s", exc)
         pack.notes.append("图库查询失败，已降级")
