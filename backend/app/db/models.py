@@ -263,6 +263,10 @@ class Chunk(Base):
     # 仅表格子块携带；非表格块 NULL。table_id 标记同一张表（跨块聚合），
     # columns=列名、rows=数据行（不含表头）、row_index=本块在整表中的起始行。
     table_data: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    # 原 PDF 上的位置框（PDF 点坐标，origin 左上、y 向下）：
+    # {"rects": [[x0,y0,x1,y1], ...], "source": "mineru", "page_idx": 170}
+    # 扫描件没有文本层，只能靠它把「看原文」定位到具体那一段/那张表。
+    bbox: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
 
     doc: Mapped[Document] = relationship(back_populates="chunks")
     version: Mapped["DocumentVersion"] = relationship(back_populates="chunks")

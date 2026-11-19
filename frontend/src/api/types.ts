@@ -555,3 +555,44 @@ export interface InstanceImportResult {
   created?: number
   updated?: number
 }
+
+/** 原文文件访问（P-原文查看）：短期签名 URL，pdf.js 用它拉取原文件。 */
+export interface SourceFileToken {
+  doc_id: number
+  filename: string
+  file_type: string
+  file_size: number
+  page_count: number | null
+  url: string
+  expires_in: number
+}
+
+/** 矩形是 PDF 点坐标 [x0, y0, x1, y1]，origin 左上、y 向下，与页面 1:1 缩放。 */
+export type SourceRect = [number, number, number, number]
+
+/** 定位结果：source 说明这个框有多可信（text=精确到行 / bbox=只到块 / none=没框到）。 */
+export interface SourceLocate {
+  doc_id: number
+  filename: string
+  page: number
+  printed_page: number | null
+  page_count: number
+  page_size: { width: number; height: number }
+  has_text_layer: boolean
+  source: 'text' | 'bbox' | 'none'
+  rects: SourceRect[]
+  note: string | null
+}
+
+/** Excel 原文的表格视图：后端已裁掉尾部空行、超限会标 truncated。 */
+export interface SourceSheet {
+  name: string
+  rows: string[][]
+  truncated: boolean
+}
+
+export interface SourceSheets {
+  doc_id: number
+  filename: string
+  sheets: SourceSheet[]
+}

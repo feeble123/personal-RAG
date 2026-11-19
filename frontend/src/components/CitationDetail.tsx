@@ -1,6 +1,11 @@
-import { Modal, Space, Tag, Typography } from 'antd'
-import { FileTextOutlined } from '@ant-design/icons'
+import { Suspense, lazy, useState } from 'react'
+import { Button, Modal, Space, Tag, Typography } from 'antd'
+import { FilePdfOutlined, FileTextOutlined } from '@ant-design/icons'
 import type { Citation } from '@/api/types'
+import ViewerBoundary from '@/components/origin/ViewerBoundary'
+
+// pdf.js 有 1MB+，只有点了「看原文」才需要 —— 懒加载，免得拖慢问答首屏
+const PdfOriginViewer = lazy(() => import('@/components/origin/PdfOriginViewer'))
 
 // 引用详情弹窗：来源文件 / 页码 / 章节 / 相关度 / 排名 + 原文片段。
 // 从原 CitationCard 提取，供「行内角标」与「底部来源清单」两处复用。
@@ -13,6 +18,10 @@ export default function CitationDetail({
   open: boolean
   onClose: () => void
 }) {
+  // 看原文是**另一个弹窗**（要宽、要滚、要缩放），不塞进这个 640px 的详情里
+  const [originOpen, setOriginOpen] = useState(false)
+  const canOpenOrigin = Boolean(citation?.doc_id)
+
   return (
     <Modal
       open={open}
@@ -54,6 +63,30 @@ export default function CitationDetail({
             </Typography.Paragraph>
           )}
           <div className="citation-snippet">{citation.snippet}</div>
+          <Space style={{ marginTop: 12 }}>
+            <Button
+              icon={<FilePdfOutlined />}
+              disabled={!canOpenOrigin}
+              onClick={() => setOriginOpen(true)}
+            >
+              {citation.page != null ? `看原文（PDF 第 ${citation.page} 页）` : '看原文'}
+            </Button>
+            {!canOpenOrigin && <Tag>这条引用没有关联文档</Tag>}
+          </Space>
+
+          {originOpen && citation.doc_id != null && (
+            <Suspense fallback={null}>
+              <ViewerBoundary>
+                <PdfOriginViewer
+                  open={originOpen}
+                  docId={citation.doc_id}
+                  page={citation.page}
+                  quote={citation.snippet}
+                  onClose={() => setOriginOpen(false)}
+                />
+              </ViewerBoundary>
+            </Suspense>
+          )}
         </>
       )}
     </Modal>

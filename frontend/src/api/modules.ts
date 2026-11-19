@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, OntologyTypes, RunRecordResult, SystemStats, TokenOut, User } from './types'
+import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, OntologyTypes, RunRecordResult, SourceFileToken, SourceLocate, SourceSheets, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -497,4 +497,23 @@ export const kbApi = {
             items: ChunkItem[]
           },
       ),
+}
+
+// ===== 原文文件（P-原文查看）：签名 URL + 定位 =====
+// 阅读器要挂着翻半小时，所以 ttl 给到后端上限 30 分钟；其他场景默认 5 分钟也够。
+export const sourceApi = {
+  /** 换取短期原文链接。非 PDF 或文件缺失时后端直接报错，前端按 errMsg 展示。 */
+  fileToken: (docId: number, ttl = 1800) =>
+    api
+      .post('/documents/' + docId + '/file-token', undefined, { params: { ttl } })
+      .then((r) => r.data as SourceFileToken),
+  /** 把引用/切片定位到原 PDF 的页码与高亮矩形。 */
+  // 这几个接口与 /file 用**同一份签名**（t），不要求登录态——阅读器手里只有它
+  locate: (
+    docId: number,
+    params: { t: string; page?: number; quote?: string; chunk_id?: number },
+  ) => api.get(`/documents/${docId}/locate`, { params }).then((r) => r.data as SourceLocate),
+  /** Excel 原文的网格数据（docx 由前端自己排版，不走这里） */
+  sheets: (docId: number, t: string) =>
+    api.get(`/documents/${docId}/sheets`, { params: { t } }).then((r) => r.data as SourceSheets),
 }

@@ -154,6 +154,7 @@ def create_app() -> FastAPI:
     from app.modules.conversations.routes import router as conversations_router
     from app.modules.knowledge.routes import public_router as kb_public_router
     from app.modules.knowledge.routes import router as knowledge_router
+    from app.modules.knowledge.source import router as doc_source_router
     from app.modules.qa.routes import router as qa_router
     from app.modules.users.routes import router as users_router
     from app.modules.users.routes import stats_router
@@ -168,6 +169,8 @@ def create_app() -> FastAPI:
     app.include_router(conversations_router, prefix=api_prefix)
     app.include_router(knowledge_router, prefix=api_prefix)
     app.include_router(kb_public_router, prefix=api_prefix)
+    # 原文文件（/api/documents/*，短期签名 URL，给 pdf.js 用）
+    app.include_router(doc_source_router, prefix=api_prefix)
     app.include_router(qa_router, prefix=api_prefix)
     app.include_router(users_router, prefix=api_prefix)
     app.include_router(stats_router, prefix=api_prefix)
