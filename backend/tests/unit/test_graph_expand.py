@@ -222,3 +222,40 @@ class TestConditionPruning:
         assert not any(uid.startswith("cd:1") for uid in calls), "不该展开 100 年一遇那条分支"
         edges = [f for f in facts if f["kind"] == "graph_edge"]
         assert all(e["subject_uid"].startswith("cd:5") for e in edges)
+
+
+class TestForwardOnly:
+    """命中工况后的展开必须顺着边的方向走。
+
+    为什么：处置链里的「通知下游」「汇报」这类措施被 Ⅰ/Ⅱ/Ⅲ/Ⅳ 四级共用，
+    双向展开会顺着它们爬到别的等级——问「20 年一遇」却答出「1000 年一遇」
+    才有的动作，这比少答更糟。
+    """
+
+    async def test_只顺着边的方向走(self):
+        store = _Store()
+        nodes = {"A": _Node("A", "A")}
+        edges = await retrieval._expand_graph(
+            store, ["A"], nodes=nodes, depth=4,
+            max_nodes=40, max_edges=120, rel_types=None, forward_only=True,
+        )
+        assert [e.predicate_name for _h, e in edges] == ["r1", "r2", "r3", "r4"]
+
+    async def test_默认仍然双向(self):
+        """没命中工况时保持双向展开——种子可能是链路末端（如某个乡镇）。"""
+
+        class _Both:
+            async def neighbors(self, uid, depth=1, rel_types=None, limit=200):
+                # C 既在 B→C 的末端，也在 C→D 的起点
+                return _Slice(
+                    [_Node("B", "B"), _Node("D", "D")],
+                    [_Edge("B", "r2", "C"), _Edge("C", "r3", "D")],
+                )
+
+        nodes = {"C": _Node("C", "C")}
+        edges = await retrieval._expand_graph(
+            _Both(), ["C"], nodes=nodes, depth=1,
+            max_nodes=40, max_edges=120, rel_types=None,
+        )
+        predicates = {e.predicate_name for _h, e in edges}
+        assert "r3" in predicates and "r2" in predicates

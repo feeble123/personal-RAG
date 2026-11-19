@@ -246,3 +246,46 @@ class TestNoModelNamesInEngine:
                 if token in text:
                     offenders.append(f"{path.name}: {token}")
         assert not offenders, f"引擎代码出现了模型名：{offenders}"
+
+
+class TestRelationPhase:
+    """关系上的链路档位：内置表只认历史 22 个关系名，新领域要靠 YAML 声明。"""
+
+    def test_水库防汛本体声明了档位(self):
+        reg = load_profile("reservoir_flood")
+        assert reg.relation("STIPULATES").phase == "basis"
+        assert reg.relation("TRIGGERS").phase == "basis"
+        assert reg.relation("NEXT_STEP").phase == "flow"
+        assert reg.relation("PERFORMED_BY").phase == "actor"
+        assert reg.relation("RESPONDS_WITH").phase == "response"
+
+    def test_没声明的老profile档位为空(self):
+        reg = load_profile("tuning")
+        assert reg.relation("PART_OF").phase == ""
+
+    def test_档位取值必须与编排层的档位表一致(self):
+        from app.services.graph.ontology import chain as chain_mod
+        from app.services.graph.ontology.registry import PHASE_VALUES
+
+        assert set(PHASE_VALUES) <= set(chain_mod.PHASE_ORDER)
+        # subject / other 是编排层自己产生的，不允许在 YAML 里声明
+        assert "subject" not in PHASE_VALUES
+        assert "other" not in PHASE_VALUES
+
+    def test_非法档位直接报错(self, tmp_path):
+        path = tmp_path / "bad.yaml"
+        path.write_text(
+            """
+version: 1
+profile_id: bad
+entity_types:
+  - name: Thing
+    uid_prefix: th
+    attributes: []
+relation_types:
+  - { name: USES, source: Thing, target: Thing, phase: nonsense }
+""",
+            encoding="utf-8",
+        )
+        with pytest.raises(ProfileError, match="phase"):
+            load_profile(path)

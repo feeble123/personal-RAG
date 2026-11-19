@@ -285,8 +285,9 @@ class TestQuestionConditions:
     async def test_识别到工况会写进notes(self, stub, monkeypatch):
         seen: dict = {}
 
-        async def fake_graph(db, question, *, kb_id=None, question_conditions=None):
-            seen["conditions"] = question_conditions
+        async def fake_graph(db, question, *a, **kw):
+            # 只关心编排层传下来的工况；其余关键字（kb_id/reg…）不重要
+            seen["conditions"] = kw.get("question_conditions")
             return [], [], []
 
         monkeypatch.setattr(retrieval, "_graph_facts", fake_graph)
@@ -306,7 +307,7 @@ class TestChainInPack:
     """链路骨架要进事实包：调用方（前端/agent）直接渲染，不用自己排顺序。"""
 
     async def test_有图边时生成链路(self, stub, monkeypatch):
-        async def fake_graph(db, question, *, kb_id=None, question_conditions=None):
+        async def fake_graph(db, question, **kw):
             return (
                 [
                     {"kind": "graph_node", "subject": "uid:x", "name": "青溪水库",

@@ -157,6 +157,7 @@ async def _expand_graph(
     max_nodes: int,
     max_edges: int,
     rel_types: list[Any] | None,
+    forward_only: bool = False,
 ) -> list[tuple[int, Any]]:
     """从种子出发逐跳展开，返回 [(跳数, 边)]。
 
@@ -166,6 +167,11 @@ async def _expand_graph(
     2. 链路问题的图是"长而窄"的（水库→方案→动作→村镇→响应），逐跳可以
        在每一跳上限制节点数，避免某一跳扇出几百个下游村把响应撑爆；
     3. 每跳的边都带 hop，编排回答时才能按顺序排（下一单元要用）。
+
+    `forward_only`：只顺着边的方向走（当前节点必须是主语）。
+    问题里点了具体工况时必须开——处置链是有方向的，而"通知下游"这类措施会被
+    Ⅰ/Ⅱ/Ⅲ/Ⅳ 四级共用，双向展开会顺着它们爬到别的等级，把「20 年一遇」
+    的答案混进「1000 年一遇」才有的动作。
     """
     seen_edges: set[tuple[str, str, str]] = set()
     collected: list[tuple[int, Any]] = []
@@ -182,12 +188,16 @@ async def _expand_graph(
             except Exception:  # noqa: BLE001 - 单点失败不该拖垮整条链路
                 logger.warning("图谱展开失败 uid=%s", uid, exc_info=True)
                 continue
+            edges = list(getattr(slice_, "edges", []))
+            if forward_only:
+                edges = [e for e in edges if e.subject_uid == uid]
             for node in getattr(slice_, "nodes", []):
                 nodes.setdefault(node.uid, node)
                 if node.uid not in visited and len(visited) < max_nodes:
                     visited.add(node.uid)
-                    next_frontier.append(node.uid)
-            for edge in getattr(slice_, "edges", []):
+                    if not forward_only or any(e.object_uid == node.uid for e in edges):
+                        next_frontier.append(node.uid)
+            for edge in edges:
                 key = (edge.subject_uid, edge.predicate_name, edge.object_uid)
                 if key in seen_edges:
                     continue
@@ -208,6 +218,7 @@ async def _graph_facts(
     *,
     kb_id: int | None,
     question_conditions: list[conditions_mod.Condition] | None = None,
+    reg: Any = None,
 ) -> tuple[list[dict], list[LinkedEntity], list[dict]]:
     from app.services.graph.store import get_graph_store
 
@@ -268,9 +279,35 @@ async def _graph_facts(
         max_nodes=max_nodes,
         max_edges=max_edges,
         rel_types=rel_types,
+        # 命中工况时只顺着"处置方向"走，别从共用措施爬回其它等级
+        forward_only=bool(matched_uids),
     )
 
     names = {uid: node.name for uid, node in nodes.items()}
+
+    def _declared_phase(predicate: str) -> str:
+        """TBox 里给这条关系声明的链路档位；没声明返回空（编排层回落到内置表）。"""
+        rel = reg.relation(predicate) if reg is not None else None
+        return getattr(rel, "phase", "") or ""
+
+    def _labeled_props(uid: str) -> dict[str, Any]:
+        """宾语节点的属性，键换成 TBox 里的中文说明。
+
+        为什么不直接给 `outflow_m3s=130`：这套属性最终会喂给模型写成一段话，
+        英文键会被原样抄进正文（实测：「该方案为控泄模式、outflow_m3s=130」）。
+        中文键来自 YAML 的 attribute.description，读起来就是人话。
+        """
+        node = nodes.get(uid)
+        props = dict(getattr(node, "props", None) or {})
+        entity = reg.entity(getattr(node, "type_name", "")) if reg is not None else None
+        out: dict[str, Any] = {}
+        for key, value in props.items():
+            if key.endswith("_count") or key == "display_zh" or value in (None, ""):
+                continue
+            attr = entity.attributes.get(key) if entity is not None else None
+            out[(attr.description if attr and attr.description else key)] = value
+        return out
+
     for hop, edge in edges:
         facts.append(
             {
@@ -279,8 +316,12 @@ async def _graph_facts(
                 "subject_uid": edge.subject_uid,
                 "predicate": edge.predicate_name,
                 "predicate_label": relation_label_zh(edge.predicate_name),
+                "phase": _declared_phase(edge.predicate_name),
                 "object": names.get(edge.object_uid, edge.object_uid),
                 "object_uid": edge.object_uid,
+                # 宾语节点自己的属性跟着走：链路里只报名字的话，
+                # 「10~20年一遇控泄方案」看不出到底泄多少。
+                "object_props": _labeled_props(edge.object_uid),
                 "evidence_text": edge.evidence_text,
                 "chunk_ids": edge.chunk_ids,
                 "hop": hop,
@@ -363,7 +404,7 @@ async def retrieve_with_ontology(
 
     try:
         g_facts, g_entities, g_evidence = await _graph_facts(
-            db, question, kb_id=kb_id, question_conditions=question_conditions
+            db, question, kb_id=kb_id, question_conditions=question_conditions, reg=reg
         )
         if g_facts:
             _add_source(pack, "graph")

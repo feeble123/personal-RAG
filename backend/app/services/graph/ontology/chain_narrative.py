@@ -60,10 +60,18 @@ def build_user_prompt(question: str, chain: dict[str, Any]) -> str:
     lines.append("链路事实（唯一依据，按顺序）：")
     for index, step in enumerate(chain.get("steps") or [], start=1):
         where = _fmt_where(step.get("evidence") or []) or "无出处"
+        props = step.get("object_props") or {}
+        # `*_count` 是图的派生字段（证据条数、范围条数），不是事实本身，别喂给模型
+        extra = "，".join(
+            f"{k}={v}"
+            for k, v in props.items()
+            if v not in (None, "") and not k.endswith("_count") and k != "display_zh"
+        )
         lines.append(
             f"{index}. [{step.get('phase_label')}] "
             f"{step.get('subject')} —{step.get('predicate_label')}→ {step.get('object')}"
-            f"（出处：{where}）"
+            + (f"（该环节属性：{extra}）" if extra else "")
+            + f"（出处：{where}）"
         )
     lines.append("")
     if chain.get("gaps"):
@@ -86,6 +94,8 @@ def allowed_numbers(chain: dict[str, Any]) -> set[str]:
         )
         for item in step.get("evidence") or []:
             parts.extend(str(item.get(key) or "") for key in ("doc_name", "page", "printed_page", "text"))
+        # 节点属性（控泄流量、水位…）也是骨架给的数，正文引用它们不算编造
+        parts.extend(str(v) for v in (step.get("object_props") or {}).values())
     return {m.group(0) for text in parts for m in _NUMBER_RE.finditer(text)}
 
 

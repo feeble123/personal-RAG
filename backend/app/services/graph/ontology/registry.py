@@ -31,6 +31,9 @@ _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PREFIX_RE = re.compile(r"^[a-z]{2,4}$")
 _ATTR_TYPES = {"string", "text", "number", "range", "enum", "list", "boolean"}
 _SCOPES = {"local", "global"}
+#: 关系可以声明的链路档位。必须与 `chain.PHASE_ORDER` 里的档位一致
+#: （`subject`/`other` 是编排层自己产生的，不由 YAML 声明）；有单测守着这条一致性。
+PHASE_VALUES = ("basis", "flow", "actor", "means", "impact", "response")
 
 
 class ProfileError(ValueError):
@@ -92,6 +95,10 @@ class RelationTypeDef:
     display_name: str = ""
     target_types: tuple[str, ...] = ()
     inverse_of: str | None = None
+    #: 链路编排里的档位（basis/flow/actor/means/impact/response）。
+    #: 引擎内置了一张「历史关系名 → 档位」的表，但只认那 22 个老名字；
+    #: 新领域的 profile 在 YAML 里直接声明，编排层就不用为每个领域改代码。
+    phase: str = ""
 
     def allows_object(self, object_type: str) -> bool:
         return object_type in (self.target_types or (self.target,))
@@ -108,6 +115,8 @@ class RelationTypeDef:
             out["target_types"] = list(self.target_types)
         if self.inverse_of:
             out["inverse_of"] = self.inverse_of
+        if self.phase:
+            out["phase"] = self.phase
         return out
 
 
@@ -325,6 +334,11 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
                 raise ProfileError(f"{where} 引用了未定义的实体类型：{ref!r}")
         if not source or not target:
             raise ProfileError(f"{where} 必须声明 source 与 target")
+        phase = str(item.get("phase") or "").strip()
+        if phase and phase not in PHASE_VALUES:
+            raise ProfileError(
+                f"{where}.phase 只能是 {'/'.join(PHASE_VALUES)}，收到 {phase!r}"
+            )
         out[name] = RelationTypeDef(
             name=name,
             source=source,
@@ -333,6 +347,7 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
             display_name=str(item.get("display_name") or ""),
             target_types=target_types,
             inverse_of=item.get("inverse_of"),
+            phase=phase,
         )
     return out
 

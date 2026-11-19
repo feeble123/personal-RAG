@@ -109,3 +109,30 @@ class TestBuildChain:
         assert lines[0] == "【起点】水库"
         assert "【工况与依据】" in lines
         assert "【谁处置】" in lines
+
+
+class TestDeclaredPhase:
+    """档位可以由 TBox 声明（新领域的关系名内置表不认识）。"""
+
+    def test_新关系名不声明就掉进其他(self):
+        assert C.phase_of("NEXT_STEP") == "other"
+
+    def test_声明之后按声明的档位排(self):
+        assert C.resolve_phase("NEXT_STEP", "flow") == "flow"
+
+    def test_非法声明回落到内置表(self):
+        assert C.resolve_phase("PERFORMED_BY", "nonsense") == "actor"
+
+    def test_编排真的用上了声明的档位(self):
+        """NEXT_STEP 没声明时落在「其他关系」，声明 flow 之后进入「流程推进」。"""
+        facts = [_node("高洞子水库", matched=True)]
+        raw = _edge("通知下游", "NEXT_STEP", "开闸泄洪", hop=1, label="之后")
+        facts.append(dict(raw))
+
+        without = C.build_chain(facts)
+        assert without.steps[0].phase == "other"
+
+        declared = dict(raw)
+        declared["phase"] = "flow"
+        with_phase = C.build_chain([_node("高洞子水库", matched=True), declared])
+        assert with_phase.steps[0].phase == "flow"

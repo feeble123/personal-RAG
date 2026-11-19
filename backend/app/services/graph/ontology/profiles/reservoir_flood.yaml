@@ -1,0 +1,182 @@
+# ============================================================
+# 水库防汛处置本体（TBox）
+# ------------------------------------------------------------
+# 描述「一场洪水来了，这座水库按什么条件、做什么动作、由谁做、依据哪一条」。
+# 素材：高洞子水库的四份专题报告（调度规程 / 汛期调度运用计划 / 防洪抢险应急预案 /
+# 大坝安全管理应急预案）。四份文件互相补充，也互相打架的地方，靠实例的出处区分。
+#
+# 与 flood_chain.yaml 的区别：
+#   flood_chain   = 「下游哪些乡镇要预警、归谁管」——空间链
+#   reservoir_flood = 「什么工况 → 什么调度动作 → 谁执行 → 依据哪条」——处置链
+# 两套模型不要混用一个库，否则同一个「20年一遇」会拉出两条不相干的链路。
+#
+# 关系上的 `phase` 是给链路编排用的：说明这条关系在「人讲一件事」的顺序里属于哪一档。
+# 不写就回落到引擎内置的关系名→档位表（内置表只认历史那 22 个关系名）。
+# ============================================================
+version: 1
+profile_id: reservoir_flood
+display_name: 水库防汛处置本体
+description: 工况 → 调度方案 → 响应等级 → 处置措施 → 责任单位 → 影响区域，每一步挂原文出处。
+domain: flood_control
+
+entity_types:
+  - name: engineering_object
+    display_name: 工程对象
+    uid_prefix: eo
+    scope: local
+    attributes:
+      - {name: category, type: string, description: "水库 / 大坝 / 溢洪道 / 闸门 / 放水管"}
+      - {name: grade, type: string, description: "工程等别，如 Ⅲ等中型"}
+      - {name: total_storage_wan_m3, type: number, description: "总库容（万m³）"}
+      - {name: max_dam_height_m, type: number, description: "最大坝高（m）"}
+      - {name: dam_type, type: string, description: "坝型"}
+
+  - name: water_level
+    display_name: 特征水位
+    uid_prefix: wl
+    scope: global
+    attributes:
+      - {name: elevation_m, type: number, description: "高程（m）"}
+      - {name: kind, type: enum, values: [校核洪水位, 设计洪水位, 正常蓄水位, 死水位, 汛期试运行水位, 旱警水位], description: "水位性质"}
+      - {name: storage_wan_m3, type: number, description: "相应库容（万m³）"}
+      - {name: note, type: string, description: "适用条件，如「正常年 / 干旱年」"}
+
+  - name: condition
+    display_name: 工况
+    uid_prefix: cd
+    scope: local
+    attributes:
+      # 频率用超越概率存（20 年一遇 → 0.05），重现期另存一份，两种写法都能匹配
+      - {name: frequency, type: number, description: "超越概率（0.05 = 20 年一遇）"}
+      - {name: return_period, type: number, description: "重现期（年）"}
+      - {name: rainfall_24h_mm, type: string, description: "24h 降雨量区间（mm）"}
+      - {name: rainfall_6h_mm, type: string, description: "6h 降雨量阈值（mm）"}
+      - {name: level_m, type: number, description: "判别用库水位（m）"}
+      - {name: inflow_m3s, type: number, description: "入库流量（m³/s）"}
+      - {name: season, type: string, description: "来水年型"}
+      - {name: note, type: string}
+
+  - name: dispatch_plan
+    display_name: 调度方案
+    uid_prefix: dp
+    scope: local
+    attributes:
+      - {name: outflow_m3s, type: number, description: "控制下泄流量（m³/s）"}
+      - {name: start_level_m, type: number, description: "起调水位（m）"}
+      - {name: target_level_m, type: number, description: "维持目标水位（m）"}
+      - {name: gate_opening_m, type: number, description: "闸门开度（m）"}
+      - {name: mode, type: enum, values: [控泄, 全开泄洪, 保坝, 不泄], description: "调度方式"}
+      - {name: priority, type: string, description: "保护对象，如「下游防洪」「保坝」"}
+      - {name: note, type: string}
+
+  - name: response_level
+    display_name: 响应等级
+    uid_prefix: rl
+    scope: global
+    attributes:
+      - {name: level, type: enum, values: [Ⅰ, Ⅱ, Ⅲ, Ⅳ], description: "响应级别"}
+      - {name: color, type: string, description: "预警颜色"}
+      - {name: trigger_summary, type: string, description: "启动条件摘要"}
+
+  - name: measure
+    display_name: 处置措施
+    uid_prefix: ms
+    scope: local
+    attributes:
+      - {name: timing, type: string, description: "时限，如「1h 内」「泄洪前 1h」"}
+      - {name: owner_role, type: string, description: "执行角色"}
+      - {name: frequency, type: string, description: "频次，如「每 2h 一次」"}
+      - {name: note, type: string}
+
+  - name: management_unit
+    display_name: 责任单位
+    uid_prefix: mu
+    scope: local
+    attributes:
+      - {name: role, type: string, description: "在防汛体系中的角色"}
+      - {name: note, type: string}
+
+  - name: admin_region
+    display_name: 影响区域
+    uid_prefix: ar
+    scope: global
+    attributes:
+      - {name: level, type: enum, values: [镇, 街道, 村, 区], description: "行政区级别"}
+      - {name: flood_standard, type: string, description: "现状防洪标准"}
+
+  - name: standard_clause
+    display_name: 依据条款
+    uid_prefix: cl
+    scope: global
+    attributes:
+      - {name: doc, type: string, description: "文件名"}
+      - {name: clause_no, type: string, description: "条款号，如 3.3.1.1"}
+
+# ------------------------------------------------------------
+# 关系
+# phase 取值：basis（工况与依据）/ flow（流程推进）/ actor（谁处置）
+#            / means（用什么）/ impact（影响谁）/ response（怎么应对）
+# ------------------------------------------------------------
+relation_types:
+  # 工况 → 方案：这是最核心的一条，「20 年一遇」靠它落到「控泄多少」
+  - {name: STIPULATES, display_name: 规定, phase: basis,
+     source: condition, target: dispatch_plan,
+     description: "该工况下按此方案调度"}
+
+  # 工况 → 工况：粗说法落在细档位里。
+  # 四份文件里「20 年一遇」有好几种写法（预警条件、下游标准、调度分档），
+  # 靠这条把「20年一遇洪水」接到「10~20年一遇降雨（155~170mm）」那一档，
+  # 链路才能从一句问题走到具体的控泄流量。
+  - {name: INSTANCE_OF, display_name: 属于档位, phase: basis,
+     source: condition, target: condition,
+     description: "粗工况属于哪个细分工况档位"}
+
+  # 工况 → 响应等级：触发哪一级应急响应
+  - {name: TRIGGERS, display_name: 触发, phase: basis,
+     source: condition, target: response_level,
+     description: "该工况触发对应级别的应急响应"}
+
+  # 等级 → 措施：这一级响应当做什么
+  - {name: RESPONDS_WITH, display_name: 启动, phase: response,
+     source: response_level, target: measure,
+     description: "该级响应的处置动作"}
+
+  # 方案 → 措施：为落实调度方案要做的动作（通知、开闸、巡查…）
+  - {name: REQUIRES, display_name: 需要, phase: basis,
+     source: dispatch_plan, target: measure,
+     description: "执行该方案必须完成的动作"}
+
+  # 措施之间：先做什么后做什么
+  - {name: NEXT_STEP, display_name: 之后, phase: flow,
+     source: measure, target: measure,
+     description: "处置动作的先后顺序"}
+
+  # 措施 → 责任单位
+  - {name: PERFORMED_BY, display_name: 由…执行, phase: actor,
+     source: measure, target: management_unit,
+     description: "谁负责执行这个动作"}
+
+  # 责任单位 → 上级/指挥关系
+  - {name: REPORTS_TO, display_name: 报告, phase: actor,
+     source: management_unit, target: management_unit,
+     description: "信息与指令的上报/指挥关系"}
+
+  # 措施 → 影响区域（谁需要被通知/转移）
+  - {name: AFFECTS, display_name: 影响, phase: impact,
+     source: measure, target: admin_region,
+     description: "该动作影响到的下游行政区"}
+
+  # 措施/方案 → 依据条款
+  - {name: CONSTRAINED_BY, display_name: 依据, phase: basis,
+     source: measure, target: standard_clause,
+     description: "这条动作出自哪份文件的哪一条"}
+
+  # 措施 → 工程对象（开哪扇闸、用哪个泄水设施）
+  - {name: USES_FACILITY, display_name: 使用设施, phase: means,
+     source: measure, target: engineering_object,
+     description: "执行时动用的工程设施"}
+
+  # 措施 → 保护对象
+  - {name: PROTECTS, display_name: 保护, phase: response,
+     source: measure, target: admin_region,
+     description: "该措施保护的下游对象"}

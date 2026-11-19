@@ -73,6 +73,10 @@ class ChainStep:
     object: str
     evidence: list[dict[str, Any]] = field(default_factory=list)
     condition_matched: bool = False
+    #: 宾语节点自己的属性（控泄流量、起调水位…）。
+    #: 只报名字的话，「10~20年一遇控泄方案」看不出到底泄多少——而这恰恰是
+    #: 用户最想知道的数。属性是节点事实里本来就有，顺手带上来，不需要额外查询。
+    object_props: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,17 +87,25 @@ class ChainStep:
             "predicate": self.predicate,
             "predicate_label": self.predicate_label,
             "object": self.object,
+            "object_props": self.object_props,
             "evidence": self.evidence,
             "condition_matched": self.condition_matched,
         }
 
     def describe(self) -> str:
-        """一句骨架：`青溪水库 —规定→ 泄洪方案A（规程 p.8）`。"""
+        """一句骨架：`青溪水库 —规定→ 泄洪方案A（规程 p.8）`。
+
+        出处要挑**能落到文档页码**的那一条：证据列表里可能先放的是边上的原文摘要
+        （只有 text），拿它拼出来就是一对空括号——用户会以为这条没出处。
+        """
         where = ""
-        if self.evidence:
-            first = self.evidence[0]
-            bits = [str(first.get("doc_name") or "")]
-            page = first.get("printed_page") or first.get("page")
+        located = next(
+            (e for e in self.evidence if e.get("doc_name") or e.get("page") or e.get("printed_page")),
+            None,
+        )
+        if located is not None:
+            bits = [str(located.get("doc_name") or "")]
+            page = located.get("printed_page") or located.get("page")
             if page:
                 bits.append(f"p.{page}")
             where = "（" + " ".join(b for b in bits if b) + "）"
@@ -146,6 +158,19 @@ def phase_of(predicate: str) -> str:
     return _PHASE_OF.get((predicate or "").upper(), "other")
 
 
+def resolve_phase(predicate: str, declared: str | None = None) -> str:
+    """关系名 → 链路档位，TBox 里声明的优先。
+
+    为什么需要这条：内置表只认识历史那 22 个关系名。新领域（比如水库防汛的
+    STIPULATES / TRIGGERS / NEXT_STEP）如果没人告诉引擎它属于哪一档，整条链路
+    会掉进「其他关系」——顺序就乱了，等于编排失效。
+    YAML 里写 `phase:` 就能解决，引擎不认识任何具体领域。
+    """
+    if declared and declared in PHASE_ORDER:
+        return declared
+    return phase_of(predicate)
+
+
 def _evidence_of(edge: dict[str, Any], lookup: EvidenceLookup | None) -> list[dict[str, Any]]:
     """一条边的证据：优先用边自带的说明，再把 chunk 换成文档与页码。"""
     chunk_ids = [int(c) for c in (edge.get("chunk_ids") or []) if str(c).isdigit()]
@@ -173,6 +198,11 @@ def build_chain(
     """
     nodes = [f for f in facts if f.get("kind") == "graph_node"]
     edges = [f for f in facts if f.get("kind") == "graph_edge"]
+    # 节点名 → 属性：链路里每一步把宾语的属性带上（控泄流量这类数就在里面）
+    props_by_name = {
+        str(n.get("name") or n.get("subject") or ""): dict(n.get("props") or {})
+        for n in nodes
+    }
 
     subject = None
     for node in nodes:
@@ -188,7 +218,9 @@ def build_chain(
     steps: list[ChainStep] = []
     for order, edge in enumerate(edges):
         step = ChainStep(
-            phase=phase_of(str(edge.get("predicate") or "")),
+            phase=resolve_phase(
+                str(edge.get("predicate") or ""), edge.get("phase")
+            ),
             hop=int(edge.get("hop") or 0),
             subject=str(edge.get("subject") or ""),
             predicate=str(edge.get("predicate") or ""),
@@ -196,6 +228,10 @@ def build_chain(
             object=str(edge.get("object") or ""),
             evidence=_evidence_of(edge, evidence_lookup),
             condition_matched=bool(edge.get("condition_matched")),
+            object_props=dict(
+                edge.get("object_props")
+                or props_by_name.get(str(edge.get("object") or ""), {})
+            ),
         )
         steps.append(step)
         # 稳定排序用的原始序号挂在这里（不进 to_dict）
