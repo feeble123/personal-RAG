@@ -51,6 +51,7 @@ from app.modules.ontology.schemas import (
     LibraryOut,
     ProposalAcceptIn,
     ProposalOut,
+    ProposeRunIn,
     RelationCreate,
     RelationOut,
     RelationPatch,
@@ -212,6 +213,8 @@ async def _proposal_out(db: AsyncSession, rows: list) -> list[ProposalOut]:
             instance_name=names.get(r.instance_uid, r.instance_uid),
             entity_type=r.entity_type,
             attribute=r.attribute,
+            kind=getattr(r, "kind", "attr") or "attr",
+            payload=getattr(r, "payload", None),
             value=r.value,
             # 锚定提案的 attribute 为空（整条实例），此时没有"当前值"可比
             current_value=props.get(r.instance_uid, {}).get(r.attribute) if r.attribute else None,
@@ -313,6 +316,53 @@ async def run_anchor(
     return {"profile_id": reg.profile_id, "dry_run": payload.dry_run, **result.to_dict()}
 
 
+@router.post("/propose/run")
+async def run_propose(
+    payload: ProposeRunIn, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    """按文档整体扫（7-C C-2）：模型读原文提**新实例与新关系** → 待审区。
+
+    和上面两条的根本区别：`/extract/run` 和 `/anchor/run` 只能给**已经建好**的
+    实例填字段、挂证据；这条是从零提出「这里有哪些实例、它们之间什么关系」。
+
+    输出里 `chunks` 是范围内总段数、`scanned` 是真正送进模型的段数——两个数不
+    一致时**没送的部分就是没扫**，别把这一轮当成"整份文档都提过了"。
+    """
+    from app.services.graph.ontology import proposal_runs, proposals
+
+    reg = _registry(payload.profile_id)
+    instances, relations, result = await proposal_runs.run_document_scan(
+        db,
+        reg,
+        kb_id=payload.kb_id,
+        doc_ids=payload.doc_ids,
+        max_chunks=payload.max_chunks,
+        batch_size=payload.batch_size,
+        max_calls=payload.max_calls,
+    )
+    saved = 0
+    if not payload.dry_run:
+        saved = await proposals.save_proposals(db, reg.profile_id, instances, relations)
+        if saved:
+            await db.commit()
+
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.propose.run",
+        target_type="ontology_profile",
+        target_id=reg.profile_id,
+        detail=(
+            f"kb={payload.kb_id} 扫 {result.scanned}/{result.chunks} 段 "
+            f"/ 新实例 {len(instances)} / 新关系 {len(relations)} "
+            f"/ 拦截 {result.rejected} / 新入库 {saved}"
+        ),
+        client_ip=await get_client_ip(request),
+    )
+    result.saved = saved
+    return {"profile_id": reg.profile_id, "dry_run": payload.dry_run, **result.to_dict()}
+
+
 # ---------------- 运行记录（O8-2）：一次率定 → Run 节点 + 参数 + 指标 ----
 
 
@@ -400,7 +450,12 @@ async def list_proposals(
     _admin: AdminUser,
     profile: str | None = Query(None),
     status: str = Query("pending", pattern="^(pending|accepted|rejected|all)$"),
-    method: str | None = Query(None, pattern="^(rule|llm|anchor)$", description="只看某类提案"),
+    method: str | None = Query(
+        None, pattern="^(rule|llm|anchor|graph)$", description="只看某类提案"
+    ),
+    kind: str | None = Query(
+        None, pattern="^(attr|instance|relation)$", description="attr=字段 / instance=新实例 / relation=新关系"
+    ),
     limit: int = Query(200, ge=1, le=1000),
 ) -> list[ProposalOut]:
     from app.db.models import OntologyInstance, OntologyProposal
@@ -411,6 +466,8 @@ async def list_proposals(
         stmt = stmt.where(OntologyProposal.status == status)
     if method:
         stmt = stmt.where(OntologyProposal.method == method)
+    if kind:
+        stmt = stmt.where(OntologyProposal.kind == kind)
     rows = (await db.scalars(stmt.order_by(OntologyProposal.id.desc()).limit(limit))).all()
     return await _proposal_out(db, list(rows))
 

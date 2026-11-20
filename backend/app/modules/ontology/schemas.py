@@ -229,6 +229,18 @@ class ExtractRunIn(BaseModel):
     dry_run: bool = Field(False, description="只返回结果，不写待审区")
 
 
+class ProposeRunIn(BaseModel):
+    """按文档整体扫（7-C C-2）：模型读原文提新实例与新关系。"""
+
+    profile_id: str | None = None
+    kb_id: int | None = Field(None, description="限定知识库；给了 doc_ids 时按文档所在库推")
+    doc_ids: list[int] | None = Field(None, description="只扫这几份文档")
+    max_chunks: int = Field(80, ge=1, le=400, description="一次最多挑多少段送模型")
+    batch_size: int = Field(4, ge=1, le=10, description="一次模型调用送几段")
+    max_calls: int = Field(10, ge=1, le=50, description="一次运行的模型调用上限（花钱的闸）")
+    dry_run: bool = Field(False, description="只返回结果，不写待审区")
+
+
 class ProposalOut(BaseModel):
     id: int
     profile_id: str
@@ -236,6 +248,8 @@ class ProposalOut(BaseModel):
     instance_name: str = ""
     entity_type: str
     attribute: str
+    kind: str = "attr"
+    payload: dict[str, Any] | None = None
     value: Any
     # 实例当前这个字段的值：审核时和提案值并排看，冲突一眼可见（P2）
     current_value: Any = None

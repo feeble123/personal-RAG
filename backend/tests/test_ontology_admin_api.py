@@ -46,6 +46,8 @@ async def cleanup_instances(_ensure_test_tables):
                 )
             )
         await s.execute(delete(OntologyInstance).where(OntologyInstance.name.like("t4%")))
+        # 图提案（7-C）按 uid 落待审区，名字不带 t4 前缀，单独清
+        await s.execute(delete(OntologyProposal).where(OntologyProposal.method == "graph"))
         await s.commit()
 
 
@@ -788,3 +790,104 @@ class TestConstraintsEndpoint:
         for v in body["violations"]:
             assert v["severity"] in ("error", "warning")
             assert v["constraint_id"] in ids
+
+
+class TestProposeRun:
+    """7-C C-2 按文档整体扫：接口形状 + 新实例/新关系落进待审区并标 kind。"""
+
+    def _stub(self, monkeypatch, items, relations=()):
+        import json
+
+        from app.services.graph.ontology import anchoring, proposal_runs
+
+        cand = anchoring.Candidate(
+            chunk_id=902, doc_id=2, doc_name="调度规程.pdf", page=39,
+            section="4.6 应急响应", content=CHUNK_TEXT,
+        )
+
+        async def fake_scan(db, registry, *, kb_id=None, doc_ids=None, limit=80):
+            return [cand], 1
+
+        monkeypatch.setattr(proposal_runs, "scan_chunks", fake_scan)
+        payload = json.dumps(
+            {"instances": list(items), "relations": list(relations)}, ensure_ascii=False
+        )
+        monkeypatch.setattr(
+            "app.services.chat.build_chat_model", lambda *a, **kw: _FakeLLM(payload)
+        )
+
+    async def test_新实例和新关系进待审区并标kind(
+        self, client, admin_headers, cleanup_instances, monkeypatch
+    ):
+        self._stub(
+            monkeypatch,
+            [
+                {
+                    "type": "Parameter",
+                    "name": "t4_prop_sm",
+                    "props": {"group": "水源划分", "display_zh": "测试参数"},
+                    "chunk": 1,
+                    "quote": "测试参数 自由水蓄水容量",
+                }
+            ],
+            [
+                {
+                    "subject": "t4_prop_sm",
+                    "predicate": "PART_OF",
+                    "object": "t4_prop_sm",
+                    "chunk": 1,
+                    "quote": "测试参数 自由水蓄水容量",
+                }
+            ],
+        )
+        r = await client.post(
+            f"{BASE}/propose/run",
+            headers=admin_headers,
+            json={"profile_id": "tuning", "kb_id": 1},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["instances"] == 1
+        assert body["relations"] == 0  # 自环被拒
+        assert body["saved"] == 1
+        assert body["chunks"] == 1 and body["scanned"] == 1
+
+        r = await client.get(
+            f"{BASE}/proposals",
+            headers=admin_headers,
+            params={"profile": "tuning", "method": "graph"},
+        )
+        assert r.status_code == 200, r.text
+        row = next(p for p in r.json() if p["kind"] == "instance")
+        assert row["payload"]["name"] == "t4_prop_sm"
+        assert row["evidence"]["quote"] == "测试参数 自由水蓄水容量"
+
+    async def test_预演不写待审区(
+        self, client, admin_headers, cleanup_instances, monkeypatch
+    ):
+        self._stub(
+            monkeypatch,
+            [
+                {
+                    "type": "Parameter",
+                    "name": "t4_prop_dry",
+                    "props": {"group": "水源划分"},
+                    "chunk": 1,
+                    "quote": "测试参数 自由水蓄水容量",
+                }
+            ],
+        )
+        r = await client.post(
+            f"{BASE}/propose/run",
+            headers=admin_headers,
+            json={"profile_id": "tuning", "kb_id": 1, "dry_run": True},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["saved"] == 0
+        assert r.json()["instances"] == 1
+
+    async def test_需要管理员(self, client, user_headers):
+        r = await client.post(
+            f"{BASE}/propose/run", headers=user_headers, json={"profile_id": "tuning"}
+        )
+        assert r.status_code in (401, 403)

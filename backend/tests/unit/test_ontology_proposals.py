@@ -64,6 +64,17 @@ def _registry() -> OntologyRegistry:
                     )
                 },
             ),
+            "standard_clause": EntityTypeDef(
+                name="standard_clause",
+                display_name="标准条款",
+                uid_prefix="cl",
+                scope="global",
+                label="Clause",
+                attributes={
+                    "doc": AttributeDef(name="doc", type="string", description="出自哪份文档"),
+                    "clause_no": AttributeDef(name="clause_no", type="string", description="条款号"),
+                },
+            ),
             "management_unit": EntityTypeDef(
                 name="management_unit",
                 display_name="责任单位",
@@ -218,6 +229,50 @@ class TestInstanceCandidate:
         instances, _, _ = _run([_level_item(props={"level": "Ⅱ", "trigger": 1200})])
         assert "trigger" not in instances[0].props
         assert any("trigger" in w for w in instances[0].warnings)
+
+    def test_文件名可以不出现在引句里(self):
+        """`standard_clause.doc` 填的就是文件名，引句是条款正文、永远不含文件名。
+
+        切片来自哪份文档是**系统确知**的事实，不需要靠引句证明；不加这条例外，
+        每个条款实例都会莫名其妙少一个字段（真实数据 9 个条款全是这么填的）。
+        """
+        instances, _, _ = _run(
+            [
+                _level_item(
+                    props={"level": "Ⅱ", "doc": "调度规程.pdf"},
+                )
+            ]
+        )
+        assert "doc" not in instances[0].props  # 该类型没声明 doc，照样丢
+
+        # 声明了 doc 的类型：来源文件名放行，别的文件名不放行
+        instances, _, _ = _run(
+            [
+                {
+                    "type": "standard_clause",
+                    "name": "调度规程 4.6.1.2",
+                    "props": {"doc": "调度规程.pdf", "clause_no": "4.6.1.2"},
+                    "chunk": 1,
+                    "quote": "4.6.1.2 Ⅱ级响应",
+                }
+            ]
+        )
+        assert instances[0].props["doc"] == "调度规程.pdf"
+
+    def test_别的文件名照样要出现在引句里(self):
+        instances, _, _ = _run(
+            [
+                {
+                    "type": "standard_clause",
+                    "name": "调度规程 4.6.1.2",
+                    "props": {"doc": "完全无关的另一份文件.pdf"},
+                    "chunk": 1,
+                    "quote": "4.6.1.2 Ⅱ级响应",
+                }
+            ]
+        )
+        assert "doc" not in instances[0].props
+        assert any("doc" in w for w in instances[0].warnings)
 
     def test_TBox里没声明的字段丢掉(self):
         instances, _, _ = _run([_level_item(props={"level": "Ⅱ", "color": "红"})])

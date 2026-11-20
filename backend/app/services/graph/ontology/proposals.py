@@ -84,11 +84,20 @@ REJECT_LABELS = {
 
 @dataclass(frozen=True)
 class Known:
-    """库里已有的一个实例（提案里关系要能连到它）。"""
+    """提案里可以连过去的一个实例。
+
+    `origin` 区分它是**库里早就有**的还是**本次运行刚提的**——重复提案的提示
+    要说准是哪种，否则人看到"库里已经有了"会去库里翻，翻不到。
+    """
 
     uid: str
     entity_type: str
     name: str
+    origin: str = "db"
+
+
+# 重复提案的提示语：按来源说准，别让人去库里找一个还没入库的东西
+_DUP_WHERE = {"db": "库里已经有了", "run": "本次运行已经提过了"}
 
 
 @dataclass(frozen=True)
@@ -159,7 +168,8 @@ class RelationCandidate:
 class ProposalRunResult:
     """一次提案运行的结果——给界面看的账本，说明白"少了的东西去哪了"。"""
 
-    chunks: int = 0
+    chunks: int = 0      # 范围内一共有多少段可扫
+    scanned: int = 0     # 真正送进模型的有几段（**没送的就是没扫**）
     instances: int = 0
     relations: int = 0
     rejected: int = 0
@@ -177,6 +187,7 @@ class ProposalRunResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "chunks": self.chunks,
+            "scanned": self.scanned,
             "instances": self.instances,
             "relations": self.relations,
             "rejected": self.rejected,
@@ -425,8 +436,27 @@ def _all_in_quote(value: Any, quote: str) -> bool:
     return value_in_quote(value, quote)
 
 
+def _is_source_name(value: Any, doc_name: str | None) -> bool:
+    """值是不是就是这段原文出自的那份文档名。
+
+    `standard_clause.doc` 这类字段填的就是文件名，而引句是条款正文、永远不含
+    文件名——**这个值不需要靠引句证明**：切片来自哪份文档是系统确知的事实，
+    不是模型的一次断言。实测真实数据 9 个条款实例全部这么填，不加这条例外，
+    每个条款都会莫名其妙少一个字段。
+    """
+    if not doc_name or not isinstance(value, str):
+        return False
+    left = value.strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+    right = doc_name.strip().replace("\\", "/").rsplit("/", 1)[-1].lower()
+    return bool(left) and left == right
+
+
 def _coerce_props(
-    registry: OntologyRegistry, entity_type: str, raw: Any, quote: str
+    registry: OntologyRegistry,
+    entity_type: str,
+    raw: Any,
+    quote: str,
+    doc_name: str | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     """只留「TBox 里有定义、类型收得住、值确实出现在引句里」的字段。
 
@@ -447,7 +477,7 @@ def _coerce_props(
         if not ok:
             warnings.append(f"字段 {key} 的值 {value!r} 类型不对，已丢")
             continue
-        if not _all_in_quote(coerced, quote):
+        if not _all_in_quote(coerced, quote) and not _is_source_name(coerced, doc_name):
             warnings.append(f"字段 {key} 的值 {coerced!r} 在引句里找不到，已丢")
             continue
         props[str(key)] = coerced
@@ -474,8 +504,11 @@ def _build_instance(
     if not name:
         result.reject("no_name", f"{entity_type} 有一条没给名字")
         return None
-    if name in by_name or registry.uid_for(entity_type, name, kb_id) in by_uid:
-        result.reject("duplicate_instance", f"{name} 库里已经有了，不重复新建")
+    uid = registry.uid_for(entity_type, name, kb_id)
+    dup = by_name.get(name) or by_uid.get(uid)
+    if dup is not None:
+        where = _DUP_WHERE.get(dup.origin, _DUP_WHERE["db"])
+        result.reject("duplicate_instance", f"{name}：{where}，不重复新建")
         return None
     chunk = _pick_candidate(item, chunks, result)
     if chunk is None:
@@ -483,11 +516,13 @@ def _build_instance(
     quote = _quote_of(item, chunk, result)
     if quote is None:
         return None
-    props, warnings = _coerce_props(registry, entity_type, item.get("props"), quote)
+    props, warnings = _coerce_props(
+        registry, entity_type, item.get("props"), quote, chunk.doc_name
+    )
     return InstanceCandidate(
         entity_type=entity_type,
         name=name,
-        uid=registry.uid_for(entity_type, name, kb_id),
+        uid=uid,
         props=props,
         candidate=chunk,
         quote=quote,
