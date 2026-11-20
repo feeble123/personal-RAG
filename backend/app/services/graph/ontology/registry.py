@@ -35,6 +35,37 @@ _SCOPES = {"local", "global"}
 #: （`subject`/`other` 是编排层自己产生的，不由 YAML 声明）；有单测守着这条一致性。
 PHASE_VALUES = ("basis", "flow", "actor", "means", "impact", "response")
 
+#: 约束类型。**每一种都必须能追溯到一份 CQ 清单里的条目**
+#: （见 `docs/本体能力问题清单.md` §8）；没有能力问题支撑的约束一律不加，
+#: 否则约束会变成"凭感觉定的规矩"，最后没人敢改。
+#:
+#: - `required_attribute`：某类型实例必须有这个属性
+#: - `min_count` / `max_count`：某类型实例沿关系（可多选）的边数下限 / 上限
+#: - `unique_attribute`：同一类型内该属性的取值不能重复
+#: - `coverage`：**逐条核对**。实例说"原文共有 N 条"，每条边自己说"我对应第几条"，
+#:   要求 1..N 每一条都有人认领。比 min_count 严：只数条数的话，把一条拆成两条
+#:   就能凑够数量、把另一条整个漏掉——实测Ⅳ级就漏了原文第 (2) 条却"通过"了。
+CONSTRAINT_TYPES = (
+    "required_attribute",
+    "min_count",
+    "max_count",
+    "unique_attribute",
+    "coverage",
+)
+#: 严重级：error 拦住建库，warning 只提示
+SEVERITIES = ("error", "warning")
+#: 计数类约束看的方向：out = 实例出发的边，in = 指向实例的边
+CONSTRAINT_DIRECTIONS = ("out", "in")
+
+#: 规则类型。
+#: `classify`：拿问题里工况的一个数值去比区间，命中就落到某类型里符合 `target_match` 的实例上。
+#: 这是**本体相对 GraphRAG 的实质差别**——GraphRAG 只能告诉你"文档里出现过的关系"，
+#: 规则能告诉你"按定义必然成立的关系"，因此 300 年一遇这种没人手工连过边的工况
+#: 也能自动归到正确的等级。
+RULE_TYPES = ("classify",)
+#: `when` 里能用的比较算子
+RULE_OPS = ("eq", "ne", "gt", "gte", "lt", "lte")
+
 
 class ProfileError(ValueError):
     """profile 文件不合法（消息里带文件与字段位置，便于排查）。"""
@@ -99,6 +130,10 @@ class RelationTypeDef:
     #: 引擎内置了一张「历史关系名 → 档位」的表，但只认那 22 个老名字；
     #: 新领域的 profile 在 YAML 里直接声明，编排层就不用为每个领域改代码。
     phase: str = ""
+    #: 这条关系是不是**包含关系**（"A 属于 B"）。标了它的边会被检索层当作继承用：
+    #: 问 A 的时候，B 身上的事实一并算作 A 的（标 `inherited`）。
+    #: 没有这个标记，`INSTANCE_OF` 就只是一条普通边，不传递也不继承。
+    subsumption: bool = False
 
     def allows_object(self, object_type: str) -> bool:
         return object_type in (self.target_types or (self.target,))
@@ -117,6 +152,115 @@ class RelationTypeDef:
             out["inverse_of"] = self.inverse_of
         if self.phase:
             out["phase"] = self.phase
+        if self.subsumption:
+            out["subsumption"] = True
+        return out
+
+
+@dataclass(frozen=True)
+class ConstraintDef:
+    """一条本体约束（TBox 里声明，建库时对 ABox 求值）。
+
+    为什么约束要写在 TBox 而不是脚本里：**它是"这套本体应该长什么样"的定义**，
+    属于模式的一部分。写在 Python 里的话，换个本体就查不了，也没法追溯到需求。
+    `cq` 字段把每条约束钉回能力问题清单——约束报错时能直接看出"缺的是哪一项能力"。
+    """
+
+    id: str
+    type: str
+    entity: str
+    severity: str = "error"
+    #: 计数类约束看哪些关系；留空表示"任何关系"
+    relation: tuple[str, ...] = ()
+    direction: str = "out"
+    #: 计数时只数指向这个类型的边（如"等级 → 措施"只数 measure）
+    target_type: str = ""
+    #: required_attribute / unique_attribute 的目标属性
+    attribute: str = ""
+    min: int | None = None
+    max: int | None = None
+    #: 下限也可以从实例属性读（每级响应要求的措施条数不一样，数字属于 ABox）
+    min_attr: str = ""
+    #: coverage 用：实例属性里写的"原文共几条"
+    total_attr: str = ""
+    #: coverage 用：边属性里写的"我对应原文第几条"
+    item_attr: str = ""
+    #: 追溯到哪条能力问题（docs/本体能力问题清单.md 的编号）
+    cq: str = ""
+    message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "id": self.id,
+            "type": self.type,
+            "entity": self.entity,
+            "severity": self.severity,
+        }
+        if self.relation:
+            out["relation"] = list(self.relation)
+        if self.direction != "out":
+            out["direction"] = self.direction
+        if self.target_type:
+            out["target_type"] = self.target_type
+        if self.attribute:
+            out["attribute"] = self.attribute
+        if self.min is not None:
+            out["min"] = self.min
+        if self.max is not None:
+            out["max"] = self.max
+        if self.min_attr:
+            out["min_attr"] = self.min_attr
+        if self.total_attr:
+            out["total_attr"] = self.total_attr
+        if self.item_attr:
+            out["item_attr"] = self.item_attr
+        if self.cq:
+            out["cq"] = self.cq
+        if self.message:
+            out["message"] = self.message
+        return out
+
+
+@dataclass(frozen=True)
+class RuleDef:
+    """一条推导规则（TBox 里声明，检索时对"问题里的工况"求值）。
+
+    为什么规则要写在 TBox：**"多少年一遇归哪一级"是这个领域的定义，不是程序逻辑**。
+    以前它硬编码在 `conditions.py`，导致每新增一个工况都得回代码里改，或者手工连边。
+    写进 YAML 之后，加一档只要加一条规则，引擎一行不用动。
+    """
+
+    id: str
+    type: str
+    #: 拿问题工况的哪个数值来比（`return_period` / `value` 之类，取自 `Condition`）
+    key: str
+    #: 算子 → 阈值，多个条件是 AND
+    when: dict[str, float]
+    #: 命中后落到哪条关系上
+    relation: str
+    #: 落到哪个类型的实例上
+    target_type: str
+    #: 用哪些属性把这一个实例挑出来（如 `{level: Ⅱ}`）
+    target_match: dict[str, Any]
+    cq: str = ""
+    message: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        out = {
+            "id": self.id,
+            "type": self.type,
+            "key": self.key,
+            "when": dict(self.when),
+            "emit": {
+                "relation": self.relation,
+                "target_type": self.target_type,
+                "target_match": dict(self.target_match),
+            },
+        }
+        if self.cq:
+            out["cq"] = self.cq
+        if self.message:
+            out["message"] = self.message
         return out
 
 
@@ -133,12 +277,16 @@ class OntologyRegistry:
         source_path: Path | None = None,
         display_name: str = "",
         description: str = "",
+        constraints: dict[str, ConstraintDef] | None = None,
+        rules: dict[str, RuleDef] | None = None,
     ) -> None:
         self.profile_id = profile_id
         self.version = version
         self.domain = domain
         self.entity_types = entity_types
         self.relation_types = relation_types
+        self.constraints = constraints or {}
+        self.rules = rules or {}
         self.source_path = source_path
         # 图谱库的展示信息：界面上「库名」就是它，缺省回落到 profile_id。
         # 注意**不能**叫 display_name——那个名字已经是「类型 → 中文名」的方法，
@@ -152,6 +300,20 @@ class OntologyRegistry:
 
     def relation(self, name: str) -> RelationTypeDef | None:
         return self.relation_types.get(name)
+
+    def constraint(self, name: str) -> ConstraintDef | None:
+        return self.constraints.get(name)
+
+    def rule(self, name: str) -> RuleDef | None:
+        return self.rules.get(name)
+
+    def subsumption_relations(self) -> tuple[str, ...]:
+        """哪些关系是包含关系（标了 `subsumption: true`）。
+
+        检索层用它做继承：问 A 的时候要能拿到 A 所属的 B 身上的事实。
+        引擎不认识 `INSTANCE_OF` 这个名字——换任何本体，只要标了这个开关就生效。
+        """
+        return tuple(r.name for r in self.relation_types.values() if r.subsumption)
 
     def has_entity(self, name: str) -> bool:
         return name in self.entity_types
@@ -202,6 +364,8 @@ class OntologyRegistry:
             "domain": self.domain,
             "entity_types": [e.to_dict() for e in self.entity_types.values()],
             "relation_types": [r.to_dict() for r in self.relation_types.values()],
+            "constraints": [c.to_dict() for c in self.constraints.values()],
+            "rules": [r.to_dict() for r in self.rules.values()],
         }
 
     # ---------- 注册到 schema ----------
@@ -348,24 +512,283 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
             target_types=target_types,
             inverse_of=item.get("inverse_of"),
             phase=phase,
+            subsumption=bool(item.get("subsumption", False)),
         )
     return out
 
 
-def _parse_constraints(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -> None:
+def _constraint_id(item: dict[str, Any]) -> str:
+    """约束 id：优先用声明的，没写就按内容生成一个（兼容老 profile）。
+
+    生成规则要**稳定**：同一个约束改不改顺序都该得到同一个 id，
+    否则重跑时 id 变了，历史报告就没法比对。
+    """
+    cid = str(item.get("id") or "").strip()
+    if cid:
+        return cid
+    ctype = str(item.get("type") or "").strip()
+    entity = str(item.get("entity") or "").strip()
+    attr = str(item.get("attribute") or "").strip()
+    rel = item.get("relation")
+    rel_first = ""
+    if isinstance(rel, str):
+        rel_first = rel.strip()
+    elif isinstance(rel, (list, tuple)) and rel:
+        rel_first = str(rel[0]).strip()
+    tail = attr or rel_first
+    return f"{ctype}:{entity}" + (f".{tail}" if tail else "")
+
+
+def _relations_of(item: dict[str, Any], where: str) -> tuple[str, ...]:
+    raw = item.get("relation")
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return (raw.strip(),) if raw.strip() else ()
+    if isinstance(raw, (list, tuple)):
+        out: list[str] = []
+        for value in raw:
+            text = str(value).strip()
+            if not text:
+                raise ProfileError(f"{where}.relation 里有空值")
+            out.append(text)
+        return tuple(out)
+    raise ProfileError(f"{where}.relation 必须是字符串或字符串列表")
+
+
+def _int_field(item: dict[str, Any], key: str, where: str) -> int | None:
+    value = item.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProfileError(f"{where}.{key} 必须是整数，收到 {value!r}")
+    number = int(value)
+    if number != value:
+        raise ProfileError(f"{where}.{key} 必须是整数，收到 {value!r}")
+    if number < 0:
+        raise ProfileError(f"{where}.{key} 不能为负，收到 {number}")
+    return number
+
+
+def _parse_constraints(
+    raw: Any,
+    entities: dict[str, EntityTypeDef],
+    relations: dict[str, RelationTypeDef],
+    path: Path,
+) -> dict[str, ConstraintDef]:
+    """解析 `constraints:` 段。
+
+    这里做的是**约束定义本身**的合法性校验（写错了要在加载期就炸），
+    真正的 ABox 求值在 `constraints.check_constraints`。
+    两者分开：定义写错是代码问题，数据不满足是数据问题，报错要能分清。
+    """
+    out: dict[str, ConstraintDef] = {}
     for idx, item in enumerate(raw or []):
+        where = f"{path.name}: constraints[{idx}]"
         if not isinstance(item, dict):
-            raise ProfileError(f"{path.name}: constraints[{idx}] 必须是映射")
-        entity = str(item.get("entity") or "")
-        attr = str(item.get("attribute") or "")
-        if item.get("type") == "required_attribute":
-            ent = entities.get(entity)
-            if ent is None:
-                raise ProfileError(f"{path.name}: constraints[{idx}] 引用了未定义实体 {entity!r}")
-            if attr and attr not in ent.attributes:
-                raise ProfileError(
-                    f"{path.name}: constraints[{idx}] 引用了未定义属性 {entity}.{attr}"
+            raise ProfileError(f"{where} 必须是映射")
+
+        ctype = str(item.get("type") or "").strip()
+        if ctype not in CONSTRAINT_TYPES:
+            raise ProfileError(
+                f"{where}.type 非法：{ctype!r}（可选：{', '.join(CONSTRAINT_TYPES)}）"
+            )
+        entity = str(item.get("entity") or "").strip()
+        ent = entities.get(entity)
+        if ent is None:
+            raise ProfileError(f"{where} 引用了未定义实体 {entity!r}")
+
+        severity = str(item.get("severity") or "error").strip()
+        if severity not in SEVERITIES:
+            raise ProfileError(
+                f"{where}.severity 只能是 {'/'.join(SEVERITIES)}，收到 {severity!r}"
+            )
+
+        attribute = str(item.get("attribute") or "").strip()
+        rels = _relations_of(item, where)
+        direction = str(item.get("direction") or "out").strip()
+        if direction not in CONSTRAINT_DIRECTIONS:
+            raise ProfileError(
+                f"{where}.direction 只能是 {'/'.join(CONSTRAINT_DIRECTIONS)}，收到 {direction!r}"
+            )
+        target_type = str(item.get("target_type") or "").strip()
+        min_value = _int_field(item, "min", where)
+        max_value = _int_field(item, "max", where)
+        min_attr = str(item.get("min_attr") or "").strip()
+        total_attr = str(item.get("total_attr") or "").strip()
+        item_attr = str(item.get("item_attr") or "").strip()
+
+        # ---- 按类型分别校验字段组合 ----
+        if ctype in ("required_attribute", "unique_attribute"):
+            if not attribute:
+                raise ProfileError(f"{where} 是 {ctype}，必须声明 attribute")
+            if attribute not in ent.attributes:
+                raise ProfileError(f"{where} 引用了未定义属性 {entity}.{attribute}")
+            if rels:
+                raise ProfileError(f"{where} 是 {ctype}，不该声明 relation")
+
+        if ctype in ("min_count", "max_count", "coverage"):
+            if not rels:
+                raise ProfileError(f"{where} 是 {ctype}，必须声明至少一个 relation")
+            for rel_name in rels:
+                rel = relations.get(rel_name)
+                if rel is None:
+                    raise ProfileError(f"{where}.relation 引用了未定义关系 {rel_name!r}")
+                if direction == "out" and rel.source != entity:
+                    raise ProfileError(
+                        f"{where}.relation {rel_name} 的主语是 {rel.source}，"
+                        f"与 entity={entity} 不符（方向 out 要求实例是主语）"
+                    )
+                if direction == "in" and not rel.allows_object(entity):
+                    raise ProfileError(
+                        f"{where}.relation {rel_name} 的宾语不是 {entity}，"
+                        f"与 direction=in 不符（要求实例是宾语）"
+                    )
+            if target_type:
+                if target_type not in entities:
+                    raise ProfileError(f"{where}.target_type 引用了未定义实体 {target_type!r}")
+                # 多个关系取并集时（如「STIPULATES 或 TRIGGERS」），只要**有一个**关系
+                # 能连到 target_type 就说明写法成立——其余关系天然贡献 0 条，
+                # 那不是错误，是过滤条件本来就把它们筛掉了。
+                reachable = any(
+                    (
+                        relations[name].source == target_type
+                        if direction == "in"
+                        else relations[name].allows_object(target_type)
+                    )
+                    for name in rels
                 )
+                if not reachable:
+                    raise ProfileError(
+                        f"{where}.target_type {target_type} 不是 "
+                        f"{'/'.join(rels)} 在 direction={direction} 下的另一端"
+                    )
+            if attribute:
+                raise ProfileError(f"{where} 是 {ctype}，不用声明 attribute")
+            if min_attr and min_attr not in ent.attributes:
+                raise ProfileError(f"{where}.min_attr 引用了未定义属性 {entity}.{min_attr}")
+
+        if ctype == "min_count" and min_value is None and not min_attr:
+            raise ProfileError(f"{where} 是 min_count，必须声明 min 或 min_attr")
+        if ctype == "max_count" and max_value is None:
+            raise ProfileError(f"{where} 是 max_count，必须声明 max")
+
+        if ctype == "coverage":
+            if not total_attr:
+                raise ProfileError(f"{where} 是 coverage，必须声明 total_attr（实例上的条目总数）")
+            if total_attr not in ent.attributes:
+                raise ProfileError(f"{where}.total_attr 引用了未定义属性 {entity}.{total_attr}")
+            if not item_attr:
+                raise ProfileError(f"{where} 是 coverage，必须声明 item_attr（边上的条目序号）")
+            if min_value is not None or max_value is not None:
+                raise ProfileError(f"{where} 是 coverage，下限由 total_attr 决定，不用写 min/max")
+
+        cid = _constraint_id(item)
+        if cid in out:
+            raise ProfileError(f"{where}.id 与前面的约束重复：{cid}")
+
+        out[cid] = ConstraintDef(
+            id=cid,
+            type=ctype,
+            entity=entity,
+            severity=severity,
+            relation=rels,
+            direction=direction,
+            target_type=target_type,
+            attribute=attribute,
+            min=min_value,
+            max=max_value,
+            min_attr=min_attr,
+            total_attr=total_attr,
+            item_attr=item_attr,
+            cq=str(item.get("cq") or "").strip(),
+            message=str(item.get("message") or "").strip(),
+        )
+    return out
+
+
+def _parse_rules(
+    raw: Any,
+    entities: dict[str, EntityTypeDef],
+    relations: dict[str, RelationTypeDef],
+    path: Path,
+) -> dict[str, RuleDef]:
+    """解析 `rules:` 段。
+
+    规则定义写错（算子拼错、目标类型不存在、挑实例的属性没声明）在**加载期**就炸；
+    规则命中与否是**数据**，不在这里判断。
+    """
+    out: dict[str, RuleDef] = {}
+    for idx, item in enumerate(raw or []):
+        where = f"{path.name}: rules[{idx}]"
+        if not isinstance(item, dict):
+            raise ProfileError(f"{where} 必须是映射")
+
+        rtype = str(item.get("type") or "classify").strip()
+        if rtype not in RULE_TYPES:
+            raise ProfileError(f"{where}.type 非法：{rtype!r}（可选：{', '.join(RULE_TYPES)}）")
+        rid = str(item.get("id") or "").strip()
+        if not rid:
+            raise ProfileError(f"{where} 缺少 id")
+        if rid in out:
+            raise ProfileError(f"{where}.id 重复：{rid}")
+
+        key = str(item.get("key") or "").strip()
+        if not key:
+            raise ProfileError(f"{where} 缺少 key（拿问题工况的哪个数值来比）")
+
+        when_raw = item.get("when")
+        if not isinstance(when_raw, dict) or not when_raw:
+            raise ProfileError(f"{where}.when 必须是非空映射（算子 → 阈值）")
+        when: dict[str, float] = {}
+        for op, value in when_raw.items():
+            op_text = str(op).strip()
+            if op_text not in RULE_OPS:
+                raise ProfileError(
+                    f"{where}.when 的算子 {op_text!r} 不支持（可选：{', '.join(RULE_OPS)}）"
+                )
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ProfileError(f"{where}.when.{op_text} 必须是数字，收到 {value!r}")
+            when[op_text] = float(value)
+
+        emit = item.get("emit")
+        if not isinstance(emit, dict):
+            raise ProfileError(f"{where} 缺少 emit（命中后落到哪条关系上）")
+        rel_name = str(emit.get("relation") or "").strip()
+        target_type = str(emit.get("target_type") or "").strip()
+        rel = relations.get(rel_name)
+        if rel is None:
+            raise ProfileError(f"{where}.emit.relation 引用了未定义关系 {rel_name!r}")
+        if target_type not in entities:
+            raise ProfileError(f"{where}.emit.target_type 引用了未定义实体 {target_type!r}")
+        if not rel.allows_object(target_type):
+            raise ProfileError(
+                f"{where}.emit.target_type {target_type} 不是关系 {rel_name} 的宾语"
+            )
+        match_raw = emit.get("target_match")
+        if not isinstance(match_raw, dict) or not match_raw:
+            raise ProfileError(
+                f"{where}.emit.target_match 必须是非空映射（用哪些属性挑出那一个实例）"
+            )
+        target_entity = entities[target_type]
+        for attr in match_raw:
+            if attr not in target_entity.attributes:
+                raise ProfileError(
+                    f"{where}.emit.target_match 引用了未定义属性 {target_type}.{attr}"
+                )
+
+        out[rid] = RuleDef(
+            id=rid,
+            type=rtype,
+            key=key,
+            when=when,
+            relation=rel_name,
+            target_type=target_type,
+            target_match=dict(match_raw),
+            cq=str(item.get("cq") or "").strip(),
+            message=str(item.get("message") or "").strip(),
+        )
+    return out
 
 
 def load_profile(profile: str | Path, *, register: bool = True) -> OntologyRegistry:
@@ -388,7 +811,11 @@ def load_profile(profile: str | Path, *, register: bool = True) -> OntologyRegis
     relations = dict(parent.relation_types) if parent else {}
     relations.update(_parse_relations(data.get("relation_types") or [], entities, path))
 
-    _parse_constraints(data.get("constraints"), entities, path)
+    constraints = dict(parent.constraints) if parent else {}
+    constraints.update(_parse_constraints(data.get("constraints"), entities, relations, path))
+
+    rules = dict(parent.rules) if parent else {}
+    rules.update(_parse_rules(data.get("rules"), entities, relations, path))
 
     registry = OntologyRegistry(
         profile_id=profile_id,
@@ -399,6 +826,8 @@ def load_profile(profile: str | Path, *, register: bool = True) -> OntologyRegis
         source_path=path,
         display_name=str(data.get("display_name") or ""),
         description=str(data.get("description") or ""),
+        constraints=constraints,
+        rules=rules,
     )
     if register:
         registry.register()

@@ -59,7 +59,7 @@ entity_types:
       - {name: level_m, type: number, description: "判别用库水位（m）"}
       - {name: inflow_m3s, type: number, description: "入库流量（m³/s）"}
       - {name: season, type: string, description: "来水年型"}
-      - {name: note, type: string}
+      - {name: note, type: string, description: "补充说明"}
 
   - name: dispatch_plan
     display_name: 调度方案
@@ -72,7 +72,10 @@ entity_types:
       - {name: gate_opening_m, type: number, description: "闸门开度（m）"}
       - {name: mode, type: enum, values: [控泄, 全开泄洪, 保坝, 不泄], description: "调度方式"}
       - {name: priority, type: string, description: "保护对象，如「下游防洪」「保坝」"}
-      - {name: note, type: string}
+      # 引擎约定：同一工况下出现多条同类方案时，按这个值取高者（数字大 = 优先）。
+      # 值是人根据文件效力定的，不是原文事实——所以写在 note 里说明依据，别当数字证据。
+      - {name: authority_rank, type: number, description: "依据文件的权威级（同工况冲突时取高者）"}
+      - {name: note, type: string, description: "补充说明"}
 
   - name: response_level
     display_name: 响应等级
@@ -82,16 +85,21 @@ entity_types:
       - {name: level, type: enum, values: [Ⅰ, Ⅱ, Ⅲ, Ⅳ], description: "响应级别"}
       - {name: color, type: string, description: "预警颜色"}
       - {name: trigger_summary, type: string, description: "启动条件摘要"}
+      # 预案对每一级都是「发生Ⅹ级险情后的处置措施：（1）（2）…」逐条列出的，
+      # 条数本身是原文事实，所以存成实例属性；TBox 的约束拿它当漏建检查的下限。
+      - {name: expected_measures, type: number, description: "预案该级列出的处置措施条数"}
 
   - name: measure
     display_name: 处置措施
     uid_prefix: ms
     scope: local
     attributes:
-      - {name: timing, type: string, description: "时限，如「1h 内」「泄洪前 1h」"}
+      # timing / frequency 是**随响应等级变**的（传达命令在Ⅱ级是 30min、Ⅳ级是 1h），
+      # 所以实际值挂在 response_level → measure 的边上，节点上只在四级相同时才写。
+      - {name: timing, type: string, description: "时限"}
       - {name: owner_role, type: string, description: "执行角色"}
-      - {name: frequency, type: string, description: "频次，如「每 2h 一次」"}
-      - {name: note, type: string}
+      - {name: frequency, type: string, description: "频次"}
+      - {name: note, type: string, description: "补充说明"}
 
   - name: management_unit
     display_name: 责任单位
@@ -99,7 +107,7 @@ entity_types:
     scope: local
     attributes:
       - {name: role, type: string, description: "在防汛体系中的角色"}
-      - {name: note, type: string}
+      - {name: note, type: string, description: "补充说明"}
 
   - name: admin_region
     display_name: 影响区域
@@ -123,8 +131,11 @@ entity_types:
 #            / means（用什么）/ impact（影响谁）/ response（怎么应对）
 # ------------------------------------------------------------
 relation_types:
-  # 工况 → 方案：这是最核心的一条，「20 年一遇」靠它落到「控泄多少」
-  - {name: STIPULATES, display_name: 规定, phase: basis,
+  # 工况 → 方案：这是最核心的一条，「20 年一遇」靠它落到「控泄多少」。
+  # phase 是 response 不是 basis：它讲的是**该做什么**，不是"凭什么这么判"。
+  # 早先挂成 basis，答案里就出现两段并排的「工况与依据」——一段是调度方案、
+  # 一段是等级判据，读起来像两份文档拼在一起（实测）。
+  - {name: STIPULATES, display_name: 规定, phase: response,
      source: condition, target: dispatch_plan,
      description: "该工况下按此方案调度"}
 
@@ -132,8 +143,11 @@ relation_types:
   # 四份文件里「20 年一遇」有好几种写法（预警条件、下游标准、调度分档），
   # 靠这条把「20年一遇洪水」接到「10~20年一遇降雨（155~170mm）」那一档，
   # 链路才能从一句问题走到具体的控泄流量。
+  # subsumption: true → 检索层把这条关系当**继承**用：
+  # 问「20年一遇洪水」时，它所属的「10~20年一遇降雨」身上的调度方案一并算作它的，
+  # 结果与遍历深度上限无关。不标的话它就只是一条普通边，不传递也不继承。
   - {name: INSTANCE_OF, display_name: 属于档位, phase: basis,
-     source: condition, target: condition,
+     source: condition, target: condition, subsumption: true,
      description: "粗工况属于哪个细分工况档位"}
 
   # 工况 → 响应等级：触发哪一级应急响应
@@ -185,3 +199,146 @@ relation_types:
   - {name: PROTECTS, display_name: 保护, phase: response,
      source: measure, target: admin_region,
      description: "该措施保护的下游对象"}
+
+# ------------------------------------------------------------
+# 约束（TBox 里声明「这套本体应该长什么样」，建库时对实例求值）
+# 每一条都必须能追溯到 docs/本体能力问题清单.md 里的 CQ；
+# 没有能力问题支撑的约束一律不加，否则约束会变成没人敢改的"感觉"。
+# ------------------------------------------------------------
+constraints:
+  # CQ-10：给定响应等级，能列出**全部**处置措施、一条不漏。
+  # 逐条核对而不是数条数：实例写「原文这一级共 expected_measures 条」，
+  # 每条边写「我对应原文第 source_item 条」，要求 1..N 每一条都有人认领。
+  # 为什么不用 min_count：数条数分不清"拆分"和"漏建"——实测Ⅳ级原文 5 条、
+  # 本体连了 6 条看着达标，其实把第 (4) 条拆成两个节点凑数，第 (2) 条整条漏掉。
+  - id: response_level.measures_coverage
+    type: coverage
+    entity: response_level
+    relation: RESPONDS_WITH
+    target_type: measure
+    total_attr: expected_measures
+    item_attr: source_item
+    severity: error
+    cq: CQ-10
+    message: "预案该级的处置措施没有逐条建全"
+
+  # CQ-05：边界值与归属必须唯一，一个工况不能触发两个等级。
+  - id: condition.single_response_level
+    type: max_count
+    entity: condition
+    relation: TRIGGERS
+    target_type: response_level
+    max: 1
+    severity: error
+    cq: CQ-05
+    message: "同一工况触发了多个响应等级，归属不唯一"
+
+  - id: response_level.unique_level
+    type: unique_attribute
+    entity: response_level
+    attribute: level
+    severity: error
+    cq: CQ-05
+    message: "响应级别重复定义"
+
+  # CQ-06：方案必须能被某个工况触发到，否则永远用不上。
+  - id: dispatch_plan.reachable
+    type: min_count
+    entity: dispatch_plan
+    relation: STIPULATES
+    direction: in
+    min: 1
+    severity: warning
+    cq: CQ-06
+    message: "没有任何工况指向这个调度方案，它永远触发不到"
+
+  # CQ-01：工况既不给方案也不触发等级，就是死数据。
+  - id: condition.actionable
+    type: min_count
+    entity: condition
+    relation: [STIPULATES, TRIGGERS, INSTANCE_OF]
+    min: 1
+    severity: warning
+    cq: CQ-01
+    message: "工况既不给调度方案也不触发响应等级，是死数据"
+
+  # CQ-25：同一工况下不该有多条互相打架的方案并存而不被指出。
+  # 这一条**故意设成 warning**：四份报告本来就会打架（5~10 年一遇控泄，
+  # 调度规程写 120、汛期调度运用计划写 125）。冲突不是错误，是必须被摆到台面上
+  # 再按权威级仲裁的事实。查出来是提醒人去确认，不是拦住建库。
+  - id: condition.conflicting_plans
+    type: max_count
+    entity: condition
+    relation: STIPULATES
+    target_type: dispatch_plan
+    max: 1
+    severity: warning
+    cq: CQ-25
+    message: "同一工况下有多条调度方案，需要按权威级仲裁"
+
+  # CQ-11：每条措施都要能说出由谁执行。
+  - id: measure.executor
+    type: min_count
+    entity: measure
+    relation: PERFORMED_BY
+    min: 1
+    severity: warning
+    cq: CQ-11
+    message: "措施没有挂执行单位"
+
+# ------------------------------------------------------------
+# 规则（TBox 里声明「多少年一遇归哪一级」，检索时对问题工况求值）
+#
+# 这是本体相对 GraphRAG 的实质差别：GraphRAG 只能给你文档里**出现过的**关系，
+# 规则能给你**按定义必然成立**的关系。20/50/100/300/1000 年一遇全部自动归位，
+# 一条边都不用手工连；新增一档工况只加一条规则，引擎一行不动。
+#
+# 边界口径：左开右闭（与 conditions.py 的区间匹配一致）。
+# 已知原文冲突：预案 4.6.1.2 写「1000 年以下」、4.6.1.4 写「1000 年以上」，
+# 1000 年一遇两边都算得进。这里取 Ⅱ 级（沿用既有行为），
+# 显式留给 ⑥ 冲突仲裁去处理，而不是假装没有这回事。
+# ------------------------------------------------------------
+rules:
+  - id: response_level.by_return_period.Ⅳ
+    type: classify
+    key: return_period
+    when: {lte: 20}
+    emit:
+      relation: TRIGGERS
+      target_type: response_level
+      target_match: {level: Ⅳ}
+    cq: CQ-01
+    message: "重现期 ≤ 20 年 → Ⅳ级响应（蓝色）"
+
+  - id: response_level.by_return_period.Ⅲ
+    type: classify
+    key: return_period
+    when: {gt: 20, lte: 50}
+    emit:
+      relation: TRIGGERS
+      target_type: response_level
+      target_match: {level: Ⅲ}
+    cq: CQ-01
+    message: "重现期 (20, 50] 年 → Ⅲ级响应（黄色）"
+
+  - id: response_level.by_return_period.Ⅱ
+    type: classify
+    key: return_period
+    when: {gt: 50, lte: 1000}
+    emit:
+      relation: TRIGGERS
+      target_type: response_level
+      target_match: {level: Ⅱ}
+    cq: CQ-01
+    message: "重现期 (50, 1000] 年 → Ⅱ级响应（橙色）"
+
+  - id: response_level.by_return_period.Ⅰ
+    type: classify
+    key: return_period
+    when: {gt: 1000}
+    emit:
+      relation: TRIGGERS
+      target_type: response_level
+      target_match: {level: Ⅰ}
+    cq: CQ-01
+    message: "重现期 > 1000 年 → Ⅰ级响应（红色）"

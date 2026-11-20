@@ -8,7 +8,9 @@ from __future__ import annotations
 from app.services.graph.ontology import chain as C
 
 
-def _edge(subject, predicate, obj, *, hop=1, label="", evidence_text="", chunk_ids=None):
+def _edge(
+    subject, predicate, obj, *, hop=1, label="", evidence_text="", chunk_ids=None, **edge_props
+):
     return {
         "kind": "graph_edge",
         "subject": subject,
@@ -18,6 +20,7 @@ def _edge(subject, predicate, obj, *, hop=1, label="", evidence_text="", chunk_i
         "hop": hop,
         "evidence_text": evidence_text,
         "chunk_ids": chunk_ids or [],
+        "edge_props": edge_props,
     }
 
 
@@ -136,3 +139,36 @@ class TestDeclaredPhase:
         declared["phase"] = "flow"
         with_phase = C.build_chain([_node("高洞子水库", matched=True), declared])
         assert with_phase.steps[0].phase == "flow"
+
+
+class TestSourceItemOrder:
+    """措施按原文条目号排，而不是按图上先碰到谁。
+
+    预案对每一级都是「处置措施（1）（2）（3）…」逐条列的，
+    读者期待的就是这个顺序。图上发现的先后取决于遍历，靠不住。
+    """
+
+    def test_同一档里按条目号排(self):
+        facts = [
+            _node("水库", matched=True),
+            _edge("Ⅱ级响应", "RESPONDS_WITH", "汇报", hop=2, source_item=5),
+            _edge("Ⅱ级响应", "RESPONDS_WITH", "传达命令", hop=2, source_item=1),
+            _edge("Ⅱ级响应", "RESPONDS_WITH", "值班", hop=2, source_item=3),
+        ]
+        built = C.build_chain(facts)
+        assert [s.object for s in built.steps] == ["传达命令", "值班", "汇报"]
+
+    def test_没声明条目号的排在有号的前面(self):
+        """方案/判据这类前提通常没有条目号，要先讲。"""
+        facts = [
+            _node("水库", matched=True),
+            _edge("Ⅱ级响应", "RESPONDS_WITH", "传达命令", hop=2, source_item=1),
+            _edge("工况", "STIPULATES", "削峰方案", hop=1),
+        ]
+        built = C.build_chain(facts)
+        assert built.steps[0].object == "削峰方案"
+        assert built.steps[0].source_item == 0
+
+    def test_条目号写坏了当成没声明(self):
+        facts = [_node("水库", matched=True), _edge("Ⅱ级响应", "RESPONDS_WITH", "汇报", source_item="第六条")]
+        assert C.build_chain(facts).steps[0].source_item == 0

@@ -31,6 +31,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.db.models import Chunk, Document  # noqa: E402
 from app.db.session import async_session_factory  # noqa: E402
+from app.services.graph.ontology import constraints as con_mod  # noqa: E402
 from app.services.graph.ontology import instances as inst_mod  # noqa: E402
 from app.services.graph.ontology import relations as rel_mod  # noqa: E402
 from app.services.graph.ontology.registry import get_registry  # noqa: E402
@@ -172,12 +173,18 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
     ("dispatch_plan", "3~5年一遇控泄方案",
      {"outflow_m3s": 100, "start_level_m": 338.5, "mode": "控泄", "priority": "下游防洪"},
      [(S, "洪水控制下泄流量 1 0 0 m^3 / s")]),
+    # 这两条是四份报告里**唯一一处数值打架**的地方，也是 CQ-08/CQ-25 的真实用例。
+    # authority_rank 不是原文事实，是人按文件效力定的口径：
+    #   运用计划是逐年报批的执行性文件，规程是框架性的长期规定 → 执行时以运用计划为准。
+    # 这个排序**待确认**：改一行数字就能反过来，不影响引擎。
     ("dispatch_plan", "5~10年一遇控泄方案（调度规程）",
      {"outflow_m3s": 120, "start_level_m": 338.5, "mode": "控泄", "priority": "下游防洪",
+      "authority_rank": 1,
       "note": "调度规程取 120；同一工况汛期调度运用计划取 125，两份文件不一致"},
      [(S, "洪水控制下泄流量120m³/s")]),
     ("dispatch_plan", "5~10年一遇控泄方案（汛期调度运用计划）",
      {"outflow_m3s": 125, "start_level_m": 338.5, "mode": "控泄", "priority": "下游防洪",
+      "authority_rank": 2,
       "note": "运用计划取 125；调度规程取 120，两份文件不一致"},
      [(P, "洪水控制下泄流量125m³/s")]),
     ("dispatch_plan", "10~20年一遇控泄方案",
@@ -200,22 +207,31 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
      [(S, "开启一切泄洪设施，按下泄流量最大化的原则进行调度，且下泄流量不得大于入库流量")]),
 
     # ---------- 响应等级 ----------
+    # expected_measures 是预案该级「发生Ⅹ级险情后的处置措施」逐条列出的条数，
+    # TBox 的 response_level.measures_complete 拿它查漏：连的边少于这个数就报错。
     ("response_level", "Ⅳ级响应", {"level": "Ⅳ", "color": "蓝色",
-                                    "trigger_summary": "6h 雨量 30mm，或可能遭遇 20 年一遇洪水"},
-     [(F, "Ⅳ级（蓝色预警）")]),
+                                    "trigger_summary": "6h 雨量 30mm，或可能遭遇 20 年一遇洪水",
+                                    "expected_measures": 5},
+     [(F, "Ⅳ级（蓝色预警）"), (F, "发生IV级险情后的处置措施")]),
     ("response_level", "Ⅲ级响应", {"level": "Ⅲ", "color": "黄色",
-                                    "trigger_summary": "6h 雨量 50mm，或可能遭遇 20~50 年一遇洪水"},
-     [(F, "Ⅲ级（黄色预警）")]),
+                                    "trigger_summary": "6h 雨量 50mm，或可能遭遇 20~50 年一遇洪水",
+                                    "expected_measures": 6},
+     [(F, "Ⅲ级（黄色预警）"), (F, "发生Ⅲ级险情后的处置措施")]),
     ("response_level", "Ⅱ级响应", {"level": "Ⅱ", "color": "橙色",
-                                    "trigger_summary": "3h 雨量 50mm，或可能遭遇 50~1000 年一遇洪水"},
-     [(F, "4.6.1.3 Ⅱ级险情及应急措施")]),
+                                    "trigger_summary": "3h 雨量 50mm，或可能遭遇 50~1000 年一遇洪水",
+                                    "expected_measures": 6},
+     [(F, "4.6.1.3 Ⅱ级险情及应急措施"), (F, "发生Ⅱ级险情后的处置措施")]),
     ("response_level", "Ⅰ级响应", {"level": "Ⅰ", "color": "红色",
-                                    "trigger_summary": "3h 雨量 100mm，或可能遭遇 1000 年以上一遇洪水"},
-     [(F, "4.6.1.4 Ⅰ 级险情及应急措施")]),
+                                    "trigger_summary": "3h 雨量 100mm，或可能遭遇 1000 年以上一遇洪水",
+                                    "expected_measures": 4},
+     [(F, "4.6.1.4 Ⅰ 级险情及应急措施"), (F, "发生Ⅰ级险情后的处置措施")]),
 
     # ---------- 处置措施 ----------
+    # 时限/频次**不挂在这里**：同一条措施在四级响应里时限不一样，
+    # 挂在节点上就只能写成「Ⅳ/Ⅲ级 1h 内；Ⅱ级 30min 内」，答案里全部抄进去，
+    # 读者得自己挑。这类"随等级变"的值挂在 response_level → measure 的边上。
     ("measure", "传达应急响应命令",
-     {"timing": "Ⅳ/Ⅲ级 1h 内；Ⅱ级 30min 内", "owner_role": "水库管理处"},
+     {"owner_role": "水库管理处"},
      [(F, "高洞子水库管理处人员应在1h内将应急响应命令和有关信息传送到")]),
     ("measure", "向区防指报备",
      {"timing": "与传达响应命令同步", "owner_role": "水库管理处"},
@@ -223,13 +239,13 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
     ("measure", "24小时轮流值班", {"owner_role": "水库管理处"},
      [(F, "进行24h轮流值班")]),
     ("measure", "汇报水情工情险情",
-     {"frequency": "Ⅳ/Ⅲ级 每 2h；Ⅱ级 每 1h；Ⅰ级 每 0.5h", "owner_role": "水库管理处"},
+     {"owner_role": "水库管理处"},
      [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情")]),
     ("measure", "通知下游镇街",
      {"owner_role": "防汛抗旱应急领导小组"},
      [(F, "向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状")]),
     ("measure", "专家组到场",
-     {"timing": "Ⅲ级 2h 内；Ⅱ级 30min 内", "owner_role": "应急抢险专家组"},
+     {"owner_role": "应急抢险专家组"},
      [(F, "专家组成员在接到信息后2h内赴现场进行技术指导")]),
     ("measure", "加强安全巡查", {"owner_role": "水库管理处"},
      [(F, "加大安全巡查力度")]),
@@ -254,6 +270,29 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
     ("measure", "解除预警", {"owner_role": "区防汛抗旱指挥部"},
      [(F, "预警宣布结束")]),
 
+    # ---- 预案 4.6.1 四级「处置措施」里此前漏建的动作 ----
+    # Ⅳ级第 (2) 条整条漏了（按调度计划调控水位 / 与常备队处理险情），
+    # Ⅳ级第 (3) 条和Ⅲ、Ⅱ级第 (3) 条里的"指挥 / 紧急会议 / 队伍到位"也没建。
+    # 这几条不是可有可无的补充——它们决定了答案"完不完整"。
+    ("measure", "按调度计划调控水位", {"owner_role": "水库管理处"},
+     [(F, "立即按照调度计划进行水位调控")]),
+    ("measure", "与常备队共同处理险情", {"owner_role": "水库管理处"},
+     [(F, "与常备队一起及时处理险情")]),
+    ("measure", "领导现场指挥",
+     {"owner_role": "防汛抗旱应急领导小组",
+      "note": "Ⅳ级由公司董事长坐镇、管理处负责人现场；Ⅲ级由副组长（区水利局局长）、Ⅱ级由组长（副区长）亲临"},
+     [(F, "坐镇指挥"), (F, "亲临现场指挥抢险")]),
+    ("measure", "召集专家组紧急会议", {"owner_role": "防汛抗旱应急领导小组"},
+     [(F, "召集专家组进行紧急会议")]),
+    ("measure", "抢险队伍到位", {"owner_role": "常备队与抢险队"},
+     [(F, "常备队和各抢险队到位抢险")]),
+    ("measure", "上报险情并移交指挥权", {"owner_role": "水库管理处"},
+     [(F, "立即开展先期处置并将险情上报")]),
+    ("measure", "请求外部支援", {"owner_role": "水库管理处"},
+     [(F, "请求当地驻军支援或启动巴南区级预案")]),
+    ("measure", "按区防指办法执行响应", {"owner_role": "防汛抗旱应急领导小组"},
+     [(F, "I级响应按照巴南区防汛抗旱应急指挥部的响应办法执行")]),
+
     # ---------- 责任单位 ----------
     ("management_unit", "高洞子水库管理处", {"role": "现场运行管理"},
      [(F, "高洞子水库管理处人员应在1h内")]),
@@ -269,6 +308,8 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
      [(D, "重庆市水利投资（集团）有限公司")]),
     ("management_unit", "应急抢险专家组", {"role": "技术指导"},
      [(F, "应急抢险专家组")]),
+    ("management_unit", "常备队与抢险队", {"role": "现场抢险力量"},
+     [(F, "常备队和各抢险队到位抢险")]),
 
     # ---------- 影响区域 ----------
     ("admin_region", "圣灯山镇", {"level": "镇", "flood_standard": "20年一遇"},
@@ -305,9 +346,13 @@ INSTANCES: list[tuple[str, str, dict[str, Any], list[tuple[str, str]]]] = [
 
 
 # ============================================================
-# 关系：(主语类型, 主语名, 关系, 宾语类型, 宾语名, [(文件, 引句)])
+# 关系：(主语类型, 主语名, 关系, 宾语类型, 宾语名, [(文件, 引句[, 页码])][, 边属性])
+#
+# 边属性可选，用来放**随主语变**的取值。目前只有 `source_item`
+# （"这条措施对应原文第几条"）——同一条措施在Ⅳ级是第 (3) 条、在Ⅱ级是第 (4) 条，
+# 挂到节点上就串味了。TBox 的 coverage 约束读它做逐条核对。
 # ============================================================
-RELATIONS: list[tuple[str, str, str, str, str, list[tuple[str, str]]]] = [
+RELATIONS: list[tuple] = [
     # 工况 → 调度方案（按降雨分档）
     ("condition", "24h降雨小于85mm（1年一遇）", "STIPULATES", "dispatch_plan", "1年一遇控泄方案",
      [(S, "预计24h降雨量小于85mm（1年一遇）")]),
@@ -355,34 +400,104 @@ RELATIONS: list[tuple[str, str, str, str, str, list[tuple[str, str]]]] = [
      [(P, "由巴南区防汛抗旱指挥部按照应急预案的启动方式启动应急预案")]),
 
     # 响应等级 → 处置措施
+    #
+    # 每条边带 source_item：它是预案该级「发生Ⅹ级险情后的处置措施」里的第几条。
+    # **序号挂在边上不挂节点上**——同一条措施在不同等级是不同条目（24h值班在
+    # Ⅳ级是(3)、在Ⅱ级是(4)）。TBox 的 response_level.measures_coverage 拿它
+    # 逐条核对，缺哪一条会直接报出来，而不是只报"数量不够"。
+    #
+    # 页码必须钉死：四级条文句式几乎一样（都是"应在 1h 内将应急响应命令…"），
+    # 只按引句匹配会取到别的等级那一页，回答里就张冠李戴。
+    # 条数依据：Ⅳ级 4.6.1.1 共 5 条 / Ⅲ级 4.6.1.2 共 6 条 /
+    #           Ⅱ级 4.6.1.3 共 6 条 / Ⅰ级 4.6.1.4 共 4 条（与 expected_measures 一致）
+
+    # ---- Ⅳ级（p.50，5 条）----
     ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "传达应急响应命令",
-     [(F, "高洞子水库管理处人员应在1h内将应急响应命令和有关信息传送到")]),
+     [(F, "将应急响应命令和有关信息传送到高洞子水库防汛抗旱应急领导小组各成员", 50)],
+     {"source_item": 1, "timing": "1h 内"}),
     ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "向区防指报备",
-     [(F, "同时向巴南区防汛抗旱应急指挥部报备")]),
+     [(F, "同时向巴南区防汛抗旱应急指挥部报备", 50)], {"source_item": 1}),
+    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "按调度计划调控水位",
+     [(F, "立即按照调度计划进行水位调控", 50)], {"source_item": 2}),
+    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "与常备队共同处理险情",
+     [(F, "与常备队一起及时处理险情", 50)], {"source_item": 2}),
+    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "领导现场指挥",
+     [(F, "坐镇指挥", 50)], {"source_item": 3}),
     ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "24小时轮流值班",
-     [(F, "进行24h轮流值班")]),
-    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情")]),
-    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "通知下游镇街",
-     [(F, "向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状")]),
+     [(F, "进行24h轮流值班", 50)], {"source_item": 3}),
     ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "加强安全巡查",
-     [(F, "加大安全巡查力度")]),
-    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "专家组到场",
-     [(F, "专家组成员在接到信息后2h内赴现场进行技术指导", 51)]),
+     [(F, "加大安全巡查力度", 50)], {"source_item": 4}),
+    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
+     [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 50)],
+     {"source_item": 4, "frequency": "每 2h"}),
+    ("response_level", "Ⅳ级响应", "RESPONDS_WITH", "measure", "通知下游镇街",
+     [(F, "向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状", 50)],
+     {"source_item": 5}),
+
+    # ---- Ⅲ级（p.51，6 条）----
     ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "传达应急响应命令",
-     [(F, "高洞子水库管理处人员应在1h内将应急响应命令和有关信息传送到", 51)]),
+     [(F, "将应急响应命令和有关信息传送到高洞子水库防汛抗旱应急领导小组各成员", 51)],
+     {"source_item": 1, "timing": "1h 内"}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "向区防指报备",
+     [(F, "同时向巴南区防汛抗旱应急指挥部报备", 51)], {"source_item": 1}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "专家组到场",
+     [(F, "专家组成员在接到信息后2h内赴现场进行技术指导", 51)],
+     {"source_item": 2, "timing": "2h 内到场"}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "领导现场指挥",
+     [(F, "亲临现场指挥抢险", 51)], {"source_item": 3}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "召集专家组紧急会议",
+     [(F, "召集专家组进行紧急会议", 51)], {"source_item": 3}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "抢险队伍到位",
+     [(F, "常备队和各抢险队到位抢险", 51)], {"source_item": 3}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "24小时轮流值班",
+     [(F, "进行24h轮流值班", 51)], {"source_item": 4}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "加强安全巡查",
+     [(F, "加大安全巡查力度", 51)], {"source_item": 5}),
     ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 51)]),
-    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "专家组到场",
-     [(F, "专家组成员在接到信息后30min内赴现场进行技术指导", 52)]),
+     [(F, "每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 51)],
+     {"source_item": 5, "frequency": "每 2h"}),
+    ("response_level", "Ⅲ级响应", "RESPONDS_WITH", "measure", "通知下游镇街",
+     [(F, "向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状", 51)],
+     {"source_item": 6}),
+
+    # ---- Ⅱ级（p.52，6 条）----
     ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "传达应急响应命令",
-     [(F, "高洞子水库管理处人员应在30min内将应急响应命令和有关信息传送到", 52)]),
+     [(F, "将应急响应命令和有关信息传送到高洞子水库防汛抗旱应急领导小组各成员", 52)],
+     {"source_item": 1, "timing": "30min 内"}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "向区防指报备",
+     [(F, "同时向巴南区防汛抗旱应急指挥部报备", 52)], {"source_item": 1}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "专家组到场",
+     [(F, "专家组成员在接到信息后30min内赴现场进行技术指导", 52)],
+     {"source_item": 2, "timing": "30min 内到场"}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "领导现场指挥",
+     [(F, "亲临现场指挥抢险", 52)], {"source_item": 3}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "召集专家组紧急会议",
+     [(F, "召集专家组进行紧急会议", 52)], {"source_item": 3}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "抢险队伍到位",
+     [(F, "常备队和各抢险队到位抢险", 52)], {"source_item": 3}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "24小时轮流值班",
+     [(F, "进行24h轮流值班", 52)], {"source_item": 4}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "加强安全巡查",
+     [(F, "加大安全巡查力度", 52)], {"source_item": 5}),
     ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每1h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 52)]),
+     [(F, "每1h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情", 52)],
+     {"source_item": 5, "frequency": "每 1h"}),
+    ("response_level", "Ⅱ级响应", "RESPONDS_WITH", "measure", "通知下游镇街",
+     [(F, "向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状", 52)],
+     {"source_item": 6}),
+
+    # ---- Ⅰ级（p.53，4 条）----
+    ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "上报险情并移交指挥权",
+     [(F, "立即开展先期处置并将险情上报", 53)], {"source_item": 1}),
+    ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "加强安全巡查",
+     [(F, "加大安全巡查力度", 53)], {"source_item": 2}),
     ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "汇报水情工情险情",
-     [(F, "每0.5h向巴南区防汛抗旱应急指挥部办公室汇报水库水情、工情及险情", 53)]),
-    ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "启动防洪抢险应急预案",
-     [(F, "水库库水位超过校核洪水位343.54m时，由高洞子水库管理处向上级上报水库当前险情")]),
+     [(F, "每0.5h向巴南区防汛抗旱应急指挥部办公室汇报水库水情、工情及险情", 53)],
+     {"source_item": 2, "frequency": "每 0.5h"}),
+    ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "请求外部支援",
+     [(F, "请求当地驻军支援或启动巴南区级预案", 53)], {"source_item": 3}),
+    ("response_level", "Ⅰ级响应", "RESPONDS_WITH", "measure", "按区防指办法执行响应",
+     [(F, "I级响应按照巴南区防汛抗旱应急指挥部的响应办法执行", 53)], {"source_item": 4}),
 
     # 调度方案 → 必须完成的动作
     ("dispatch_plan", "中小洪水控泄方案", "REQUIRES", "measure", "开闸泄水前通知下游村镇",
@@ -415,6 +530,24 @@ RELATIONS: list[tuple[str, str, str, str, str, list[tuple[str, str]]]] = [
      [(F, "专家组成员在接到信息后2h内赴现场进行技术指导")]),
     ("measure", "险情书面报告", "PERFORMED_BY", "management_unit", "高洞子水库管理处",
      [(F, "并在90分钟内由高洞子水库管理处出具详细书面报告")]),
+    # 新补的 8 条措施也要有人执行——否则 measure.executor 约束会一条条报，
+    # 而那些告警本身是对的：没有执行单位的措施在答案里写不成立。
+    ("measure", "按调度计划调控水位", "PERFORMED_BY", "management_unit", "高洞子水库管理处",
+     [(F, "高洞子水库管理处人员立即按照调度计划进行水位调控")]),
+    ("measure", "与常备队共同处理险情", "PERFORMED_BY", "management_unit", "高洞子水库管理处",
+     [(F, "与常备队一起及时处理险情")]),
+    ("measure", "领导现场指挥", "PERFORMED_BY", "management_unit", "高洞子水库防汛抗旱应急领导小组",
+     [(F, "高洞子水库防汛抗旱应急领导小组组长巴南区人民政府副区长")]),
+    ("measure", "召集专家组紧急会议", "PERFORMED_BY", "management_unit", "高洞子水库防汛抗旱应急领导小组",
+     [(F, "高洞子水库防汛抗旱应急领导小组召集专家组进行紧急会议")]),
+    ("measure", "抢险队伍到位", "PERFORMED_BY", "management_unit", "常备队与抢险队",
+     [(F, "常备队和各抢险队到位抢险")]),
+    ("measure", "上报险情并移交指挥权", "PERFORMED_BY", "management_unit", "高洞子水库管理处",
+     [(F, "由高洞子水库管理处向上级上报水库当前险情")]),
+    ("measure", "请求外部支援", "PERFORMED_BY", "management_unit", "高洞子水库管理处",
+     [(F, "可向上汇报，请求当地驻军支援")]),
+    ("measure", "按区防指办法执行响应", "PERFORMED_BY", "management_unit", "高洞子水库防汛抗旱应急领导小组",
+     [(F, "高洞子水库防汛抗旱应急领导小组及高洞子水库管理处应积极配合区防指的安排")]),
 
     # 影响谁
     ("measure", "通知下游镇街", "AFFECTS", "admin_region", "圣灯山镇",
@@ -555,9 +688,15 @@ async def main() -> int:
         action="store_true",
         help="先清空该本体的实例与关系再写（证据只会按定义重建，不会残留旧条目）",
     )
+    ap.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="写完即使约束报 error 也返回 0（默认返回 1，让缺数据冒出来）",
+    )
     args = ap.parse_args()
 
     reg = get_registry(PROFILE)
+    summary: dict[str, int] = {"total": 0, "errors": 0, "warnings": 0}
     async with async_session_factory() as db:
         if args.reset:
             await _reset_profile(db)
@@ -597,7 +736,9 @@ async def main() -> int:
         uids = {(d.entity_type, d.name): d.uid for d in drafts}
         rel_drafts: list[rel_mod.RelationDraft] = []
         seen_rel: set[tuple] = set()
-        for st, sn, pred, ot, on, evs in RELATIONS:
+        for entry in RELATIONS:
+            st, sn, pred, ot, on, evs = entry[:6]
+            edge_props = dict(entry[6]) if len(entry) > 6 and entry[6] else {}
             su = uids.get((st, sn))
             ou = uids.get((ot, on))
             if su is None or ou is None:
@@ -622,6 +763,7 @@ async def main() -> int:
                     predicate=pred,
                     object_uid=ou,
                     kb_id=kb_id,
+                    props=edge_props,
                     evidence=evidence,
                     source="manual",
                 )
@@ -665,6 +807,30 @@ async def main() -> int:
             f"关系写入 {rel_count} 条"
         )
         print(f"图库同步：节点 {nodes_written}/{len(rows)}，边 {edges_written}/{len(rel_rows)}")
+
+        # ---- 约束体检：建完就查，别等用户提问才发现缺东西 ----
+        # 这一步是 CQ-24 的落地：数据缺一条措施，在这里报出来，而不是在答案里被看出来。
+        violations = await con_mod.check_database(db, reg, profile_id=PROFILE)
+        summary = con_mod.summarize(violations)
+        if not violations:
+            print("\n约束体检：全部通过 ✔")
+        else:
+            print(
+                f"\n约束体检：{summary['total']} 条违规"
+                f"（error {summary['errors']}、warning {summary['warnings']}）"
+            )
+            for item in violations:
+                print(f"  {item.describe()}")
+                detail = item.detail
+                if detail.get("actual") is not None and detail.get("expected") is not None:
+                    print(f"      实际 {detail['actual']}，要求 {detail['expected']}")
+    if summary["errors"] and not args.allow_incomplete:
+        print(
+            f"\n有 {summary['errors']} 条 error 级约束未通过——数据已写入，但本体还不完整。"
+            "\n确认这是有意的，可加 --allow-incomplete 跳过该检查。",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

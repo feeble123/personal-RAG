@@ -179,7 +179,7 @@ class TestConditionOnNodes:
             ]
 
         monkeypatch.setattr(retrieval, "link_graph_entities", fake_link)
-        facts, _, _ = await retrieval._graph_facts(None, "20年一遇怎么调度", kb_id=None)
+        facts, _, _, _ = await retrieval._graph_facts(None, "20年一遇怎么调度", kb_id=None)
 
         nodes = [f for f in facts if f["kind"] == "graph_node"]
         assert nodes[0]["name"] == "20年一遇工况"
@@ -215,7 +215,7 @@ class TestConditionPruning:
             ]
 
         monkeypatch.setattr(retrieval, "link_graph_entities", fake_link)
-        facts, _, _ = await retrieval._graph_facts(None, "20年一遇怎么调度", kb_id=None)
+        facts, _, _, _ = await retrieval._graph_facts(None, "20年一遇怎么调度", kb_id=None)
 
         # 命中分支会继续往下一跳走，这是对的；关键是**另一条分支一步都没走**
         assert "cd:5" in calls

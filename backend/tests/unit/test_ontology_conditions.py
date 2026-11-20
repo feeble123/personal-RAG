@@ -126,3 +126,44 @@ class TestIntervalBuckets:
         """备注写着「防洪标准（20 年一遇）」，不代表这条实例就是 20 年一遇工况。"""
         props = {"note": "超过下游防护对象防洪标准（20年一遇），转以 480m³/s 削峰"}
         assert not C.matches(props, "超下游标准洪水", self._c(20))
+
+
+class TestSmallProbabilityTolerance:
+    """小概率工况之间的区分。
+
+    踩过的坑：容差带绝对下限 1e-3，结果 0.001（1000 年一遇）和 1/1500≈0.00067
+    被判成相等——一条「1500 年一遇」的问题同时命中「50~1000 年一遇」和
+    「1000 年以上」，答案里冒出 Ⅱ 级和 Ⅰ 级两个等级。
+    """
+
+    def test_一千年和一千五百年一遇不是同一档(self):
+        from app.services.graph.ontology.conditions import _close
+
+        assert not _close(0.001, 1 / 1500), "1000 年一遇的概率不该等于 1500 年一遇"
+
+    def test_概率完全相同仍然判等(self):
+        from app.services.graph.ontology.conditions import _close
+
+        assert _close(0.01, 1 / 100)
+
+    def test_同一档位内的百分比写法仍能对上(self):
+        from app.services.graph.ontology.conditions import _close
+
+        # 文档里写 0.333，实际是 1/3
+        assert _close(0.333, 1 / 3)
+
+
+class TestBoundaryOwnership:
+    """边界归属唯一：一个重现期只能落到一个等级。"""
+
+    def _levels(self):
+        return {"Ⅳ": (0, 20), "Ⅲ": (20, 50), "Ⅱ": (50, 1000), "Ⅰ": (1000, 10**9)}
+
+    def test_每个重现期只落一档(self):
+        for years in (1, 10, 20, 21, 50, 51, 100, 300, 500, 1000, 1001, 1500, 5000):
+            hits = [
+                level
+                for level, (low, high) in self._levels().items()
+                if low < years <= high
+            ]
+            assert len(hits) == 1, f"{years} 年一遇落到了 {hits}"

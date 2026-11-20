@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.services.graph.ontology import chain as chain_mod
 from app.services.graph.ontology import conditions as conditions_mod
 from app.services.graph.ontology import instances as inst_mod
+from app.services.graph.ontology import rules as rules_mod
 from app.services.graph.ontology.cards import build_card
 from app.services.graph.ontology.linking import (
     LinkedEntity,
@@ -44,6 +45,8 @@ class FactPack:
     fallback_used: bool = False
     #: 链路骨架（把多跳事实按人讲的顺序排好，附带证据）；没有图边时为 None
     chain: dict[str, Any] | None = None
+    #: 冲突仲裁记录：同一工况下多条互相打架的结论，按权威级取了哪条、弃了哪条
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     latency_ms: int = 0
     notes: list[str] = field(default_factory=list)
@@ -56,6 +59,7 @@ class FactPack:
             "evidence": self.evidence,
             "fallback_used": self.fallback_used,
             "chain": self.chain,
+            "conflicts": self.conflicts,
             "sources": self.sources,
             "latency_ms": self.latency_ms,
             "notes": self.notes,
@@ -212,6 +216,272 @@ async def _expand_graph(
     return collected
 
 
+async def _subsumption_ancestors(
+    store: Any, seed_uids: list[str], subsumption_rels: tuple[str, ...]
+) -> dict[str, str]:
+    """沿声明的包含关系往上走一跳：返回 `{祖先 uid: 子节点 uid}`。
+
+    为什么需要：`INSTANCE_OF` 以前只是一条普通边——不传递、也不继承。
+    「20年一遇洪水 属于 10~20年一遇降雨」之后，上一档的调度方案本该自动算作
+    20年一遇的，但那要靠遍历恰好走到那个跳数，深度砍到 2 就断了。
+    在 TBox 里标了 `subsumption: true` 之后，祖先直接被当成展开起点，
+    结果与跳数上限无关。引擎不认识 `INSTANCE_OF` 这个名字。
+    """
+    if not subsumption_rels or not seed_uids:
+        return {}
+    out: dict[str, str] = {}
+    for uid in seed_uids:
+        try:
+            slice_ = await store.neighbors(
+                uid, depth=1, rel_types=list(subsumption_rels), limit=20
+            )
+        except Exception:  # noqa: BLE001 - 单点失败不该拖垮整条链路
+            logger.warning("包含关系展开失败 uid=%s", uid, exc_info=True)
+            continue
+        for edge in getattr(slice_, "edges", []):
+            if edge.subject_uid == uid and edge.predicate_name in subsumption_rels:
+                out.setdefault(edge.object_uid, uid)
+    return out
+
+
+#: **引擎约定**：同一个主语沿同一条关系给出多个结论时，按这个属性取高者。
+#: 和 `return_period_low/high` 一样，它是个属性名约定而非领域词——
+#: 任何本体只要在实例上声明它，冲突仲裁就自动生效。
+AUTHORITY_ATTR = "authority_rank"
+
+
+def _node_name(nodes: dict[str, Any], uid: str) -> str:
+    node = nodes.get(uid)
+    return getattr(node, "name", None) or uid
+
+
+def _arbitrate_conflicts(
+    reg: Any, edges: list[tuple[int, Any]], nodes: dict[str, Any]
+) -> tuple[list[tuple[int, Any]], list[dict[str, Any]]]:
+    """⑥ 冲突仲裁：同一「主语 + 关系」有多条边时，按权威级留一条，其余记成冲突。
+
+    四份报告本来就打架：5~10 年一遇控泄，调度规程写 120 m³/s、汛期调度运用计划写 125。
+    以前两条边并存，模型看到两个数，回答里可能两个都抄——读者无从判断该执行哪个。
+
+    三条规矩：
+    1. **只有宾语都声明了权威级才仲裁**。有任何一个没声明就不猜，原样保留。
+    2. **权威级相同也不猜**：保留全部并标"无法仲裁"。两份同等效力的文件冲突，
+       那是要人来定的，不是程序能拍板的。
+    3. 被淘汰的边**不删数据**，只从这次链路里拿掉，并记进 `conflicts` 交给回答层
+       说明——绝不悄悄丢掉。
+    """
+    groups: dict[tuple[str, str], list[tuple[int, Any]]] = {}
+    for hop, edge in edges:
+        groups.setdefault((edge.subject_uid, edge.predicate_name), []).append((hop, edge))
+
+    dropped: set[tuple[str, str, str]] = set()
+    conflicts: list[dict[str, Any]] = []
+    for (subject_uid, predicate), items in groups.items():
+        if len(items) < 2:
+            continue
+        ranked: list[tuple[float, int, Any]] = []
+        for hop, edge in items:
+            node = nodes.get(edge.object_uid)
+            rank = conditions_mod.as_float(
+                (getattr(node, "props", None) or {}).get(AUTHORITY_ATTR)
+            )
+            if rank is None:  # 有一个没声明权威级 → 整组不仲裁
+                ranked = []
+                break
+            ranked.append((rank, hop, edge))
+        if len(ranked) < 2:
+            continue
+
+        ranked.sort(key=lambda item: -item[0])
+        best_rank = ranked[0][0]
+        winners = [item for item in ranked if item[0] == best_rank]
+        resolved = len(winners) < len(ranked)
+        kept_edge = winners[0][2] if resolved else None
+
+        if resolved:
+            for _rank, _hop, edge in ranked:
+                if edge is not kept_edge:
+                    dropped.add((edge.subject_uid, edge.predicate_name, edge.object_uid))
+
+        conflicts.append(
+            {
+                "subject": _node_name(nodes, subject_uid),
+                "predicate": predicate,
+                "predicate_label": relation_label_zh(predicate),
+                "resolved": resolved,
+                "reason": "按权威级取高者" if resolved else "参与冲突的方案权威级相同，无法自动仲裁",
+                "chosen": (
+                    {
+                        "name": _node_name(nodes, kept_edge.object_uid),
+                        "props": _labeled_props(nodes, reg, kept_edge.object_uid),
+                        "authority_rank": best_rank,
+                    }
+                    if kept_edge is not None
+                    else None
+                ),
+                "rejected": [
+                    {
+                        "name": _node_name(nodes, edge.object_uid),
+                        "props": _labeled_props(nodes, reg, edge.object_uid),
+                        "authority_rank": rank,
+                    }
+                    for rank, _hop, edge in ranked
+                    if edge is not kept_edge
+                ],
+            }
+        )
+
+    if not dropped:
+        return edges, conflicts
+    kept_edges = [
+        item
+        for item in edges
+        if (item[1].subject_uid, item[1].predicate_name, item[1].object_uid) not in dropped
+    ]
+    return kept_edges, conflicts
+
+
+def _declared_phase(reg: Any, predicate: str) -> str:
+    """TBox 里给这条关系声明的链路档位；没声明返回空（编排层回落到内置表）。"""
+    rel = reg.relation(predicate) if reg is not None else None
+    return getattr(rel, "phase", "") or ""
+
+
+#: 引擎内部字段，**不进答案正文**。
+#: `expected_measures` 是"预案这一级原文共几条"的建库口径（给 coverage 约束用的），
+#: `authority_rank` 是冲突仲裁的排序值。两者都不是给读者看的业务事实——
+#: 放进去的结果是答案里冒出「预案该级列出的处置措施条数：6」这种话（实测）。
+INTERNAL_PROPS = ("expected_measures", "authority_rank")
+
+
+def _labeled_props(nodes: dict[str, Any], reg: Any, uid: str) -> dict[str, Any]:
+    """宾语节点的属性，键换成 TBox 里的中文说明。
+
+    为什么不直接给 `outflow_m3s=130`：这套属性最终会喂给模型写成一段话，
+    英文键会被原样抄进正文（实测：「该方案为控泄模式、outflow_m3s=130」）。
+    中文键来自 YAML 的 attribute.description，读起来就是人话。
+    """
+    node = nodes.get(uid)
+    props = dict(getattr(node, "props", None) or {})
+    entity = reg.entity(getattr(node, "type_name", "")) if reg is not None else None
+    out: dict[str, Any] = {}
+    for key, value in props.items():
+        if key.endswith("_count") or key == "display_zh" or key in INTERNAL_PROPS:
+            continue
+        if value in (None, ""):
+            continue
+        attr = entity.attributes.get(key) if entity is not None else None
+        out[(attr.description if attr and attr.description else key)] = value
+    return out
+
+
+def _label_edge_props(
+    nodes: dict[str, Any], reg: Any, object_uid: str, props: dict[str, Any] | None
+) -> dict[str, Any]:
+    """边属性 → 中文键，**只收 TBox 里声明过的**。
+
+    边属性是「随主语变」的值：同一条措施在Ⅱ级是「30min 内」、在Ⅳ级是「1h 内」。
+    挂在节点上就会串味——实测回答里出现「时限：Ⅳ/Ⅲ级 1h 内；Ⅱ级 30min 内」，
+    读者得自己从四个等级里挑一个。
+
+    `source_item` 这类内部字段没有声明，不进正文。
+    """
+    node = nodes.get(object_uid)
+    entity = reg.entity(getattr(node, "type_name", "")) if reg is not None else None
+    out: dict[str, Any] = {}
+    for key, value in (props or {}).items():
+        attr = entity.attributes.get(key) if entity is not None else None
+        if attr is None or value in (None, ""):
+            continue
+        out[attr.description or key] = value
+    return out
+
+
+async def _derive_facts(
+    db: AsyncSession,
+    reg: Any,
+    conds: list[conditions_mod.Condition],
+    subject_entities: list[LinkedEntity],
+    nodes: dict[str, Any],
+    existing: set[tuple[str, str]],
+) -> list[dict]:
+    """② 规则推导：工况数值满足规则时，产出"这个工况 → 结论实例"的边。
+
+    这些边**不在数据库里**，是当场算出来的。这就是本体相对 GraphRAG 的差别：
+    300 年一遇没人手工连过边，但只要规则说「(50, 1000] 归 Ⅱ级」，它就答得出来。
+
+    证据用结论实例自己的：`Ⅱ级响应` 的出处那一页，正是预案写"可能遭遇 50 年以上
+    1000 年以下一遇的洪水"的那一节——推导的正当性就来自那里。
+    """
+    if reg is None or not reg.rules or not conds:
+        return []
+    hits = rules_mod.matching_rules(reg, conds)
+    if not hits:
+        return []
+
+    # 主体：优先挂在链接到的工况实例上（"300年一遇洪水（正常年）"）；
+    # 没链接到就退回问题里的原话，绝不硬造一个像实例的 uid。
+    if subject_entities:
+        subject_name = subject_entities[0].name
+        subject_uid = subject_entities[0].uid
+    else:
+        subject_name = hits[0].condition.raw
+        subject_uid = f"question:{subject_name}"
+
+    out: list[dict] = []
+    cache: dict[str, list[Any]] = {}
+    for hit in hits:
+        rule = hit.rule
+        rows = cache.get(rule.target_type)
+        if rows is None:
+            rows = await inst_mod.list_instances(
+                db,
+                profile_id=reg.profile_id,
+                entity_type=rule.target_type,
+                status="active",
+                limit=500,
+            )
+            cache[rule.target_type] = rows
+        target = next((r for r in rows if rules_mod.target_matches(rule, r.props)), None)
+        if target is None:
+            # 规则命中但目标实例不存在：说明 ABox 缺这一档，记日志不硬凑
+            logger.info("规则 %s 命中，但库里没有 %s 实例 %s", rule.id, rule.target_type, rule.target_match)
+            continue
+
+        # 去重按「关系 + 结论」而不是「谁 + 关系 + 结论」：
+        # 手工连的 `50~1000年一遇 —触发→ Ⅱ级` 和规则推的 `100年一遇 —触发→ Ⅱ级`
+        # 对读者是同一句话。**人工写的事实优先**，规则只在链路上还没有这个结论时补位
+        # （这正是 CQ-22 要的：没人连过边的工况，靠规则也能归级）。
+        key = (rule.relation, target.uid)
+        if key in existing:
+            continue
+        existing.add(key)
+
+        if target.uid not in nodes:
+            nodes[target.uid] = inst_mod.to_node(target)
+        ev = [e for e in (target.evidence or []) if isinstance(e, dict)]
+        chunk_ids = [int(e["chunk_id"]) for e in ev if e.get("chunk_id") is not None]
+        out.append(
+            {
+                "kind": "graph_edge",
+                "subject": subject_name,
+                "subject_uid": subject_uid,
+                "predicate": rule.relation,
+                "predicate_label": relation_label_zh(rule.relation),
+                "phase": _declared_phase(reg, rule.relation),
+                "object": target.name,
+                "object_uid": target.uid,
+                "object_props": _labeled_props(nodes, reg, target.uid),
+                "evidence_text": f"由规则 {rule.id} 推导：{hit.condition.raw}",
+                "chunk_ids": chunk_ids,
+                "hop": 1,
+                "derived_by": rule.id,
+                "source": "graph",
+            }
+        )
+    return out
+
+
 async def _resolve_profile_id(db: AsyncSession, kb_id: int | None) -> str | None:
     """按知识库推断该用哪套本体。
 
@@ -314,12 +584,13 @@ async def _graph_facts(
     kb_id: int | None,
     question_conditions: list[conditions_mod.Condition] | None = None,
     reg: Any = None,
-) -> tuple[list[dict], list[LinkedEntity], list[dict]]:
+) -> tuple[list[dict], list[LinkedEntity], list[dict], list[dict]]:
+    """返回 (事实, 链接到的实体, 证据, 冲突仲裁记录)。"""
     from app.services.graph.store import get_graph_store
 
     store = get_graph_store()
     if store is None:
-        return [], [], []
+        return [], [], [], []
 
     # 工况条件（20 年一遇 / P=5% / 3200 m³/s）决定"讲哪个分支的方案"，
     # 命中工况的节点排在前面，并标出来供编排层使用。
@@ -335,7 +606,7 @@ async def _graph_facts(
         seen = {e.uid for e in matched_by_value}
         linked = matched_by_value + [e for e in linked if e.uid not in seen]
     if not linked:
-        return [], [], []
+        return [], [], [], []
 
     facts: list[dict] = []
     evidence: list[dict] = []
@@ -372,9 +643,20 @@ async def _graph_facts(
     # 否则同一座水库的 5% 与 1% 两套方案会被一起展开，答案里混着两个方案。
     matched_uids = [f["subject"] for f in facts if f.get("condition_matched")]
     frontier_seeds = matched_uids or list(nodes)
+
+    # ③ 包含推理：把种子的祖先也当成展开起点（只沿 TBox 声明的包含关系走）。
+    # 祖先节点要补进 nodes，否则边两端的名字取不到、属性标签也拼不出来。
+    subsumption_rels = reg.subsumption_relations() if reg is not None else ()
+    ancestors = await _subsumption_ancestors(store, list(frontier_seeds), subsumption_rels)
+    for ancestor_uid in ancestors:
+        if ancestor_uid not in nodes:
+            node = await store.get_node(ancestor_uid)
+            if node is not None:
+                nodes[ancestor_uid] = node
+
     edges = await _expand_graph(
         store,
-        frontier_seeds,
+        list(dict.fromkeys([*frontier_seeds, *ancestors])),
         nodes=nodes,
         depth=depth,
         max_nodes=max_nodes,
@@ -384,32 +666,26 @@ async def _graph_facts(
         forward_only=bool(matched_uids),
     )
 
+    # ⑥ 冲突仲裁：同一「主语 + 关系」有多条边时按权威级留一条（如 120 vs 125）。
+    # 必须在建 names 之前——被淘汰的方案节点不该出现在这一轮的节点表里。
+    edges, conflicts = _arbitrate_conflicts(reg, edges, nodes)
+
+    # ② 规则推导：数据库里没有的边，按 TBox 规则当场算出来。
+    # 必须在建 names 之前调用——它会把结论节点补进 nodes。
+    seen_keys = {(e.predicate_name, e.object_uid) for _hop, e in edges}
+    derived = await _derive_facts(db, reg, conds, matched_by_value, nodes, seen_keys)
+
     names = {uid: node.name for uid, node in nodes.items()}
-
-    def _declared_phase(predicate: str) -> str:
-        """TBox 里给这条关系声明的链路档位；没声明返回空（编排层回落到内置表）。"""
-        rel = reg.relation(predicate) if reg is not None else None
-        return getattr(rel, "phase", "") or ""
-
-    def _labeled_props(uid: str) -> dict[str, Any]:
-        """宾语节点的属性，键换成 TBox 里的中文说明。
-
-        为什么不直接给 `outflow_m3s=130`：这套属性最终会喂给模型写成一段话，
-        英文键会被原样抄进正文（实测：「该方案为控泄模式、outflow_m3s=130」）。
-        中文键来自 YAML 的 attribute.description，读起来就是人话。
-        """
-        node = nodes.get(uid)
-        props = dict(getattr(node, "props", None) or {})
-        entity = reg.entity(getattr(node, "type_name", "")) if reg is not None else None
-        out: dict[str, Any] = {}
-        for key, value in props.items():
-            if key.endswith("_count") or key == "display_zh" or value in (None, ""):
-                continue
-            attr = entity.attributes.get(key) if entity is not None else None
-            out[(attr.description if attr and attr.description else key)] = value
-        return out
+    ancestor_names = {uid: names.get(child, child) for uid, child in ancestors.items()}
 
     for hop, edge in edges:
+        inherited_from = ancestor_names.get(edge.subject_uid)
+        # 宾语属性：节点级是"通用值"，边级是"本等级的值"。边级覆盖节点级——
+        # 「传达命令在Ⅱ级 30min 内」这种差异只能挂在边上，节点上只能写一句笼统的。
+        object_props = _labeled_props(nodes, reg, edge.object_uid)
+        object_props.update(
+            _label_edge_props(nodes, reg, edge.object_uid, getattr(edge, "props", None))
+        )
         facts.append(
             {
                 "kind": "graph_edge",
@@ -417,15 +693,20 @@ async def _graph_facts(
                 "subject_uid": edge.subject_uid,
                 "predicate": edge.predicate_name,
                 "predicate_label": relation_label_zh(edge.predicate_name),
-                "phase": _declared_phase(edge.predicate_name),
+                "phase": _declared_phase(reg, edge.predicate_name),
                 "object": names.get(edge.object_uid, edge.object_uid),
                 "object_uid": edge.object_uid,
                 # 宾语节点自己的属性跟着走：链路里只报名字的话，
                 # 「10~20年一遇控泄方案」看不出到底泄多少。
-                "object_props": _labeled_props(edge.object_uid),
+                "object_props": object_props,
                 "evidence_text": edge.evidence_text,
                 "chunk_ids": edge.chunk_ids,
+                # 边自己的属性：`source_item`（对应原文第几条）就在这里，
+                # 编排层拿它按原文顺序排措施，而不是按发现顺序。
+                "edge_props": dict(getattr(edge, "props", None) or {}),
                 "hop": hop,
+                # 从祖先继承来的事实：来源是"A 属于 B"里的 B
+                "inherited_from": inherited_from,
                 "source": "graph",
             }
         )
@@ -442,7 +723,21 @@ async def _graph_facts(
                 }
             )
 
-    return facts, linked[:_MAX_LINKED], evidence
+    facts.extend(derived)
+    for fact in derived:
+        evidence.append(
+            {
+                "kind": "graph_edge",
+                "subject": fact["subject"],
+                "predicate": fact["predicate"],
+                "object": fact["object"],
+                "text": fact["evidence_text"],
+                "chunk_ids": fact["chunk_ids"],
+                "hop": fact["hop"],
+            }
+        )
+
+    return facts, linked[:_MAX_LINKED], evidence, conflicts
 
 
 async def _rag_facts(db: AsyncSession, question: str, kb_id: int | None) -> list[dict]:
@@ -505,7 +800,7 @@ async def retrieve_with_ontology(
         pack.notes.append("本体查询失败，已降级")
 
     try:
-        g_facts, g_entities, g_evidence = await _graph_facts(
+        g_facts, g_entities, g_evidence, g_conflicts = await _graph_facts(
             db, question, kb_id=kb_id, question_conditions=question_conditions, reg=reg
         )
         if g_facts:
@@ -513,6 +808,13 @@ async def retrieve_with_ontology(
         pack.facts.extend(g_facts)
         pack.entities.extend(e.to_dict() for e in g_entities)
         pack.evidence.extend(g_evidence)
+        pack.conflicts.extend(g_conflicts)
+        for item in g_conflicts:
+            if not item.get("resolved"):
+                pack.notes.append(
+                    f"「{item['subject']}」有 {1 + len(item['rejected'])} 条"
+                    f"{item['predicate_label']}，权威级相同无法自动仲裁"
+                )
 
         # 把图事实排成链路骨架（顺序与证据由程序定死，措辞以后再说）
         edge_chunk_ids = [

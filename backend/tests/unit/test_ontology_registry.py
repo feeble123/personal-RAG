@@ -253,7 +253,9 @@ class TestRelationPhase:
 
     def test_水库防汛本体声明了档位(self):
         reg = load_profile("reservoir_flood")
-        assert reg.relation("STIPULATES").phase == "basis"
+        # STIPULATES 讲的是「该工况按这个方案调度」——是**该做什么**，不是凭什么这么判。
+        # 早先挂在 basis，答案里就出现两段并排的「工况与依据」（实测）。
+        assert reg.relation("STIPULATES").phase == "response"
         assert reg.relation("TRIGGERS").phase == "basis"
         assert reg.relation("NEXT_STEP").phase == "flow"
         assert reg.relation("PERFORMED_BY").phase == "actor"

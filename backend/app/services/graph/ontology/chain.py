@@ -77,9 +77,16 @@ class ChainStep:
     #: 只报名字的话，「10~20年一遇控泄方案」看不出到底泄多少——而这恰恰是
     #: 用户最想知道的数。属性是节点事实里本来就有，顺手带上来，不需要额外查询。
     object_props: dict[str, Any] = field(default_factory=dict)
+    #: 这条边是 TBox 规则当场推出来的（库里没有这条边）。空串表示是实打实存着的。
+    derived_by: str = ""
+    #: 这条事实是从哪个祖先继承来的（沿 `subsumption: true` 的关系往上一层）
+    inherited_from: str = ""
+    #: 边声明它对应原文的第几条（0 = 没声明）。编排层按它排序，
+    #: 答案就会跟着预案自己的 (1)(2)(3) 走，而不是按图上发现的先后。
+    source_item: int = 0
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "phase": self.phase,
             "phase_label": PHASE_LABEL.get(self.phase, self.phase),
             "hop": self.hop,
@@ -90,7 +97,13 @@ class ChainStep:
             "object_props": self.object_props,
             "evidence": self.evidence,
             "condition_matched": self.condition_matched,
+            "source_item": self.source_item,
         }
+        if self.derived_by:
+            out["derived_by"] = self.derived_by
+        if self.inherited_from:
+            out["inherited_from"] = self.inherited_from
+        return out
 
     def describe(self) -> str:
         """一句骨架：`青溪水库 —规定→ 泄洪方案A（规程 p.8）`。
@@ -109,7 +122,13 @@ class ChainStep:
             if page:
                 bits.append(f"p.{page}")
             where = "（" + " ".join(b for b in bits if b) + "）"
-        return f"{self.subject} —{self.predicate_label}→ {self.object}{where}"
+        # 一条边是怎么来的，读者有权知道：存着的 / 规则推的 / 从祖先继承的。
+        note = ""
+        if self.derived_by:
+            note = "〔规则推导〕"
+        elif self.inherited_from:
+            note = f"〔继承自 {self.inherited_from}〕"
+        return f"{self.subject} —{self.predicate_label}→ {self.object}{where}{note}"
 
 
 @dataclass
@@ -152,6 +171,15 @@ class Chain:
 
 #: 证据补全函数：chunk_ids → [{chunk_id, doc_name, page, printed_page, snippet?}]
 EvidenceLookup = Callable[[Iterable[int]], "list[dict[str, Any]]"]
+
+
+def _as_item(value: Any) -> int:
+    """边属性里的"第几条"读成整数；读不出来就当没声明（0），不猜。"""
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return 0
+    return number if number > 0 else 0
 
 
 def phase_of(predicate: str) -> str:
@@ -232,12 +260,26 @@ def build_chain(
                 edge.get("object_props")
                 or props_by_name.get(str(edge.get("object") or ""), {})
             ),
+            derived_by=str(edge.get("derived_by") or ""),
+            inherited_from=str(edge.get("inherited_from") or ""),
+            source_item=_as_item((edge.get("edge_props") or {}).get("source_item")),
         )
         steps.append(step)
         # 稳定排序用的原始序号挂在这里（不进 to_dict）
         step.__dict__["_order"] = order
 
-    steps.sort(key=lambda s: (PHASE_ORDER.index(s.phase), s.hop, s.__dict__.get("_order", 0)))
+    # 排序：档位 → 原文条目号 → 跳数 → 发现顺序。
+    # 条目号排在跳数前面：同一档里要按预案自己的 (1)(2)(3) 讲，
+    # 而不是按图上先碰到谁。没声明条目号的排在有号的前面（它们通常是前提判断）。
+    steps.sort(
+        key=lambda s: (
+            PHASE_ORDER.index(s.phase),
+            0 if not s.source_item else 1,
+            s.source_item,
+            s.hop,
+            s.__dict__.get("_order", 0),
+        )
+    )
 
     gaps = [s.describe() for s in steps if not s.evidence]
     return Chain(subject=subject, conditions=list(conditions or []), steps=steps, gaps=gaps)

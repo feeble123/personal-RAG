@@ -96,3 +96,132 @@ class TestPlanShape:
         assert "预案.pdf p.9" in human
         # 规则里必须明确"照抄文档名"，否则模型会写成【文件 p.9】（实测）
         assert "文档名" in messages[0][1]
+
+
+class TestAnswerOrganization:
+    """答案怎么组织：扇出合并、按档位分章。
+
+    用户的原话是「读起来像两份文档拼贴」——根因不是事实不够，是组织方式不对。
+    """
+
+    async def test_扇出的影响合并成一条(self, fake_excerpts):
+        # 「通知下游镇街」扇出 4 个镇，不合并就是 4 段几乎一样的话（实测）
+        pack = _Pack(
+            [
+                _step("Ⅱ级响应", "RESPONDS_WITH", "通知下游镇街", phase="response", label="启动", chunk_id=1),
+                _step("通知下游镇街", "AFFECTS", "圣灯山镇", phase="impact", label="影响", chunk_id=2),
+                _step("通知下游镇街", "AFFECTS", "安澜镇", phase="impact", label="影响", chunk_id=3),
+            ]
+        )
+        plan = await A.build_answer_plan(None, pack)
+        assert len(plan.steps) == 1
+        assert plan.steps[0].props["影响"] == "圣灯山镇、安澜镇"
+
+    async def test_按档位分章(self, fake_excerpts):
+        pack = _Pack(
+            [
+                _step("50~1000年一遇", "TRIGGERS", "Ⅱ级响应", phase="basis", label="触发", chunk_id=1),
+                _step("Ⅱ级响应", "RESPONDS_WITH", "传达命令", phase="response", label="启动", chunk_id=2),
+            ]
+        )
+        plan = await A.build_answer_plan(None, pack)
+        sections = plan.sections()
+        assert [s["phase"] for s in sections] == ["basis", "response"]
+        assert [len(s["steps"]) for s in sections] == [1, 1]
+
+    async def test_骨架里带章节标题(self, fake_excerpts):
+        pack = _Pack(
+            [
+                _step("50~1000年一遇", "TRIGGERS", "Ⅱ级响应", phase="basis", label="触发", chunk_id=1),
+                _step("Ⅱ级响应", "RESPONDS_WITH", "传达命令", phase="response", label="启动", chunk_id=2),
+            ]
+        )
+        plan = await A.build_answer_plan(None, pack)
+        text = A.render_plan(plan)
+        assert "【工况与依据】" in text
+        assert "【怎么应对】" in text
+        # 章节标题不能挤进环节正文
+        assert "[工况与依据] " not in text
+
+    async def test_同一档连续出现时只出一个标题(self, fake_excerpts):
+        pack = _Pack(
+            [
+                _step("Ⅱ级响应", "RESPONDS_WITH", "传达命令", phase="response", label="启动", chunk_id=1),
+                _step("Ⅱ级响应", "RESPONDS_WITH", "专家组到场", phase="response", label="启动", chunk_id=2),
+            ]
+        )
+        plan = await A.build_answer_plan(None, pack)
+        assert A.render_plan(plan).count("【怎么应对】") == 1
+
+
+class TestFocusText:
+    """把切片收窄到引句附近。
+
+    预案每一级有 6 条措施，几乎都来自同一个切片（实测 424~436 字）。
+    全量灌进去的结果是 10 个环节拿到同一段话，真正的差异被稀释。
+    """
+
+    def test_定位到引句时只取附近窗口(self):
+        text = "无关开头" * 100 + "初期洪水控制下泄流量130m³/s" + "无关结尾" * 100
+        out = A._focus_text(text, "初期洪水控制下泄流量130m³/s")
+        assert "130m³/s" in out
+        assert len(out) < len(text)
+        assert out.startswith("…") and out.endswith("…")
+
+    def test_mineru_把数字拆开也能定位(self):
+        # MinerU 会把 `130 m³/s` 拆成 `1 3 0 m^3 / s`
+        text = "无关开头" * 100 + "控制下泄流量为 1 3 0 m^3 / s ，直至" + "无关结尾" * 100
+        out = A._focus_text(text, "控制下泄流量为 130m³/s")
+        assert "1 3 0" in out
+
+    def test_找不到引句就退回原文开头而不是乱猜(self):
+        text = "甲" * 500
+        assert A._focus_text(text, "这句原文里根本没有") == text[: A.MAX_EXCERPT_CHARS]
+
+    def test_太短的引句不参与定位(self):
+        # 两三个字的引句到处都能命中，用它定位会把窗口定到无关位置
+        text = "甲" * 500
+        assert A._focus_text(text, "甲乙") == text[: A.MAX_EXCERPT_CHARS]
+
+    def test_没有引句时按上限截断(self):
+        text = "乙" * 5000
+        assert len(A._focus_text(text, "")) == A.MAX_EXCERPT_CHARS
+
+
+class TestExcerptDedupe:
+    """同一段原文在提示词里只出现一次。
+
+    实测 100 年一遇的骨架里，10 个环节共用同一页切片；
+    不去重的话提示词 59% 是同一段话。去重键用**渲染出来的正文**而不是 chunk_id，
+    因为定位到不同引句时取的是不同窗口，那是有效信息。
+    """
+
+    def _plan(self, texts):
+        steps = []
+        for idx, text in enumerate(texts, start=1):
+            steps.append(
+                A.AnswerStep(
+                    phase="response",
+                    phase_label="怎么应对",
+                    sentence=f"步骤{idx}",
+                    excerpts=[
+                        {
+                            "chunk_id": 9,
+                            "doc_name": "预案.pdf",
+                            "printed_page": 52,
+                            "text": text,
+                        }
+                    ],
+                )
+            )
+        return A.AnswerPlan(question="q", steps=steps)
+
+    def test_完全相同的正文只展开一次(self):
+        text = A.render_plan(self._plan(["相同的正文", "相同的正文"]))
+        assert text.count("相同的正文") == 1
+        assert "同一段原文已在上文给出" in text
+
+    def test_不同窗口各自展开(self):
+        text = A.render_plan(self._plan(["窗口甲", "窗口乙"]))
+        assert "窗口甲" in text and "窗口乙" in text
+        assert "同一段原文已在上文给出" not in text

@@ -762,3 +762,29 @@ class TestRelations:
             f"{BASE}/relations", headers=admin_headers, params={"touch_uid": a["uid"]}
         )
         assert left.json() == []
+
+
+class TestConstraintsEndpoint:
+    """约束体检接口：报出本体里声明了什么规矩、当前数据违反了哪几条。"""
+
+    async def test_requires_admin(self, client, user_headers):
+        r = await client.get(f"{BASE}/constraints?profile=reservoir_flood", headers=user_headers)
+        assert r.status_code in (401, 403)
+
+    async def test_returns_definitions_and_violations(self, client, admin_headers):
+        r = await client.get(f"{BASE}/constraints?profile=reservoir_flood", headers=admin_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["profile_id"] == "reservoir_flood"
+        # TBox 里的规矩必须原样带出来（不依赖库里有没有数据）
+        ids = {c["id"] for c in body["constraints"]}
+        assert "response_level.measures_coverage" in ids
+        assert "condition.conflicting_plans" in ids
+        for item in body["constraints"]:
+            assert item["cq"], "每条约束都要能追溯回一条 CQ"
+        # 汇总与逐条违规
+        assert set(body["summary"]) >= {"total", "errors", "warnings", "by_constraint"}
+        assert isinstance(body["violations"], list)
+        for v in body["violations"]:
+            assert v["severity"] in ("error", "warning")
+            assert v["constraint_id"] in ids

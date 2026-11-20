@@ -38,7 +38,7 @@ def stub(monkeypatch):
         return state["params"], []
 
     async def fake_graph(db, question, **kw):
-        return state["graph"], [], []
+        return state["graph"], [], [], []
 
     async def fake_rag(db, question, kb_id):
         return state["rag"]
@@ -140,7 +140,7 @@ class TestChineseLabels:
             ]
 
         monkeypatch.setattr(retrieval, "link_graph_entities", fake_link)
-        facts, _, _ = await retrieval._graph_facts(None, "青溪水库下游", kb_id=None)
+        facts, _, _, _ = await retrieval._graph_facts(None, "青溪水库下游", kb_id=None)
 
         node = next(f for f in facts if f["kind"] == "graph_node")
         edge = next(f for f in facts if f["kind"] == "graph_edge")
@@ -288,7 +288,7 @@ class TestQuestionConditions:
         async def fake_graph(db, question, *a, **kw):
             # 只关心编排层传下来的工况；其余关键字（kb_id/reg…）不重要
             seen["conditions"] = kw.get("question_conditions")
-            return [], [], []
+            return [], [], [], []
 
         monkeypatch.setattr(retrieval, "_graph_facts", fake_graph)
         stub["params"] = [_param_fact("sm")]
@@ -322,6 +322,7 @@ class TestChainInPack:
                 ],
                 [],
                 [],
+                [],
             )
 
         monkeypatch.setattr(retrieval, "_graph_facts", fake_graph)
@@ -340,3 +341,47 @@ class TestChainInPack:
         stub["params"] = [_param_fact("sm")]
         pack = await retrieval.retrieve_with_ontology(None, "sm 取值范围", min_facts=1)
         assert pack.chain is None
+
+
+class TestEdgePropsOverride:
+    """边属性覆盖节点属性：随等级变的值只能挂在边上。
+
+    实测问题：传达命令在Ⅱ级是 30min、Ⅳ级是 1h。挂在节点上只能写成
+    「Ⅳ/Ⅲ级 1h 内；Ⅱ级 30min 内」，回答里四个等级全抄进去，读者得自己挑。
+    """
+
+    def _nodes(self):
+        from types import SimpleNamespace
+
+        return {
+            "ms:1": SimpleNamespace(
+                name="传达应急响应命令",
+                type_name="measure",
+                props={"owner_role": "水库管理处"},
+            )
+        }
+
+    def _reg(self):
+        from app.services.graph.ontology.registry import load_profile
+
+        return load_profile("reservoir_flood", register=False)
+
+    def test_边属性用中文键且覆盖节点上的同名属性(self):
+        from app.services.graph.ontology import retrieval as R
+
+        out = R._label_edge_props(self._nodes(), self._reg(), "ms:1", {"timing": "30min 内"})
+        assert out == {"时限": "30min 内"}
+
+    def test_未声明的内部字段不进正文(self):
+        from app.services.graph.ontology import retrieval as R
+
+        # source_item 是引擎内部用的，TBox 没声明，不该出现在给模型的属性里
+        out = R._label_edge_props(
+            self._nodes(), self._reg(), "ms:1", {"source_item": 1, "timing": "30min 内"}
+        )
+        assert "source_item" not in out and len(out) == 1
+
+    def test_空值不占位(self):
+        from app.services.graph.ontology import retrieval as R
+
+        assert R._label_edge_props(self._nodes(), self._reg(), "ms:1", {"timing": ""}) == {}

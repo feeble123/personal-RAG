@@ -142,6 +142,26 @@ async def get_types(_admin: AdminUser, profile: str | None = Query(None)) -> dic
     return _registry(profile).to_dict()
 
 
+@router.get("/constraints")
+async def get_constraints(
+    db: DbSession, _admin: AdminUser, profile: str | None = Query(None)
+) -> dict:
+    """约束体检：TBox 里声明了什么规矩，当前 ABox 违反了哪几条。
+
+    只报不改——违规是**数据问题**，要人决定是补数据还是改规矩。
+    """
+    from app.services.graph.ontology import constraints as con_mod
+
+    reg = _registry(profile)
+    violations = await con_mod.check_database(db, reg)
+    return {
+        "profile_id": reg.profile_id,
+        "constraints": [c.to_dict() for c in reg.constraints.values()],
+        "summary": con_mod.summarize(violations),
+        "violations": [v.to_dict() for v in violations],
+    }
+
+
 @router.post("/profile/reload", response_model=ReloadOut)
 async def reload_profile(
     admin: AdminUser, request: Request, profile: str | None = Query(None)
