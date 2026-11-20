@@ -241,6 +241,20 @@ class ProposeRunIn(BaseModel):
     dry_run: bool = Field(False, description="只返回结果，不写待审区")
 
 
+class LinkRunIn(BaseModel):
+    """给已有实例补关系（7-C C-3）。"""
+
+    profile_id: str | None = None
+    instance_uids: list[str] | None = Field(
+        None, description="只补这几个实例；缺省挑库里最孤立的几个"
+    )
+    limit_instances: int = Field(5, ge=1, le=50, description="一次最多补几个实例")
+    top_k: int = Field(4, ge=1, le=10, description="每个实例翻几段原文")
+    max_calls: int = Field(10, ge=1, le=50, description="一次运行的模型调用上限")
+    kb_id: int | None = None
+    dry_run: bool = Field(False, description="只返回结果，不写待审区")
+
+
 class ProposalOut(BaseModel):
     id: int
     profile_id: str

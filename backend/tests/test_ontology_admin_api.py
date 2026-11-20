@@ -891,3 +891,76 @@ class TestProposeRun:
             f"{BASE}/propose/run", headers=user_headers, json={"profile_id": "tuning"}
         )
         assert r.status_code in (401, 403)
+
+
+class TestLinkRun:
+    """7-C C-3 给已有实例补关系：接口形状 + 关系落待审区。"""
+
+    async def _instance(self, client, admin_headers, name="t4_link"):
+        r = await client.post(
+            f"{BASE}/instances", headers=admin_headers, json=_instance_payload(name)
+        )
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    def _stub(self, monkeypatch, relations):
+        import json
+
+        from app.services.graph.ontology import anchoring
+
+        cand = anchoring.Candidate(
+            chunk_id=903, doc_id=3, doc_name="调度规程.pdf", page=40,
+            section="4.6 应急响应",
+            content="t4_link 这个参数与 t4_link2 之间存在 PART_OF 关系，原文如此写。",
+        )
+
+        async def fake_candidates(db, query, *, kb_id, top_k=6, doc_ids=None):
+            return [cand]
+
+        monkeypatch.setattr(anchoring, "candidate_chunks", fake_candidates)
+        payload = json.dumps({"instances": [], "relations": list(relations)}, ensure_ascii=False)
+        monkeypatch.setattr(
+            "app.services.chat.build_chat_model", lambda *a, **kw: _FakeLLM(payload)
+        )
+
+    async def test_补出的关系进待审区(
+        self, client, admin_headers, cleanup_instances, monkeypatch
+    ):
+        a = await self._instance(client, admin_headers, "t4_link")
+        b = await self._instance(client, admin_headers, "t4_link2")
+        self._stub(
+            monkeypatch,
+            [
+                {
+                    "subject": "t4_link",
+                    "predicate": "PART_OF",
+                    "object": "t4_link2",
+                    "chunk": 1,
+                    "quote": "t4_link 这个参数与 t4_link2 之间存在 PART_OF 关系",
+                }
+            ],
+        )
+        r = await client.post(
+            f"{BASE}/link/run",
+            headers=admin_headers,
+            json={"profile_id": "tuning", "instance_uids": [a["uid"]]},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["relations"] == 1
+        assert body["saved"] == 1
+
+        r = await client.get(
+            f"{BASE}/proposals",
+            headers=admin_headers,
+            params={"profile": "tuning", "method": "graph", "kind": "relation"},
+        )
+        assert r.status_code == 200, r.text
+        rows = [p for p in r.json() if p["payload"]["subject_uid"] == a["uid"]]
+        assert rows and rows[0]["payload"]["object_uid"] == b["uid"]
+
+    async def test_需要管理员(self, client, user_headers):
+        r = await client.post(
+            f"{BASE}/link/run", headers=user_headers, json={"profile_id": "tuning"}
+        )
+        assert r.status_code in (401, 403)

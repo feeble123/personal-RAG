@@ -48,6 +48,7 @@ from app.modules.ontology.schemas import (
     InstanceOut,
     InstancePatch,
     LibraryCreate,
+    LinkRunIn,
     LibraryOut,
     ProposalAcceptIn,
     ProposalOut,
@@ -355,6 +356,53 @@ async def run_propose(
         detail=(
             f"kb={payload.kb_id} 扫 {result.scanned}/{result.chunks} 段 "
             f"/ 新实例 {len(instances)} / 新关系 {len(relations)} "
+            f"/ 拦截 {result.rejected} / 新入库 {saved}"
+        ),
+        client_ip=await get_client_ip(request),
+    )
+    result.saved = saved
+    return {"profile_id": reg.profile_id, "dry_run": payload.dry_run, **result.to_dict()}
+
+
+@router.post("/link/run")
+async def run_link(
+    payload: LinkRunIn, db: DbSession, admin: AdminUser, request: Request
+) -> dict:
+    """给**已有实例**补关系（7-C C-3）：检索它出现的段落 → 模型指认 → 逐条硬校验。
+
+    和 `/propose/run` 的分工：那条是漫无目的地读一份文档、从零提实例；这条只
+    围着一个实例问「它还跟谁有关系」，命中率更高、界面上更好逐条判断。
+
+    不点名实例时**挑最孤立的**（一条边都没有的先补）——那正是当初建的时候漏了
+    关系的地方。
+    """
+    from app.services.graph.ontology import proposal_runs, proposals
+
+    reg = _registry(payload.profile_id)
+    instances, relations, result = await proposal_runs.run_link_discovery(
+        db,
+        reg,
+        instance_uids=payload.instance_uids,
+        limit_instances=payload.limit_instances,
+        top_k=payload.top_k,
+        max_calls=payload.max_calls,
+        kb_id=payload.kb_id,
+    )
+    saved = 0
+    if not payload.dry_run:
+        saved = await proposals.save_proposals(db, reg.profile_id, instances, relations)
+        if saved:
+            await db.commit()
+
+    await audit.record_audit(
+        actor_id=admin.id,
+        actor_name=admin.username,
+        action="ontology.link.run",
+        target_type="ontology_profile",
+        target_id=reg.profile_id,
+        detail=(
+            f"补边 {payload.instance_uids or '最孤立的若干个'} "
+            f"/ 新关系 {len(relations)} / 新实例 {len(instances)} "
             f"/ 拦截 {result.rejected} / 新入库 {saved}"
         ),
         client_ip=await get_client_ip(request),

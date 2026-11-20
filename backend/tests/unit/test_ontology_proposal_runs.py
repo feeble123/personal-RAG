@@ -15,7 +15,15 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app.db.models import Chunk, Document, DocumentVersion, KnowledgeBase, OntologyProposal
+from app.db.models import (
+    Chunk,
+    Document,
+    DocumentVersion,
+    KnowledgeBase,
+    OntologyInstance,
+    OntologyProposal,
+    OntologyRelation,
+)
 from app.services.graph.ontology import proposal_runs
 from app.services.graph.ontology.anchoring import Candidate
 from app.services.graph.ontology.proposals import ProposalRunResult, save_proposals
@@ -378,3 +386,182 @@ class TestSaveProposals:
         assert by_kind["instance"].payload["name"] == "Ⅱ级响应"
         assert by_kind["relation"].payload["predicate"] == "RESPONDS_WITH"
         assert by_kind["instance"].evidence["quote"] == "启动Ⅱ级响应"
+
+
+async def _purge_test_flood():
+    from sqlalchemy import delete
+
+    from app.db.models import OntologyInstance, OntologyProposal, OntologyRelation
+    from app.db.session import async_session_factory
+
+    async with async_session_factory() as db:
+        await db.execute(delete(OntologyRelation).where(OntologyRelation.profile_id == "test_flood"))
+        await db.execute(delete(OntologyProposal).where(OntologyProposal.profile_id == "test_flood"))
+        await db.execute(delete(OntologyInstance).where(OntologyInstance.profile_id == "test_flood"))
+        await db.commit()
+
+
+@pytest.fixture(autouse=True)
+async def _clean_test_flood():
+    """本文件的用例共用 test_flood，跑完清干净，免得互相污染"最孤立实例"的排序。"""
+    await _purge_test_flood()
+    yield
+    await _purge_test_flood()
+
+
+async def _seed(*specs, edges=()):
+    from app.db.session import async_session_factory
+
+    async with async_session_factory() as db:
+        for entity_type, name, uid in specs:
+            db.add(
+                OntologyInstance(
+                    profile_id="test_flood",
+                    entity_type=entity_type,
+                    name=name,
+                    uid=uid,
+                    kb_id=0,
+                    props={},
+                    evidence=[],
+                    source="manual",
+                    status="active",
+                )
+            )
+        await db.flush()
+        for subject, predicate, obj in edges:
+            db.add(
+                OntologyRelation(
+                    profile_id="test_flood",
+                    subject_uid=subject,
+                    predicate=predicate,
+                    object_uid=obj,
+                    kb_id=0,
+                    props={},
+                    evidence=[],
+                    source="manual",
+                    status="active",
+                )
+            )
+        await db.commit()
+
+
+class TestTargetInstances:
+    async def test_没点名时先挑最孤立的(self):
+        """一条边都没有的实例，多半是当初建的时候漏了关系——补边该先去那儿。"""
+        from app.db.session import async_session_factory
+
+        await _seed(
+            ("response_level", "Ⅱ级响应", "rl:a"),
+            ("measure", "加强水情监测", "ms:b"),
+            ("management_unit", "安澜镇人民政府", "mu:c"),
+            edges=[("rl:a", "RESPONDS_WITH", "ms:b")],
+        )
+        async with async_session_factory() as db:
+            targets = await proposal_runs._target_instances(db, _registry(), None, 1)
+        assert [t.uid for t in targets] == ["mu:c"]
+
+    async def test_点名了就按点名的来(self):
+        from app.db.session import async_session_factory
+
+        await _seed(
+            ("response_level", "Ⅱ级响应", "rl:a"),
+            ("measure", "加强水情监测", "ms:b"),
+        )
+        async with async_session_factory() as db:
+            targets = await proposal_runs._target_instances(db, _registry(), ["ms:b"], 5)
+        assert [t.uid for t in targets] == ["ms:b"]
+
+
+class TestLinkDiscovery:
+    def _stub_candidates(self, monkeypatch):
+        from app.services.graph.ontology import anchoring
+
+        async def fake_candidates(db, query, *, kb_id, top_k=6, doc_ids=None):
+            if "没收录" in query:
+                return []
+            return [_chunk(1, CHUNK1 + "\n" + CHUNK2)]
+
+        monkeypatch.setattr(anchoring, "candidate_chunks", fake_candidates)
+
+    async def _run(self, llm, **kwargs):
+        from app.db.session import async_session_factory
+
+        async with async_session_factory() as db:
+            return await proposal_runs.run_link_discovery(
+                db, _registry(), llm=llm, **kwargs
+            )
+
+    async def test_给指定实例补出一条关系(self, monkeypatch):
+        await _seed(
+            ("response_level", "Ⅱ级响应", "rl:a"),
+            ("measure", "加强水情监测", "ms:b"),
+        )
+        self._stub_candidates(monkeypatch)
+        llm = FakeLLM(
+            [
+                _reply(
+                    relations=[
+                        {
+                            "subject": "Ⅱ级响应",
+                            "predicate": "RESPONDS_WITH",
+                            "object": "加强水情监测",
+                            "chunk": 1,
+                            "quote": "Ⅱ级响应应采取以下措施：加强水情监测",
+                        }
+                    ]
+                )
+            ]
+        )
+        _, relations, result = await self._run(
+            llm, instance_uids=["rl:a"], limit_instances=1
+        )
+        assert len(relations) == 1
+        assert relations[0].subject_uid == "rl:a"
+        assert relations[0].object_uid == "ms:b"
+        assert result.relations == 1
+
+    async def test_同一关系跨实例只留一条(self, monkeypatch):
+        """补 3 个实例时，同一条关系可能被提三遍——待审区不该出现三条一样的。"""
+        await _seed(
+            ("response_level", "Ⅱ级响应", "rl:a"),
+            ("measure", "加强水情监测", "ms:b"),
+            ("management_unit", "安澜镇人民政府", "mu:c"),
+        )
+        self._stub_candidates(monkeypatch)
+        same = _reply(
+            relations=[
+                {
+                    "subject": "Ⅱ级响应",
+                    "predicate": "RESPONDS_WITH",
+                    "object": "加强水情监测",
+                    "chunk": 1,
+                    "quote": "Ⅱ级响应应采取以下措施：加强水情监测",
+                }
+            ]
+        )
+        _, relations, _ = await self._run(
+            FakeLLM([same, same, same]),
+            instance_uids=["rl:a", "ms:b", "mu:c"],
+            limit_instances=3,
+        )
+        assert len(relations) == 1
+
+    async def test_检索不到原文时明说是哪个实例(self, monkeypatch):
+        await _seed(("response_level", "没收录的实例", "rl:x"))
+        self._stub_candidates(monkeypatch)
+        _, _, result = await self._run(FakeLLM([]), instance_uids=["rl:x"])
+        assert any("没收录的实例" in n and "没检索到" in n for n in result.notes)
+
+    async def test_调用上限到了要停下(self, monkeypatch):
+        await _seed(
+            ("response_level", "Ⅱ级响应", "rl:a"),
+            ("measure", "加强水情监测", "ms:b"),
+            ("management_unit", "安澜镇人民政府", "mu:c"),
+        )
+        self._stub_candidates(monkeypatch)
+        llm = FakeLLM([_reply() for _ in range(5)])
+        _, _, result = await self._run(
+            llm, instance_uids=["rl:a", "ms:b", "mu:c"], limit_instances=3, max_calls=1
+        )
+        assert len(llm.prompts) == 1
+        assert any("上限" in n for n in result.notes)

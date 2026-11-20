@@ -68,6 +68,7 @@ REJECT_LABELS = {
     "unknown_relation": "关系不在本体定义里",
     "no_name": "实例没给名字",
     "duplicate_instance": "库里已有同名实例，不重复新建",
+    "list_name": "实例名是一串并列的东西，不是单个实体",
     "no_chunk": "引用的片段编号不存在",
     "quote_too_short": "引用的原文太短",
     "quote_not_in_chunk": "原文里找不到这句引用（模型写错了）",
@@ -269,19 +270,40 @@ def tbox_digest(registry: OntologyRegistry) -> str:
 
 def known_from_instances(
     rows: Iterable[Any],
-) -> tuple[dict[str, Known], dict[str, Known]]:
-    """已有实例 → (按名字, 按 uid) 两张索引。名字优先取 `display_zh`。"""
+) -> tuple[dict[str, Known], dict[str, Known], set[str]]:
+    """已有实例 → (按名字, 按 uid, 重名集合)。
+
+    两条容易踩的坑，都是实测踩出来的：
+
+    - **只按 `display_zh` 建索引会漏**：模型和人都可能用实例的原始名，两个都
+      得认，所以每个实例同时挂中文名和原名两个键。
+    - **同名不同实例不能猜**：两个实例标签一样时，随便挑一个就是"连错边"——
+      比连不上更坏。这种名字**整条作废**（放进 `ambiguous`），让调用方去提示人。
+    """
     by_name: dict[str, Known] = {}
     by_uid: dict[str, Known] = {}
+    ambiguous: set[str] = set()
     for row in rows:
         props = getattr(row, "props", None) or {}
-        name = _clean_name(str(props.get("display_zh") or getattr(row, "name", "") or ""))
-        if not name:
-            continue
-        item = Known(uid=str(row.uid), entity_type=str(row.entity_type), name=name)
+        display = _clean_name(str(props.get("display_zh") or ""))
+        raw = _clean_name(str(getattr(row, "name", "") or ""))
+        item = Known(
+            uid=str(row.uid),
+            entity_type=str(row.entity_type),
+            name=display or raw,
+        )
         by_uid[item.uid] = item
-        by_name.setdefault(name, item)
-    return by_name, by_uid
+        for key in (display, raw):
+            if not key:
+                continue
+            seen = by_name.get(key)
+            if seen is not None and seen.uid != item.uid:
+                ambiguous.add(key)
+                continue
+            by_name.setdefault(key, item)
+    for key in ambiguous:
+        by_name.pop(key, None)
+    return by_name, by_uid, ambiguous
 
 
 def _catalog_section(by_uid: dict[str, Known]) -> str:
@@ -338,6 +360,43 @@ def build_scan_prompt(
     )
 
 
+_LINK_RULES = (
+    "要求（每条都硬性执行）：\n"
+    "1. **每条关系至少有一端是上面那个实例**，不要扯到与它无关的东西；\n"
+    "2. 另一端如果库里已有，用**它的名字**引用；原文里明确写了但库里没有的，"
+    "必须在 instances 里同时声明它，否则这条关系作废；\n"
+    "3. 端点方向按关系表写（谁是主语谁是宾语），**写反了整条作废**；\n"
+    "4. quote 必须是片段里**连续出现的原文**，逐字抄；\n"
+    "5. 关系标识只能从上面那张表里选，照抄。"
+)
+
+
+def build_link_prompt(
+    registry: OntologyRegistry,
+    target: Known,
+    chunks: list[Candidate],
+    by_uid: dict[str, Known],
+) -> str:
+    """补边（C-3）：专门问「这个实例还跟谁有关系」。
+
+    和整体扫的区别不在格式而在**焦点**：整体扫是漫无目的地读，容易把同一份
+    原文里所有实体一股脑提出来；补边只围绕一个实例问，命中率更高、也更容易
+    被人在界面上逐条判断。
+    """
+    return (
+        f"{tbox_digest(registry)}\n\n"
+        f"{_catalog_section(by_uid)}\n\n"
+        f"【要补边的实例】{target.name}（{target.entity_type}）\n\n"
+        f"【原文片段】\n{_corpus_section(chunks)}\n\n"
+        "请找出这个实例与其他实例之间的关系，输出 JSON：\n"
+        '{"instances":[{"type":"实体类型","name":"实例名","props":{},"chunk":片段序号,'
+        '"quote":"逐字原文"}],'
+        '"relations":[{"subject":"实例名或uid","predicate":"关系标识","object":"实例名或uid",'
+        '"chunk":片段序号,"quote":"逐字原文"}]}\n\n'
+        f"{_LINK_RULES}"
+    )
+
+
 def parse_payload(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """从模型输出里抠出 instances / relations（可能包 ```json 或带解释）。"""
     raw = (text or "").strip()
@@ -363,6 +422,10 @@ def parse_payload(text: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]
 
 
 _WRAP = "「」『』“”\"'《》【】[]（）() \t\r\n"
+
+# 实例名里出现这些，多半是把一串实体塞成了一个。**只认逗号顿号**——
+# 「和」「及」在正常地名里也有（和平镇），拿来判断会误伤。
+_LIST_SEPARATORS = ("、", "，", "；", ";", ",")
 
 
 def _clean_name(text: str) -> str:
@@ -503,6 +566,12 @@ def _build_instance(
     name = _clean_name(str(item.get("name") or ""))
     if not name:
         result.reject("no_name", f"{entity_type} 有一条没给名字")
+        return None
+    if any(sep in name for sep in _LIST_SEPARATORS):
+        # 实测真实模型会把「镇人民政府、街道办事处、区政府各部门」当成**一个**责任
+        # 单位。名字里出现顿号基本就是它把一串东西塞进来了——建出来的是一个
+        # 查不到、也挂不上关系的假实体。宁可拒掉让人自己拆。
+        result.reject("list_name", f"「{name}」像一串并列的实体，不是一个")
         return None
     uid = registry.uid_for(entity_type, name, kb_id)
     dup = by_name.get(name) or by_uid.get(uid)

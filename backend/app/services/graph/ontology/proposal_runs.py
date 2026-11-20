@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chunk, Document, OntologyInstance
+from app.db.models import Chunk, Document, OntologyInstance, OntologyRelation
 from app.services.graph.ontology.anchoring import Candidate
 from app.services.graph.ontology.proposals import (
     SYSTEM_PROMPT,
@@ -34,6 +34,7 @@ from app.services.graph.ontology.proposals import (
     RelationCandidate,
     _clean_name,
     build_candidates,
+    build_link_prompt,
     build_scan_prompt,
     known_from_instances,
     parse_payload,
@@ -243,7 +244,12 @@ async def run_document_scan(
             )
         )
     ).all()
-    by_name, by_uid = known_from_instances(rows)
+    by_name, by_uid, ambiguous = known_from_instances(rows)
+    if ambiguous:
+        result.notes.append(
+            f"库里有 {len(ambiguous)} 个名字对应多个实例（{', '.join(sorted(ambiguous)[:3])}…），"
+            "关系里用到这些名字会被当作「没给出」——连错比连不上更坏"
+        )
     scope_name, scope_uid = dict(by_name), dict(by_uid)
 
     instances: list[InstanceCandidate] = []
@@ -290,6 +296,170 @@ async def run_document_scan(
             )
             scope_uid[cand.uid] = known
             scope_name.setdefault(_clean_name(cand.name), known)
+
+    result.instances = len(instances)
+    result.relations = len(relations)
+    return instances, relations, result
+
+
+# ---------------- C-3 给已有实例补边 ----------------
+
+
+async def _target_instances(
+    db: AsyncSession,
+    registry: OntologyRegistry,
+    instance_uids: list[str] | None,
+    limit: int,
+) -> list[Any]:
+    """挑要补边的实例：点名了就按点名的来，没点名就挑**最孤立的**。
+
+    先挑没边的理由：一条边都没有的实例，多半是当初建的时候漏了关系——那正是
+    补边最该去的地方；已经连了一堆的实例再补，边际收益最低。
+    """
+    rows = list(
+        (
+            await db.scalars(
+                select(OntologyInstance).where(
+                    OntologyInstance.profile_id == registry.profile_id,
+                    OntologyInstance.status == "active",
+                )
+            )
+        ).all()
+    )
+    if instance_uids:
+        wanted = set(instance_uids)
+        return [r for r in rows if r.uid in wanted][:limit]
+    if not rows:
+        return []
+    counts = {r.uid: 0 for r in rows}
+    edges = (
+        await db.execute(
+            select(OntologyRelation.subject_uid, OntologyRelation.object_uid).where(
+                OntologyRelation.profile_id == registry.profile_id,
+                OntologyRelation.status == "active",
+            )
+        )
+    ).all()
+    for subject, obj in edges:
+        if subject in counts:
+            counts[subject] += 1
+        if obj in counts:
+            counts[obj] += 1
+    # 稳定排序：同样孤立时按名字，避免每次跑出来顺序不一样
+    rows.sort(key=lambda r: (counts.get(r.uid, 0), str(r.name)))
+    return rows[:limit]
+
+
+async def run_link_discovery(
+    db: AsyncSession,
+    registry: OntologyRegistry,
+    *,
+    instance_uids: list[str] | None = None,
+    limit_instances: int = 5,
+    top_k: int = 4,
+    max_calls: int = 10,
+    kb_id: int | None = None,
+    llm: Any = None,
+    result: ProposalRunResult | None = None,
+) -> tuple[list[InstanceCandidate], list[RelationCandidate], ProposalRunResult]:
+    """给**已有实例**补关系（C-3）：检索它出现的段落 → 模型指认关系 → 逐条硬校验。
+
+    和 C-2 整体扫的区别不在格式而在**焦点**：整体扫是漫无目的地读，容易把一份
+    原文里的实体一股脑提出来；补边只围着一个实例问，命中率更高，界面上也更好
+    逐条判断。
+    """
+    from app.services.graph.ontology import anchoring
+
+    result = result or ProposalRunResult()
+    targets = await _target_instances(db, registry, instance_uids, limit_instances)
+    if not targets:
+        result.notes.append("没有可补边的实例：先建几个实例再来")
+        return [], [], result
+
+    rows = (
+        await db.scalars(
+            select(OntologyInstance).where(
+                OntologyInstance.profile_id == registry.profile_id,
+                OntologyInstance.status == "active",
+            )
+        )
+    ).all()
+    by_name, by_uid, ambiguous = known_from_instances(rows)
+    if ambiguous:
+        result.notes.append(
+            f"库里有 {len(ambiguous)} 个名字对应多个实例（{', '.join(sorted(ambiguous)[:3])}…），"
+            "关系里用到这些名字会被当作「没给出」——连错比连不上更坏"
+        )
+    scope_name, scope_uid = dict(by_name), dict(by_uid)
+
+    instances: list[InstanceCandidate] = []
+    relations: list[RelationCandidate] = []
+    seen_i: set[str] = set()
+    seen_r: set[str] = set()
+    calls = 0
+    for index, row in enumerate(targets):
+        if calls >= max_calls:
+            result.notes.append(
+                f"模型调用到上限 {max_calls} 次，后面 {len(targets) - index} 个实例这一轮不补"
+            )
+            break
+        name = str((row.props or {}).get("display_zh") or row.name)
+        scope_kb = kb_id if kb_id is not None else (row.kb_id or None)
+        doc_ids = [
+            int(e["doc_id"])
+            for e in (row.evidence or [])
+            if isinstance(e, dict) and e.get("doc_id") is not None
+        ]
+        candidates = await anchoring.candidate_chunks(
+            db, name, kb_id=scope_kb, top_k=top_k, doc_ids=doc_ids or None
+        )
+        if not candidates:
+            result.notes.append(f"{name}：知识库里没检索到相关片段")
+            continue
+        result.chunks += len(candidates)
+        if llm is None:
+            from app.services.chat import build_chat_model
+
+            llm = build_chat_model(0.0)
+        target = Known(uid=str(row.uid), entity_type=str(row.entity_type), name=name)
+        try:
+            text = await _call_llm(
+                llm, build_link_prompt(registry, target, candidates, scope_uid)
+            )
+        except Exception as exc:  # noqa: BLE001 - 单个实例失败不该毁掉整轮
+            logger.warning("补边调用失败（%s）：%s", name, exc)
+            result.notes.append(f"{name}：模型调用失败（{exc.__class__.__name__}）")
+            calls += 1
+            continue
+        calls += 1
+        result.scanned += len(candidates)
+
+        inst_items, rel_items = parse_payload(text)
+        got_i, got_r = build_candidates(
+            inst_items,
+            rel_items,
+            candidates,
+            registry=registry,
+            by_name=scope_name,
+            by_uid=scope_uid,
+            kb_id=scope_kb or 0,
+            result=result,
+        )
+        for cand in got_i:
+            if cand.dedupe_key in seen_i:
+                continue
+            seen_i.add(cand.dedupe_key)
+            instances.append(cand)
+            known = Known(
+                uid=cand.uid, entity_type=cand.entity_type, name=cand.name, origin="run"
+            )
+            scope_uid[cand.uid] = known
+            scope_name.setdefault(_clean_name(cand.name), known)
+        for cand in got_r:
+            if cand.dedupe_key in seen_r:
+                continue
+            seen_r.add(cand.dedupe_key)
+            relations.append(cand)
 
     result.instances = len(instances)
     result.relations = len(relations)

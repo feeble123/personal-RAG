@@ -127,7 +127,7 @@ def _known():
 
 
 def _run(items, relations=(), *, kb_id=0):
-    by_name, by_uid = _known()
+    by_name, by_uid, _ = _known()
     result = proposals.ProposalRunResult()
     instances, rels = proposals.build_candidates(
         list(items),
@@ -204,6 +204,24 @@ class TestInstanceCandidate:
         """模型自创概念是本体塌向 GraphRAG 的第一步。"""
         _, _, result = _run([_level_item(type="flood_event")])
         assert result.reject_reasons["unknown_type"] == 1
+
+    def test_一串并列的实体不算一个实例(self):
+        """实测真实模型把「镇人民政府、街道办事处、区政府各部门」当成**一个**
+        责任单位。建出来的是个查不到、也挂不上关系的假实体——宁可拒掉让人拆。"""
+        _, _, result = _run(
+            [
+                _level_item(
+                    name="镇人民政府、街道办事处、区政府各部门",
+                )
+            ]
+        )
+        assert result.reject_reasons["list_name"] == 1
+        assert any("像一串并列的实体" in n for n in result.notes)
+
+    def test_名字里的和与及不算并列(self):
+        """「和平镇」是正常地名，拿「和」判断会误伤。"""
+        instances, _, _ = _run([_level_item(name="和平镇人民政府")])
+        assert len(instances) == 1
 
     def test_编造的引用被拒(self):
         """假出处比没出处更坏——用户会拿它当依据去建模。"""
@@ -494,10 +512,37 @@ class TestRelationCandidate:
 
 
 class TestKnownCatalog:
-    def test_优先用中文显示名索引(self):
-        by_name, by_uid = proposals.known_from_instances(
-            [SimpleNamespace(uid="x:1", entity_type="measure", name="m1", props={"display_zh": "加强巡查"})]
+    def test_中文名和原名都能查到(self):
+        """模型和人都可能用实例的原始名；只按 display_zh 建索引会让原名查不到。"""
+        by_name, by_uid, ambiguous = proposals.known_from_instances(
+            [
+                SimpleNamespace(
+                    uid="x:1", entity_type="measure", name="m1", props={"display_zh": "加强巡查"}
+                )
+            ]
         )
-        assert "加强巡查" in by_name
-        assert "m1" not in by_name
+        assert by_name["加强巡查"].uid == "x:1"
+        assert by_name["m1"].uid == "x:1"
         assert by_uid["x:1"].name == "加强巡查"
+        assert ambiguous == set()
+
+    def test_同名不同实例整条作废而不是随便挑一个(self):
+        """连错边比连不上更坏——同名时谁都不认，交给人。"""
+        by_name, _, ambiguous = proposals.known_from_instances(
+            [
+                SimpleNamespace(uid="x:1", entity_type="measure", name="m1", props={}),
+                SimpleNamespace(uid="x:2", entity_type="measure", name="m2", props={}),
+            ]
+        )
+        # 两个实例的原始名不同，各自都能查到
+        assert by_name["m1"].uid == "x:1" and by_name["m2"].uid == "x:2"
+        assert ambiguous == set()
+
+        by_name, _, ambiguous = proposals.known_from_instances(
+            [
+                SimpleNamespace(uid="x:1", entity_type="measure", name="同名", props={}),
+                SimpleNamespace(uid="x:2", entity_type="measure", name="同名", props={}),
+            ]
+        )
+        assert "同名" not in by_name
+        assert ambiguous == {"同名"}
