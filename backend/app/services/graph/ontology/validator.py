@@ -109,6 +109,6 @@ def validate_relation(
         allowed = rel.target_types or (rel.target,)
         result.errors.append(
             f"{relation} 端点非法：{subject_type} -> {object_type}；"
-            f"应为主语 {rel.source}、宾语 {'/'.join(allowed)}"
+            f"应为主语 {'/'.join(rel.all_sources())}、宾语 {'/'.join(allowed)}"
         )
     return result

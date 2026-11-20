@@ -1,0 +1,1978 @@
+# ============================================================
+# 本体数据（ABox）：实例 + 关系 + 每条出处的逐字引句
+# ------------------------------------------------------------
+# 这份文件是从库里导出的，也可以直接改完再导回去：
+#
+#   python -m scripts.import_ontology_data --profile reservoir_flood --data <本文件>
+#
+# 规矩：
+#   · evidence 里的 quote 必须是**原文逐字**，导入时会按「文件 + 引句」回找切片；
+#     找不到就报错、不写入——宁可少建一条，也不要建一条点不回原文的"事实"。
+#   · page 是**书内印刷页码**（不是 PDF 物理页），只用来在多个候选里缩小范围。
+#   · props 里随主语变的值（如时限）要挂在**关系**上，不要挂在实例上。
+# ============================================================
+profile_id: reservoir_flood
+instances:
+- type: admin_region
+  name: 安澜镇
+  props:
+    level: 镇
+    flood_standard: 20年一遇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 下游防护对象主要为圣灯山镇、安澜镇、一品街道、龙洲湾街道、鱼洞街道
+    page: 39
+- type: admin_region
+  name: 龙洲湾街道
+  props:
+    level: 街道
+    flood_standard: 20年一遇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 下游防护对象主要为圣灯山镇、安澜镇、一品街道、龙洲湾街道、鱼洞街道
+    page: 39
+- type: admin_region
+  name: 圣灯山镇
+  props:
+    level: 镇
+    flood_standard: 20年一遇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 下游防护对象主要为圣灯山镇、安澜镇、一品街道、龙洲湾街道、鱼洞街道
+    page: 39
+- type: admin_region
+  name: 一品街道
+  props:
+    level: 街道
+    flood_standard: 20年一遇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 下游防护对象主要为圣灯山镇、安澜镇、一品街道、龙洲湾街道、鱼洞街道
+    page: 39
+- type: admin_region
+  name: 鱼洞街道
+  props:
+    level: 街道
+    flood_standard: 20年一遇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 下游防护对象主要为圣灯山镇、安澜镇、一品街道、龙洲湾街道、鱼洞街道
+    page: 39
+- type: condition
+  name: 1~2年一遇降雨（85~100mm）
+  props:
+    season: 汛期
+    frequency: 0.5
+    display_zh: 1~2年一遇
+    return_period: 2
+    rainfall_24h_mm: 85~100
+    return_period_low: 1
+    return_period_high: 2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计 24h降雨量大于85mm且小于100mm（1~2年一遇）
+    page: 37
+- type: condition
+  name: 10~20年一遇降雨（155~170mm）
+  props:
+    season: 汛期
+    frequency: 0.05
+    display_zh: 10~20年一遇
+    return_period: 20
+    rainfall_24h_mm: 155~170
+    return_period_low: 10
+    return_period_high: 20
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 24h大于155mm且小于170mm(10~20年一遇)
+    page: 37
+- type: condition
+  name: 1000年以上一遇洪水
+  props:
+    frequency: 0.001
+    display_zh: 1000年一遇
+    return_period: 1000
+    return_period_low: 1000
+    return_period_high: 100000
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可能遭遇1000年以上一遇的洪水
+    page: 53
+- type: condition
+  name: 100年一遇洪水（干旱年）
+  props:
+    note: 干旱年，起调水位 340m 时水库最大可削峰的量级
+    season: 干旱年
+    frequency: 0.01
+    display_zh: 100年一遇
+    return_period: 100
+    return_period_low: 100
+    return_period_high: 100
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 水库最大能对100年一遇（P=1.00%）的洪水进行削峰
+    page: 39
+- type: condition
+  name: 2~3年一遇降雨（100~110mm）
+  props:
+    season: 汛期
+    frequency: 0.333
+    display_zh: 2~3年一遇
+    return_period: 3
+    rainfall_24h_mm: 100~110
+    return_period_low: 2
+    return_period_high: 3
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于100mm且小于110mm（2~3年一遇）
+    page: 38
+- type: condition
+  name: 20~50年一遇洪水
+  props:
+    frequency: 0.02
+    display_zh: 20~50年一遇
+    return_period: 50
+    return_period_low: 20
+    return_period_high: 50
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可能遭遇20年以上50年以下一遇的洪水
+    page: 51
+- type: condition
+  name: 20~50年一遇降雨（170~210mm）
+  props:
+    season: 汛期
+    frequency: 0.02
+    display_zh: 20~50年一遇
+    return_period: 50
+    rainfall_24h_mm: 170~210
+    return_period_low: 20
+    return_period_high: 50
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 24h大于170mm且小于210mm(20~50年一遇)
+    page: 37
+- type: condition
+  name: 20年一遇洪水
+  props:
+    note: 下游防护对象的防洪标准；也是 Ⅳ 级响应的启动条件之一
+    frequency: 0.05
+    return_period: 20
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 根据洪水预报，可能遭遇20年一遇的洪水
+    page: 50
+- type: condition
+  name: 24h降雨小于85mm（1年一遇）
+  props:
+    season: 汛期
+    frequency: 1.0
+    display_zh: 1年一遇
+    return_period: 1
+    rainfall_24h_mm: <85
+    return_period_low: 0.1
+    return_period_high: 1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量小于85mm（1年一遇）
+    page: 35
+- type: condition
+  name: 3~5年一遇降雨（110~130mm）
+  props:
+    season: 汛期
+    frequency: 0.2
+    display_zh: 3~5年一遇
+    return_period: 5
+    rainfall_24h_mm: 110~130
+    return_period_low: 3
+    return_period_high: 5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 大于 110mm且小于130mm（3~5年一遇）
+    page: 38
+- type: condition
+  name: 300年一遇洪水（正常年）
+  props:
+    note: 正常年，起调水位 338.5m 时水库最大可削峰的量级
+    season: 正常年
+    frequency: 0.0033
+    display_zh: 300年一遇
+    return_period: 300
+    return_period_low: 300
+    return_period_high: 300
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 水库最大能对300年一遇（P=0.33%）的洪水进行削峰
+    page: 39
+- type: condition
+  name: 5~10年一遇降雨（130~155mm）
+  props:
+    season: 汛期
+    frequency: 0.1
+    display_zh: 5~10年一遇
+    return_period: 10
+    rainfall_24h_mm: 130~155
+    return_period_low: 5
+    return_period_high: 10
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 大于130mm且小于155mm（5~10年一遇）
+    page: 36
+- type: condition
+  name: 50~1000年一遇洪水
+  props:
+    frequency: 0.001
+    display_zh: 50~1000年一遇
+    return_period: 1000
+    return_period_low: 50
+    return_period_high: 1000
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可能遭遇50年以上1000年以下一遇的洪水
+    page: 52
+- type: condition
+  name: 超下游标准洪水
+  props:
+    note: 超过下游防护对象防洪标准（20年一遇），转以 480m³/s 为最大允许下泄量削峰
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 由于下游防护对象的防洪标准为20年一遇
+    page: 39
+- type: condition
+  name: 库水位超过校核洪水位
+  props:
+    level_m: 343.54
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 水库库水位超过校核洪水位343.54m时
+    page: 39
+- type: condition
+  name: 库水位超过正常蓄水位
+  props:
+    level_m: 343.0
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 库水位大于正常蓄水位343.00m，小于校核洪水位343.54m时
+    page: 39
+- type: condition
+  name: 校核洪水（1000年一遇）
+  props:
+    frequency: 0.001
+    inflow_m3s: 1000
+    return_period: 1000
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 入库流量达到乃至超过校核洪峰流量1000m³/s
+    page: 39
+- type: dispatch_plan
+  name: 1~2年一遇控泄方案
+  props:
+    mode: 控泄
+    priority: 下游防洪
+    outflow_m3s: 60
+    start_level_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量60m³/s
+    page: 36
+- type: dispatch_plan
+  name: 10~20年一遇控泄方案
+  props:
+    mode: 控泄
+    priority: 下游防洪
+    outflow_m3s: 130
+    start_level_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 初期洪水控制下泄流量130m³/s
+    page: 37
+- type: dispatch_plan
+  name: 1年一遇控泄方案
+  props:
+    mode: 控泄
+    note: 下泄量等于入库量
+    priority: 维持试运行水位
+    start_level_m: 338.5
+    target_level_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 控制溢洪闸开度保持下泄量等于入库量
+    page: 35
+- type: dispatch_plan
+  name: 2~3年一遇控泄方案
+  props:
+    mode: 控泄
+    priority: 下游防洪
+    outflow_m3s: 70
+    start_level_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量70m³/s
+    page: 36
+- type: dispatch_plan
+  name: 20~50年一遇控泄方案
+  props:
+    mode: 控泄
+    priority: 下游防洪
+    outflow_m3s: 130
+    start_level_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 24h大于170mm且小于210mm(20~50年一遇)的情况下，初期洪水控制下泄流量130m³/s
+    page: 37
+- type: dispatch_plan
+  name: 3~5年一遇控泄方案
+  props:
+    mode: 控泄
+    priority: 下游防洪
+    outflow_m3s: 100
+    start_level_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量 1 0 0 m^3 / s
+    page: 36
+- type: dispatch_plan
+  name: 5~10年一遇控泄方案（调度规程）
+  props:
+    mode: 控泄
+    note: 调度规程取 120；同一工况汛期调度运用计划取 125，两份文件不一致
+    priority: 下游防洪
+    outflow_m3s: 120
+    start_level_m: 338.5
+    authority_rank: 1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量120m³/s
+    page: 36
+- type: dispatch_plan
+  name: 5~10年一遇控泄方案（汛期调度运用计划）
+  props:
+    mode: 控泄
+    note: 运用计划取 125；调度规程取 120，两份文件不一致
+    priority: 下游防洪
+    outflow_m3s: 125
+    start_level_m: 338.5
+    authority_rank: 2
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 洪水控制下泄流量125m³/s
+    page: 44
+- type: dispatch_plan
+  name: 保坝泄洪方案
+  props:
+    mode: 保坝
+    note: 开启一切泄洪设施，下泄流量不得大于入库流量
+    priority: 保大坝安全
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 开启一切泄洪设施，按下泄流量最大化的原则进行调度，且下泄流量不得大于入库流量
+    page: 39
+- type: dispatch_plan
+  name: 超标准洪水削峰方案
+  props:
+    mode: 控泄
+    note: 以 20 年一遇洪峰 480m³/s 为最大允许下泄量；来洪第一小时不下泄
+    priority: 下游防洪
+    outflow_m3s: 450
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水初期控制下泄流量为 4 5 0 m^3 / s
+    page: 39
+- type: dispatch_plan
+  name: 中小洪水控泄方案
+  props:
+    mode: 控泄
+    note: 库水位不超过正常蓄水位 343.00m 的常规控泄
+    priority: 下游防洪
+    outflow_m3s: 130
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 大坝控制下泄量不超过 1 3 0 m^3 / s
+    page: 35
+- type: engineering_object
+  name: 高洞子水库
+  props:
+    grade: Ⅲ等中型
+    category: 水库
+    dam_type: 沥青混凝土心墙土石坝
+    max_dam_height_m: 42.6
+    total_storage_wan_m3: 1025
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 高洞子水库总库容为1025万m³，最大坝高42.60m
+    page: 14
+- type: engineering_object
+  name: 生态放水管
+  props:
+    category: 放水管
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开启生态放水管阀门及溢洪道闸门
+    page: 40
+- type: engineering_object
+  name: 溢洪道
+  props:
+    category: 溢洪道
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开启生态放水管阀门及溢洪道闸门
+    page: 40
+- type: engineering_object
+  name: 溢洪道闸门
+  props:
+    category: 闸门
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 表3-1 四种下泄量下对应的水位-闸门开度表
+    page: 37
+- type: management_unit
+  name: 巴南区防汛抗旱指挥部
+  props:
+    role: 统一调度与应急指挥
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 巴南区防汛抗旱应急指挥部
+    page: 53
+- type: management_unit
+  name: 巴南区水利局
+  props:
+    role: 分级调度审批
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 由巴南区水利局下达调度指令
+    page: 42
+- type: management_unit
+  name: 常备队与抢险队
+  props:
+    role: 现场抢险力量
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 常备队和各抢险队到位抢险
+    page: 52
+- type: management_unit
+  name: 高洞子水库防汛抗旱应急领导小组
+  props:
+    role: 应急指挥（现场）
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组
+    page: 32
+- type: management_unit
+  name: 高洞子水库管理处
+  props:
+    role: 现场运行管理
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处人员应在1h内
+    page: 50
+- type: management_unit
+  name: 应急抢险专家组
+  props:
+    role: 技术指导
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 应急抢险专家组
+    page: 32
+- type: management_unit
+  name: 重庆市城南水利发展有限公司
+  props:
+    role: 正常蓄水位以下调度权
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 水库调度权限归重庆市城南水利发展有限公司
+    page: 42
+- type: management_unit
+  name: 重庆市水利投资（集团）有限公司
+  props:
+    role: 上级主管单位
+  evidence:
+  - doc: 高洞子水库大坝安全管理应急预案.pdf
+    quote: 重庆市水利投资（集团）有限公司
+    page: 60
+- type: measure
+  name: 24小时轮流值班
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 进行24h轮流值班
+    page: 52
+- type: measure
+  name: 按调度计划调控水位
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即按照调度计划进行水位调控
+    page: 50
+- type: measure
+  name: 按区防指办法执行响应
+  props:
+    owner_role: 防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: I级响应按照巴南区防汛抗旱应急指挥部的响应办法执行
+    page: 53
+- type: measure
+  name: 超标准洪水联合泄洪
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开启生态放水管阀门及溢洪道闸门，联合泄洪加大最大下泄流量
+    page: 40
+- type: measure
+  name: 传达应急响应命令
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处人员应在1h内将应急响应命令和有关信息传送到
+    page: 50
+- type: measure
+  name: 发布预警信息
+  props:
+    owner_role: 区防汛抗旱指挥部
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 拉响预警警报，指派宣传车对水库下游用广播进行预警宣传
+    page: 53
+- type: measure
+  name: 汇报水情工情险情
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情
+    page: 51
+- type: measure
+  name: 加强安全巡查
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 加大安全巡查力度
+    page: 52
+- type: measure
+  name: 解除预警
+  props:
+    owner_role: 区防汛抗旱指挥部
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 预警宣布结束
+    page: 54
+- type: measure
+  name: 开闸泄洪
+  props:
+    note: 按水位-闸门开度表调整开度
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 控制溢洪闸开度保持下泄量等于入库量
+    page: 35
+- type: measure
+  name: 开闸泄水前通知下游村镇
+  props:
+    timing: 泄洪前 1h
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 需提前1小时通知下游影响范围内的各个村镇
+    page: 35
+- type: measure
+  name: 领导现场指挥
+  props:
+    note: Ⅳ级由公司董事长坐镇、管理处负责人现场；Ⅲ级由副组长（区水利局局长）、Ⅱ级由组长（副区长）亲临
+    owner_role: 防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 坐镇指挥
+    page: 51
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 亲临现场指挥抢险
+    page: 52
+- type: measure
+  name: 启动防洪抢险应急预案
+  props:
+    owner_role: 防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 水位继续上涨，应立即启动防洪抢险应急预案
+    page: 40
+- type: measure
+  name: 抢险队伍到位
+  props:
+    owner_role: 常备队与抢险队
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 常备队和各抢险队到位抢险
+    page: 52
+- type: measure
+  name: 请求外部支援
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 请求当地驻军支援或启动巴南区级预案
+    page: 53
+- type: measure
+  name: 上报险情并移交指挥权
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开展先期处置并将险情上报
+    page: 53
+- type: measure
+  name: 通知下游镇街
+  props:
+    owner_role: 防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状
+    page: 52
+- type: measure
+  name: 险情书面报告
+  props:
+    timing: 90min 内
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 并在90分钟内由高洞子水库管理处出具详细书面报告
+    page: 31
+- type: measure
+  name: 向区防指报备
+  props:
+    timing: 与传达响应命令同步
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 同时向巴南区防汛抗旱应急指挥部报备
+    page: 50
+- type: measure
+  name: 与常备队共同处理险情
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 与常备队一起及时处理险情
+    page: 50
+- type: measure
+  name: 闸门失灵应急处置
+  props:
+    owner_role: 水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 当泄洪闸门失灵，应及时进行检修，必要时可将闸门紧急拆除以保证水库下泄能力
+    page: 38
+- type: measure
+  name: 召集专家组紧急会议
+  props:
+    owner_role: 防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 召集专家组进行紧急会议
+    page: 52
+- type: measure
+  name: 专家组到场
+  props:
+    owner_role: 应急抢险专家组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 专家组成员在接到信息后2h内赴现场进行技术指导
+    page: 51
+- type: measure
+  name: 组织人员转移
+  props:
+    owner_role: 镇街人民政府
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 投亲靠友、借住公房、调运帐篷、搭建临时房屋
+    page: 50
+- type: response_level
+  name: Ⅰ级响应
+  props:
+    color: 红色
+    level: Ⅰ
+    trigger_summary: 3h 雨量 100mm，或可能遭遇 1000 年以上一遇洪水
+    expected_measures: 4
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 4.6.1.4 Ⅰ 级险情及应急措施
+    page: 52
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 发生Ⅰ级险情后的处置措施
+    page: 53
+- type: response_level
+  name: Ⅱ级响应
+  props:
+    color: 橙色
+    level: Ⅱ
+    trigger_summary: 3h 雨量 50mm，或可能遭遇 50~1000 年一遇洪水
+    expected_measures: 6
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 4.6.1.3 Ⅱ级险情及应急措施
+    page: 52
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 发生Ⅱ级险情后的处置措施
+    page: 52
+- type: response_level
+  name: Ⅲ级响应
+  props:
+    color: 黄色
+    level: Ⅲ
+    trigger_summary: 6h 雨量 50mm，或可能遭遇 20~50 年一遇洪水
+    expected_measures: 6
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: Ⅲ级（黄色预警）
+    page: 51
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 发生Ⅲ级险情后的处置措施
+    page: 51
+- type: response_level
+  name: Ⅳ级响应
+  props:
+    color: 蓝色
+    level: Ⅳ
+    trigger_summary: 6h 雨量 30mm，或可能遭遇 20 年一遇洪水
+    expected_measures: 5
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: Ⅳ级（蓝色预警）
+    page: 50
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 发生IV级险情后的处置措施
+    page: 50
+- type: standard_clause
+  name: 大坝安全预案 1.5
+  props:
+    doc: 高洞子水库大坝安全管理应急预案.pdf
+    clause_no: '1.5'
+  evidence:
+  - doc: 高洞子水库大坝安全管理应急预案.pdf
+    quote: 1.5 突发事件分级
+    page: 5
+- type: standard_clause
+  name: 大坝安全预案 4.2
+  props:
+    doc: 高洞子水库大坝安全管理应急预案.pdf
+    clause_no: '4.2'
+  evidence:
+  - doc: 高洞子水库大坝安全管理应急预案.pdf
+    quote: 4.2 应急响应
+    page: 63
+- type: standard_clause
+  name: 调度规程 3.1.2
+  props:
+    doc: 高洞子水库调度规程报告.pdf
+    clause_no: 3.1.2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 防洪调度由巴南区防汛抗旱指挥部统一调度，区水利局按调度权限实行分级调度
+    page: 35
+- type: standard_clause
+  name: 调度规程 3.3.1.1
+  props:
+    doc: 高洞子水库调度规程报告.pdf
+    clause_no: 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- type: standard_clause
+  name: 调度规程 3.3.2.2
+  props:
+    doc: 高洞子水库调度规程报告.pdf
+    clause_no: 3.3.2.2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.2.2 保枢纽安全的防洪调度
+    page: 39
+- type: standard_clause
+  name: 防洪预案 4.2.3
+  props:
+    doc: 高洞子水库防洪预案.pdf
+    clause_no: 4.2.3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 4.2.3 调度权限及执行部门
+    page: 38
+- type: standard_clause
+  name: 防洪预案 4.6.1
+  props:
+    doc: 高洞子水库防洪预案.pdf
+    clause_no: 4.6.1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 4.6.1 预警级别及应急措施
+    page: 50
+- type: standard_clause
+  name: 运用计划 7.2
+  props:
+    doc: 高洞子水库汛期调度运用计划.pdf
+    clause_no: '7.2'
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 7.2 防洪调度权限
+    page: 42
+- type: standard_clause
+  name: 运用计划 7.3.1.1
+  props:
+    doc: 高洞子水库汛期调度运用计划.pdf
+    clause_no: 7.3.1.1
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 7.3.1.1 正常年的防洪调度
+    page: 43
+- type: water_level
+  name: 设计洪水位
+  props:
+    kind: 设计洪水位
+    elevation_m: 343
+    storage_wan_m3: 994
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 2 | 设计洪水 | 343 | 994
+    page: 40
+- type: water_level
+  name: 死水位
+  props:
+    kind: 死水位
+    elevation_m: 326
+    storage_wan_m3: 226
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 4 | 死水位 | 326 | 226
+    page: 40
+- type: water_level
+  name: 校核洪水位
+  props:
+    kind: 校核洪水位
+    elevation_m: 343.54
+    storage_wan_m3: 1025
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 1 | 校核洪水 | 343.54 | 1025
+    page: 40
+- type: water_level
+  name: 汛期初期试运行水位（干旱年）
+  props:
+    kind: 汛期试运行水位
+    note: 前一年干旱或现年春旱
+    elevation_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 水库初期干旱年的试运行水位为：340m
+    page: 37
+- type: water_level
+  name: 汛期初期试运行水位（正常年）
+  props:
+    kind: 汛期试运行水位
+    note: 正常年，汛期 5-9 月
+    elevation_m: 338.5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 定出338.5m作为汛期时水库初期试运行水位
+    page: 35
+- type: water_level
+  name: 正常蓄水位
+  props:
+    kind: 正常蓄水位
+    elevation_m: 343
+    storage_wan_m3: 994
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 3 | 正常蓄水位 | 343 | 994
+    page: 40
+relations:
+- subject:
+    type: condition
+    name: 2~3年一遇降雨（100~110mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 2~3年一遇控泄方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量70m³/s
+    page: 36
+- subject:
+    type: condition
+    name: 300年一遇洪水（正常年）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 超标准洪水削峰方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 水库最大能对300年一遇（P=0.33%）的洪水进行削峰
+    page: 39
+- subject:
+    type: condition
+    name: 库水位超过正常蓄水位
+  predicate: DISPATCHED_BY
+  object:
+    type: management_unit
+    name: 巴南区水利局
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 由巴南区水利局下达调度指令
+    page: 42
+- subject:
+    type: condition
+    name: 20年一遇洪水
+  predicate: INSTANCE_OF
+  object:
+    type: condition
+    name: 10~20年一遇降雨（155~170mm）
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 24h大于155mm且小于170mm(10~20年一遇)
+    page: 37
+- subject:
+    type: condition
+    name: 20年一遇洪水
+  predicate: TRIGGERS
+  object:
+    type: response_level
+    name: Ⅳ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 根据洪水预报，可能遭遇20年一遇的洪水
+    page: 50
+- subject:
+    type: condition
+    name: 校核洪水（1000年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 保坝泄洪方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 入库流量达到乃至超过校核洪峰流量1000m³/s时，水位仍继续上涨，为保大坝安全
+    page: 39
+- subject:
+    type: condition
+    name: 10~20年一遇降雨（155~170mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 10~20年一遇控泄方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 24h大于155mm且小于170mm(10~20年一遇)
+    page: 37
+- subject:
+    type: condition
+    name: 1~2年一遇降雨（85~100mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 1~2年一遇控泄方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量60m³/s
+    page: 36
+- subject:
+    type: condition
+    name: 20~50年一遇洪水
+  predicate: TRIGGERS
+  object:
+    type: response_level
+    name: Ⅲ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可能遭遇20年以上50年以下一遇的洪水
+    page: 51
+- subject:
+    type: condition
+    name: 1000年以上一遇洪水
+  predicate: TRIGGERS
+  object:
+    type: response_level
+    name: Ⅰ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可能遭遇1000年以上一遇的洪水
+    page: 53
+- subject:
+    type: condition
+    name: 24h降雨小于85mm（1年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 1年一遇控泄方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量小于85mm（1年一遇）
+    page: 35
+- subject:
+    type: condition
+    name: 20~50年一遇降雨（170~210mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 20~50年一遇控泄方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 24h大于170mm且小于210mm(20~50年一遇)
+    page: 37
+- subject:
+    type: condition
+    name: 库水位超过校核洪水位
+  predicate: DISPATCHED_BY
+  object:
+    type: management_unit
+    name: 巴南区防汛抗旱指挥部
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 由巴南区防汛抗旱指挥部按照应急预案的启动方式启动应急预案
+    page: 42
+- subject:
+    type: condition
+    name: 超下游标准洪水
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 超标准洪水削峰方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 由于下游防护对象的防洪标准为20年一遇
+    page: 39
+- subject:
+    type: condition
+    name: 50~1000年一遇洪水
+  predicate: TRIGGERS
+  object:
+    type: response_level
+    name: Ⅱ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可能遭遇50年以上1000年以下一遇的洪水
+    page: 52
+- subject:
+    type: condition
+    name: 100年一遇洪水（干旱年）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 超标准洪水削峰方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 水库最大能对100年一遇（P=1.00%）的洪水进行削峰
+    page: 39
+- subject:
+    type: condition
+    name: 3~5年一遇降雨（110~130mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 3~5年一遇控泄方案
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量 1 0 0 m^3 / s
+    page: 36
+- subject:
+    type: condition
+    name: 5~10年一遇降雨（130~155mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 5~10年一遇控泄方案（调度规程）
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 洪水控制下泄流量120m³/s
+    page: 36
+- subject:
+    type: condition
+    name: 5~10年一遇降雨（130~155mm）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 5~10年一遇控泄方案（汛期调度运用计划）
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 洪水控制下泄流量125m³/s
+    page: 44
+- subject:
+    type: dispatch_plan
+    name: 保坝泄洪方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.2.2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.2.2 保枢纽安全的防洪调度
+    page: 39
+- subject:
+    type: dispatch_plan
+    name: 保坝泄洪方案
+  predicate: REQUIRES
+  object:
+    type: measure
+    name: 超标准洪水联合泄洪
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开启生态放水管阀门及溢洪道闸门，联合泄洪加大最大下泄流量
+    page: 40
+- subject:
+    type: dispatch_plan
+    name: 中小洪水控泄方案
+  predicate: REQUIRES
+  object:
+    type: measure
+    name: 开闸泄水前通知下游村镇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 高洞子水库需要开闸泄水时，需提前1小时通知下游影响范围内的各个村镇
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 中小洪水控泄方案
+  predicate: REQUIRES
+  object:
+    type: measure
+    name: 开闸泄洪
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 遇中小洪水（水位不超过正常蓄水位343.00m）
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 1~2年一遇控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 5~10年一遇控泄方案（汛期调度运用计划）
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 运用计划 7.3.1.1
+  evidence:
+  - doc: 高洞子水库汛期调度运用计划.pdf
+    quote: 7.3.1.1 正常年的防洪调度
+    page: 43
+- subject:
+    type: measure
+    name: 24小时轮流值班
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处进行24h轮流值班
+    page: 51
+- subject:
+    type: measure
+    name: 超标准洪水联合泄洪
+  predicate: NEXT_STEP
+  object:
+    type: measure
+    name: 启动防洪抢险应急预案
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 当以上措施仍不能安全泄洪，水位继续上涨，应立即启动防洪抢险应急预案
+    page: 40
+- subject:
+    type: measure
+    name: 超标准洪水联合泄洪
+  predicate: USES_FACILITY
+  object:
+    type: engineering_object
+    name: 生态放水管
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开启生态放水管阀门及溢洪道闸门
+    page: 40
+- subject:
+    type: measure
+    name: 超标准洪水联合泄洪
+  predicate: USES_FACILITY
+  object:
+    type: engineering_object
+    name: 溢洪道闸门
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开启生态放水管阀门及溢洪道闸门
+    page: 40
+- subject:
+    type: measure
+    name: 请求外部支援
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 可向上汇报，请求当地驻军支援
+    page: 53
+- subject:
+    type: measure
+    name: 启动防洪抢险应急预案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 防洪预案 4.2.3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 4.2.3 调度权限及执行部门
+    page: 38
+- subject:
+    type: measure
+    name: 上报险情并移交指挥权
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 由高洞子水库管理处向上级上报水库当前险情
+    page: 39
+- subject:
+    type: measure
+    name: 闸门失灵应急处置
+  predicate: NEXT_STEP
+  object:
+    type: measure
+    name: 开闸泄洪
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 当泄洪闸门失灵，应及时进行检修，必要时可将闸门紧急拆除以保证水库下泄能力
+    page: 38
+- subject:
+    type: measure
+    name: 按调度计划调控水位
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处人员立即按照调度计划进行水位调控
+    page: 50
+- subject:
+    type: measure
+    name: 按区防指办法执行响应
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组及高洞子水库管理处应积极配合区防指的安排
+    page: 53
+- subject:
+    type: measure
+    name: 传达应急响应命令
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 防洪预案 4.6.1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 4.6.1 预警级别及应急措施
+    page: 50
+- subject:
+    type: measure
+    name: 传达应急响应命令
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处人员应在1h内将应急响应命令
+    page: 50
+- subject:
+    type: measure
+    name: 专家组到场
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 应急抢险专家组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 专家组成员在接到信息后2h内赴现场进行技术指导
+    page: 51
+- subject:
+    type: measure
+    name: 通知下游镇街
+  predicate: AFFECTS
+  object:
+    type: admin_region
+    name: 龙洲湾街道
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道
+    page: 52
+- subject:
+    type: measure
+    name: 通知下游镇街
+  predicate: AFFECTS
+  object:
+    type: admin_region
+    name: 圣灯山镇
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道
+    page: 52
+- subject:
+    type: measure
+    name: 通知下游镇街
+  predicate: AFFECTS
+  object:
+    type: admin_region
+    name: 一品街道
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道
+    page: 52
+- subject:
+    type: measure
+    name: 通知下游镇街
+  predicate: AFFECTS
+  object:
+    type: admin_region
+    name: 安澜镇
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道
+    page: 52
+- subject:
+    type: measure
+    name: 通知下游镇街
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组向圣灯山镇
+    page: 52
+- subject:
+    type: measure
+    name: 汇报水情工情险情
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处密切关注水位，雨情，加大安全巡查力度
+    page: 52
+- subject:
+    type: measure
+    name: 开闸泄水前通知下游村镇
+  predicate: AFFECTS
+  object:
+    type: admin_region
+    name: 圣灯山镇
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 需提前1小时通知下游影响范围内的各个村镇
+    page: 35
+- subject:
+    type: measure
+    name: 开闸泄水前通知下游村镇
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 需提前1小时通知下游影响范围内的各个村镇
+    page: 35
+- subject:
+    type: measure
+    name: 开闸泄水前通知下游村镇
+  predicate: NEXT_STEP
+  object:
+    type: measure
+    name: 开闸泄洪
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 需提前1小时通知下游影响范围内的各个村镇
+    page: 35
+- subject:
+    type: measure
+    name: 领导现场指挥
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组组长巴南区人民政府副区长
+    page: 52
+- subject:
+    type: measure
+    name: 险情书面报告
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 并在90分钟内由高洞子水库管理处出具详细书面报告
+    page: 31
+- subject:
+    type: measure
+    name: 召集专家组紧急会议
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组召集专家组进行紧急会议
+    page: 52
+- subject:
+    type: measure
+    name: 抢险队伍到位
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 常备队与抢险队
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 常备队和各抢险队到位抢险
+    page: 52
+- subject:
+    type: measure
+    name: 组织人员转移
+  predicate: PROTECTS
+  object:
+    type: admin_region
+    name: 圣灯山镇
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 应急转移人员安置方式为：投亲靠友、借住公房、调运帐篷、搭建临时房屋
+    page: 50
+- subject:
+    type: measure
+    name: 与常备队共同处理险情
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 与常备队一起及时处理险情
+    page: 50
+- subject:
+    type: measure
+    name: 开闸泄洪
+  predicate: USES_FACILITY
+  object:
+    type: engineering_object
+    name: 溢洪道闸门
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 控制溢洪闸开度保持下泄量等于入库量
+    page: 35
+- subject:
+    type: measure
+    name: 向区防指报备
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 同时向巴南区防汛抗旱应急指挥部报备
+    page: 50
+- subject:
+    type: management_unit
+    name: 高洞子水库防汛抗旱应急领导小组
+  predicate: REPORTS_TO
+  object:
+    type: management_unit
+    name: 巴南区防汛抗旱指挥部
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 再由高洞子水库防汛应急领导小组上报至区防办
+    page: 31
+- subject:
+    type: management_unit
+    name: 高洞子水库管理处
+  predicate: REPORTS_TO
+  object:
+    type: management_unit
+    name: 高洞子水库防汛抗旱应急领导小组
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 上报高洞子水库防汛应急领导小组
+    page: 38
+- subject:
+    type: management_unit
+    name: 巴南区防汛抗旱指挥部
+  predicate: REPORTS_TO
+  object:
+    type: management_unit
+    name: 重庆市水利投资（集团）有限公司
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 同时向巴南区防汛抗旱指挥部和重庆市水利投资（集团）有限公司报告
+    page: 38
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 24小时轮流值班
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 进行24h轮流值班
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 加强安全巡查
+  props:
+    source_item: 4
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 加大安全巡查力度
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 按调度计划调控水位
+  props:
+    source_item: 2
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即按照调度计划进行水位调控
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 传达应急响应命令
+  props:
+    timing: 1h 内
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 将应急响应命令和有关信息传送到高洞子水库防汛抗旱应急领导小组各成员
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 通知下游镇街
+  props:
+    source_item: 5
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 汇报水情工情险情
+  props:
+    frequency: 每 2h
+    source_item: 4
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 领导现场指挥
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 坐镇指挥
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 与常备队共同处理险情
+  props:
+    source_item: 2
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 与常备队一起及时处理险情
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅳ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 向区防指报备
+  props:
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 同时向巴南区防汛抗旱应急指挥部报备
+    page: 50
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 24小时轮流值班
+  props:
+    source_item: 4
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 进行24h轮流值班
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 加强安全巡查
+  props:
+    source_item: 5
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 加大安全巡查力度
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 传达应急响应命令
+  props:
+    timing: 30min 内
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 将应急响应命令和有关信息传送到高洞子水库防汛抗旱应急领导小组各成员
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 专家组到场
+  props:
+    timing: 30min 内到场
+    source_item: 2
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 专家组成员在接到信息后30min内赴现场进行技术指导
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 通知下游镇街
+  props:
+    source_item: 6
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 汇报水情工情险情
+  props:
+    frequency: 每 1h
+    source_item: 5
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 每1h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 领导现场指挥
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 亲临现场指挥抢险
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 召集专家组紧急会议
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 召集专家组进行紧急会议
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 抢险队伍到位
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 常备队和各抢险队到位抢险
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅱ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 向区防指报备
+  props:
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 同时向巴南区防汛抗旱应急指挥部报备
+    page: 52
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 24小时轮流值班
+  props:
+    source_item: 4
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 进行24h轮流值班
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 加强安全巡查
+  props:
+    source_item: 5
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 加大安全巡查力度
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 传达应急响应命令
+  props:
+    timing: 1h 内
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 将应急响应命令和有关信息传送到高洞子水库防汛抗旱应急领导小组各成员
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 专家组到场
+  props:
+    timing: 2h 内到场
+    source_item: 2
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 专家组成员在接到信息后2h内赴现场进行技术指导
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 通知下游镇街
+  props:
+    source_item: 6
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 向圣灯山镇、安澜镇、一品街道人民政府龙洲湾街道及巴南区防汛抗旱应急指挥部通报水库的运行现状
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 汇报水情工情险情
+  props:
+    frequency: 每 2h
+    source_item: 5
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 每2h向高洞子水库防汛抗旱应急领导小组汇报水库水情、工情及险情
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 领导现场指挥
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 亲临现场指挥抢险
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 召集专家组紧急会议
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 召集专家组进行紧急会议
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 抢险队伍到位
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 常备队和各抢险队到位抢险
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅲ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 向区防指报备
+  props:
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 同时向巴南区防汛抗旱应急指挥部报备
+    page: 51
+- subject:
+    type: response_level
+    name: Ⅰ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 加强安全巡查
+  props:
+    source_item: 2
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 加大安全巡查力度
+    page: 53
+- subject:
+    type: response_level
+    name: Ⅰ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 请求外部支援
+  props:
+    source_item: 3
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 请求当地驻军支援或启动巴南区级预案
+    page: 53
+- subject:
+    type: response_level
+    name: Ⅰ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 上报险情并移交指挥权
+  props:
+    source_item: 1
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 立即开展先期处置并将险情上报
+    page: 53
+- subject:
+    type: response_level
+    name: Ⅰ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 按区防指办法执行响应
+  props:
+    source_item: 4
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: I级响应按照巴南区防汛抗旱应急指挥部的响应办法执行
+    page: 53
+- subject:
+    type: response_level
+    name: Ⅰ级响应
+  predicate: RESPONDS_WITH
+  object:
+    type: measure
+    name: 汇报水情工情险情
+  props:
+    frequency: 每 0.5h
+    source_item: 2
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 每0.5h向巴南区防汛抗旱应急指挥部办公室汇报水库水情、工情及险情
+    page: 53

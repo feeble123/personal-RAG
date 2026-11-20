@@ -46,6 +46,9 @@ entity_types:
     uid_prefix: cd
     scope: local
     attributes:
+      # 简称：区间工况在文档里叫「20 年以上 50 年以下一遇」，读起来太长，
+      # 存个短名叫「20~50年一遇」。只用于展示，不参与匹配。
+      - {name: display_zh, type: string, description: "简称，如「20~50年一遇」"}
       # 频率用超越概率存（20 年一遇 → 0.05），重现期另存一份，两种写法都能匹配
       - {name: frequency, type: number, description: "超越概率（0.05 = 20 年一遇）"}
       - {name: return_period, type: number, description: "重现期（年）"}
@@ -185,10 +188,21 @@ relation_types:
      source: measure, target: admin_region,
      description: "该动作影响到的下游行政区"}
 
-  # 措施/方案 → 依据条款
+  # 措施/方案 → 依据条款。
+  # source_types 是"除 source 之外还允许的主语"：依据既可能挂在**动作**上，
+  # 也可能挂在**方案**上（「1~2年一遇控泄方案」依据「调度规程 3.3.1.1」）。
+  # 没有它就只能拆成两个关系名，换本体时越拆越乱。
   - {name: CONSTRAINED_BY, display_name: 依据, phase: basis,
-     source: measure, target: standard_clause,
-     description: "这条动作出自哪份文件的哪一条"}
+     source: measure, source_types: [dispatch_plan], target: standard_clause,
+     description: "这条动作/方案出自哪份文件的哪一条"}
+
+  # 工况 → 调度权限单位：这个局面下**谁有权**下达调度指令。
+  # 和 PERFORMED_BY 不是一回事——前者是"谁说了算"，后者是"谁动手做"。
+  # 早先这两条被混用成 PERFORMED_BY（condition → management_unit），
+  # 端点校验一开就暴露了：工况不会"执行"任何动作。
+  - {name: DISPATCHED_BY, display_name: 调度权限归, phase: actor,
+     source: condition, target: management_unit,
+     description: "该工况下的调度指令由谁下达"}
 
   # 措施 → 工程对象（开哪扇闸、用哪个泄水设施）
   - {name: USES_FACILITY, display_name: 使用设施, phase: means,

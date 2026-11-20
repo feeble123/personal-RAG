@@ -125,6 +125,10 @@ class RelationTypeDef:
     # 界面展示用的中文名（如 PART_OF → 属于）；缺省回落到 description
     display_name: str = ""
     target_types: tuple[str, ...] = ()
+    #: 除 `source` 之外还允许的主语类型。
+    #: 有些关系的两端本来就不止一种：`依据` 既可以挂在动作上，也可以挂在方案上。
+    #: 没有它就只能给同一种语义硬拆成两个关系名，换本体时越拆越乱。
+    source_types: tuple[str, ...] = ()
     inverse_of: str | None = None
     #: 链路编排里的档位（basis/flow/actor/means/impact/response）。
     #: 引擎内置了一张「历史关系名 → 档位」的表，但只认那 22 个老名字；
@@ -138,6 +142,12 @@ class RelationTypeDef:
     def allows_object(self, object_type: str) -> bool:
         return object_type in (self.target_types or (self.target,))
 
+    def allows_subject(self, subject_type: str) -> bool:
+        return subject_type == self.source or subject_type in self.source_types
+
+    def all_sources(self) -> tuple[str, ...]:
+        return (self.source, *self.source_types)
+
     def to_dict(self) -> dict[str, Any]:
         out = {
             "name": self.name,
@@ -146,6 +156,8 @@ class RelationTypeDef:
             "display_name": self.display_name or self.description or self.name,
             "description": self.description,
         }
+        if self.source_types:
+            out["source_types"] = list(self.source_types)
         if self.target_types:
             out["target_types"] = list(self.target_types)
         if self.inverse_of:
@@ -322,7 +334,7 @@ class OntologyRegistry:
         rel = self.relation_types.get(relation)
         if rel is None:
             return False
-        if rel.source != subject_type:
+        if not rel.allows_subject(subject_type):
             return False
         return rel.allows_object(object_type)
 
@@ -382,7 +394,8 @@ class OntologyRegistry:
         endpoints: dict[str, dict[str, set[str]]] = {}
         for rel in self.relation_types.values():
             allowed = endpoints.setdefault(rel.name, {})
-            allowed.setdefault(rel.source, set()).update(rel.target_types or (rel.target,))
+            for source in rel.all_sources():
+                allowed.setdefault(source, set()).update(rel.target_types or (rel.target,))
         graph_schema.register_dynamic_types(
             entity_labels=entity_labels,
             entity_labels_zh=entity_labels_zh,
@@ -492,8 +505,9 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
             raise ProfileError(f"{where}.name 重复：{name}")
         source = str(item.get("source") or "").strip()
         target = str(item.get("target") or "").strip()
+        source_types = tuple(str(t) for t in (item.get("source_types") or ()))
         target_types = tuple(str(t) for t in (item.get("target_types") or ()))
-        for ref in (source, target, *target_types):
+        for ref in (source, target, *source_types, *target_types):
             if ref and ref not in entities:
                 raise ProfileError(f"{where} 引用了未定义的实体类型：{ref!r}")
         if not source or not target:
@@ -510,6 +524,7 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
             description=str(item.get("description") or ""),
             display_name=str(item.get("display_name") or ""),
             target_types=target_types,
+            source_types=source_types,
             inverse_of=item.get("inverse_of"),
             phase=phase,
             subsumption=bool(item.get("subsumption", False)),
