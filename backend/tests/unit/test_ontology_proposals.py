@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.services.graph.ontology import proposals
+from app.services.graph.ontology import proposal_prompts, proposals
 from app.services.graph.ontology.anchoring import Candidate
 from app.services.graph.ontology.registry import (
     AttributeDef,
@@ -169,25 +169,25 @@ def _measure_item(name="加强水情监测", **over):
 class TestTBoxDigest:
     def test_类型和字段说明都给到模型(self):
         """模型不知道某个类型有哪些字段，就只能瞎猜——摘要写得清，提案才准。"""
-        text = proposals.tbox_digest(_registry())
+        text = proposal_prompts.tbox_digest(_registry())
         assert "response_level（响应等级）" in text
         assert "枚举: Ⅰ/Ⅱ/Ⅲ" in text
         assert "触发水位" in text
 
     def test_关系的端点必须写清(self):
-        text = proposals.tbox_digest(_registry())
+        text = proposal_prompts.tbox_digest(_registry())
         assert "RESPONDS_WITH（以这些措施响应）：response_level → measure" in text
 
 
 class TestParsePayload:
     def test_从代码块里抠出JSON(self):
         text = '```json\n{"instances":[{"type":"a"}],"relations":[{"predicate":"b"}]}\n```'
-        insts, rels = proposals.parse_payload(text)
+        insts, rels = proposal_prompts.parse_payload(text)
         assert insts == [{"type": "a"}]
         assert rels == [{"predicate": "b"}]
 
     def test_乱七八糟的输出不炸(self):
-        assert proposals.parse_payload("我看了一下，没找到东西。") == ([], [])
+        assert proposal_prompts.parse_payload("我看了一下，没找到东西。") == ([], [])
 
 
 class TestInstanceCandidate:

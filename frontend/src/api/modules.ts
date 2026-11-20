@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AnchorRunResult, AuditLog, ChunkItem, OntologyConstraintReport, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, OntologyTypes, RunRecordResult, SourceFileToken, SourceLocate, SourceSheets, SystemStats, TokenOut, User } from './types'
+import type { AnchorRunResult, AuditLog, ChunkItem, OntologyConstraintReport, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, ProposalReviewResult, ProposeRunResult, OntologyTypes, RunRecordResult, SourceFileToken, SourceLocate, SourceSheets, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -205,8 +205,33 @@ export const ontologyApi = {
     top_k?: number
     dry_run?: boolean
   }) => api.post('/admin/ontology/anchor/run', data).then((r) => r.data as AnchorRunResult),
-  proposals: (params?: { profile?: string; status?: string; method?: string; limit?: number }) =>
-    api.get('/admin/ontology/proposals', { params }).then((r) => r.data as OntologyProposalItem[]),
+  /** 按文档整体扫（7-C C-2）：模型读原文提新实例与新关系 */
+  proposeRun: (data: {
+    profile_id?: string
+    kb_id?: number | null
+    doc_ids?: number[]
+    max_chunks?: number
+    batch_size?: number
+    max_calls?: number
+    dry_run?: boolean
+  }) => api.post('/admin/ontology/propose/run', data).then((r) => r.data as ProposeRunResult),
+  /** 给已有实例补关系（7-C C-3）：不点名就挑最孤立的 */
+  linkRun: (data: {
+    profile_id?: string
+    instance_uids?: string[]
+    limit_instances?: number
+    top_k?: number
+    max_calls?: number
+    kb_id?: number | null
+    dry_run?: boolean
+  }) => api.post('/admin/ontology/link/run', data).then((r) => r.data as ProposeRunResult),
+  proposals: (params?: {
+    profile?: string
+    status?: string
+    method?: string
+    kind?: string
+    limit?: number
+  }) => api.get('/admin/ontology/proposals', { params }).then((r) => r.data as OntologyProposalItem[]),
   acceptProposal: (id: number, adoptValue = false) =>
     api
       .post(`/admin/ontology/proposals/${id}/accept`, null, {
@@ -215,7 +240,9 @@ export const ontologyApi = {
       })
       .then((r) => r.data),
   acceptProposals: (ids: number[]) =>
-    api.post('/admin/ontology/proposals/accept', { ids }).then((r) => r.data),
+    api
+      .post('/admin/ontology/proposals/accept', { ids })
+      .then((r) => r.data as ProposalReviewResult),
   rejectProposal: (id: number) =>
     api.post(`/admin/ontology/proposals/${id}/reject`).then((r) => r.data),
 

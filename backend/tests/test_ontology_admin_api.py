@@ -964,3 +964,109 @@ class TestLinkRun:
             f"{BASE}/link/run", headers=user_headers, json={"profile_id": "tuning"}
         )
         assert r.status_code in (401, 403)
+
+
+class TestProposalLanding:
+    """7-C C-4 审核落地：先实例后关系、失败留在待审区、落完当场体检。"""
+
+    async def _insert(self, *, kind, uid, payload, dedupe):
+        from app.db.models import OntologyProposal
+        from app.db.session import async_session_factory
+
+        async with async_session_factory() as db:
+            row = OntologyProposal(
+                profile_id="tuning",
+                instance_uid=uid,
+                entity_type=payload.get("entity_type") or "",
+                attribute="",
+                value=payload,
+                kind=kind,
+                payload=payload,
+                method="graph",
+                confidence=0.6,
+                evidence={"type": "图提案", "quote": "测试参数 自由水蓄水容量", "doc_id": 1},
+                dedupe_key=dedupe,
+                status="pending",
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+            return row.id
+
+    def _inst(self, name, uid):
+        return {
+            "entity_type": "Parameter",
+            "name": name,
+            "uid": uid,
+            "props": {"group": "水源划分"},
+            "kb_id": 0,
+        }
+
+    async def test_批量接受先建实例再建关系(
+        self, client, admin_headers, cleanup_instances
+    ):
+        """关系提案的 id 更小（先提的），但落地必须排在实例后面——否则边悬空。"""
+        a = self._inst("t4_land_a", "pm:a")
+        b = self._inst("t4_land_b", "pm:b")
+        rel = {
+            "subject_uid": "pm:a",
+            "predicate": "PART_OF",
+            "object_uid": "pm:b",
+            "props": {},
+            "kb_id": 0,
+        }
+        rid = await self._insert(
+            kind="relation", uid="pm:a", payload=rel, dedupe="land-rel"
+        )  # id 最小
+        aid = await self._insert(
+            kind="instance", uid="pm:a", payload=a, dedupe="land-a"
+        )
+        bid = await self._insert(
+            kind="instance", uid="pm:b", payload=b, dedupe="land-b"
+        )
+
+        r = await client.post(
+            f"{BASE}/proposals/accept", headers=admin_headers, json={"ids": [rid, aid, bid]}
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["reviewed"] == 3
+        assert body["failures"] == []
+
+        r = await client.get(f"{BASE}/relations", headers=admin_headers, params={"profile": "tuning"})
+        assert r.status_code == 200, r.text
+        edges = [e for e in r.json() if e["subject_uid"] == "pm:a"]
+        assert edges and edges[0]["predicate"] == "PART_OF"
+
+    async def test_落不下去的留在待审区并说明原因(
+        self, client, admin_headers, cleanup_instances
+    ):
+        rel = {
+            "subject_uid": "pm:a",
+            "predicate": "PART_OF",
+            "object_uid": "pm:没有这个",
+            "props": {},
+            "kb_id": 0,
+        }
+        rid = await self._insert(
+            kind="relation", uid="pm:a", payload=rel, dedupe="land-bad-rel"
+        )
+        aid = await self._insert(
+            kind="instance", uid="pm:a", payload=self._inst("t4_land_a", "pm:a"), dedupe="land-bad-a"
+        )
+
+        r = await client.post(
+            f"{BASE}/proposals/accept", headers=admin_headers, json={"ids": [rid, aid]}
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["reviewed"] == 1          # 只有实例真的落了
+        assert len(body["failures"]) == 1
+        assert "pm:没有这个" in body["failures"][0]["reason"]
+
+        r = await client.get(
+            f"{BASE}/proposals",
+            headers=admin_headers,
+            params={"profile": "tuning", "status": "pending", "kind": "relation"},
+        )
+        assert any(p["id"] == rid for p in r.json())

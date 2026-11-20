@@ -193,11 +193,28 @@ async def reload_profile(
 # ---------------- 自动抽取（F4）：规则先跑 → LLM 补漏 → 人工确认 ----
 
 
+def _pname(payload: dict | None, key: str, names: dict[str, str]) -> str:
+    """提案里记的 uid → 人能看懂的名字（查不到就原样给 uid）。"""
+    if not isinstance(payload, dict):
+        return ""
+    uid = str(payload.get(key) or "")
+    if not uid:
+        return ""
+    return names.get(uid, uid)
+
+
 async def _proposal_out(db: AsyncSession, rows: list) -> list[ProposalOut]:
     """补上实例中文名和当前值——审核列表上光看 uid 没法判断，光看提案值也看不出冲突。"""
     from app.db.models import OntologyInstance
 
     uids = {r.instance_uid for r in rows}
+    # 关系提案的宾语 uid 不在 instance_uid 里，单独收进来——否则审核时只能看到
+    # 主语的名字，另一半是个 uid。
+    for r in rows:
+        payload = getattr(r, "payload", None) or {}
+        for key in ("subject_uid", "object_uid"):
+            if payload.get(key):
+                uids.add(str(payload[key]))
     names: dict[str, str] = {}
     props: dict[str, dict] = {}
     if uids:
@@ -216,6 +233,8 @@ async def _proposal_out(db: AsyncSession, rows: list) -> list[ProposalOut]:
             attribute=r.attribute,
             kind=getattr(r, "kind", "attr") or "attr",
             payload=getattr(r, "payload", None),
+            subject_name=_pname(getattr(r, "payload", None), "subject_uid", names),
+            object_name=_pname(getattr(r, "payload", None), "object_uid", names),
             value=r.value,
             # 锚定提案的 attribute 为空（整条实例），此时没有"当前值"可比
             current_value=props.get(r.instance_uid, {}).get(r.attribute) if r.attribute else None,
@@ -520,34 +539,90 @@ async def list_proposals(
     return await _proposal_out(db, list(rows))
 
 
+# 落地顺序：**先实例后关系**。关系的两端必须已经存在，否则这条边一定悬空。
+_KIND_ORDER = {"instance": 0, "attr": 1, "relation": 2}
+
+
+async def _warnings_for(db: AsyncSession, reg, names: list[str]) -> list[dict]:
+    """落完立刻体检：新建的实例缺什么，当场告诉人。
+
+    等下次开体检页才看见，人早就以为"接受完就建好了"。
+    """
+    from app.services.graph.ontology import constraints
+
+    if not names:
+        return []
+    wanted = set(names)
+    violations = await constraints.check_database(db, reg)
+    return [
+        {
+            "subject": v.subject,
+            "severity": v.severity,
+            "constraint_id": v.constraint_id,
+            "message": v.message,
+        }
+        for v in violations
+        if v.subject in wanted
+    ]
+
+
 async def _review(
     db: AsyncSession, ids: list[int], *, accept: bool, adopt_value: bool = False
 ) -> dict:
-    from app.db.models import OntologyInstance, OntologyProposal
+    from app.db.models import OntologyProposal
+    from app.services.graph.ontology import proposal_accept
 
-    rows = (await db.scalars(select(OntologyProposal).where(OntologyProposal.id.in_(ids)))).all()
+    rows = list(
+        (await db.scalars(select(OntologyProposal).where(OntologyProposal.id.in_(ids)))).all()
+    )
+    pending = [r for r in rows if r.status == "pending"]
+    reg = _registry(pending[0].profile_id if pending else None)
+    pending.sort(key=lambda r: (_KIND_ORDER.get(r.kind, 1), r.id))
+
     done, missing = 0, 0
     touched_nodes: list = []
-    for row in rows:
-        if row.status != "pending":
-            continue
+    touched_edges: list = []
+    failures: list[dict] = []
+    landed_names: list[str] = []
+    for row in pending:
         if accept:
-            ok = await extraction.accept_proposal(db, row, adopt_value=adopt_value)
-            if not ok:
-                missing += 1  # 实例已被删掉：提案失去意义，直接标记
+            if row.kind in ("instance", "relation"):
+                outcome = await proposal_accept.accept(db, reg, row)
+                if not outcome.ok:
+                    # 落不下去就**留在待审区**，并把原因带回去——
+                    # 把"点了接受但什么也没发生"改成"告诉你是谁没建、为什么"
+                    failures.append({"id": row.id, **outcome.to_dict()})
+                    continue
+                if row.kind == "instance":
+                    if outcome.row is not None:
+                        touched_nodes.append(inst_mod.to_node(outcome.row))
+                        landed_names.append(str(getattr(outcome.row, "name", "")))
+                elif outcome.row is not None:
+                    touched_edges.append(rel_mod.to_edge(outcome.row))
             else:
-                from app.services.graph.ontology import instances as inst_mod
-
-                inst = await inst_mod.get_instance_by_uid(db, row.instance_uid)
-                if inst is not None:
-                    touched_nodes.append(inst_mod.to_node(inst))
+                ok = await extraction.accept_proposal(db, row, adopt_value=adopt_value)
+                if not ok:
+                    missing += 1  # 实例已被删掉：提案失去意义，直接标记
+                else:
+                    inst = await inst_mod.get_instance_by_uid(db, row.instance_uid)
+                    if inst is not None:
+                        touched_nodes.append(inst_mod.to_node(inst))
         row.status = "accepted" if accept else "rejected"
         row.reviewed_at = utcnow()
         done += 1
+
     await db.commit()
-    if touched_nodes:
-        await _sync_graph(nodes=touched_nodes)
-    return {"reviewed": done, "skipped": len(ids) - done, "missing_instance": missing}
+    if touched_nodes or touched_edges:
+        await _sync_graph(nodes=touched_nodes, edges=touched_edges)
+    warnings = await _warnings_for(db, reg, landed_names)
+    return {
+        "reviewed": done,       # 真的处理掉的（接受成功或驳回）
+        "skipped": len(rows) - len(pending),  # 不是待审状态，没动
+        "failed": len(failures),  # 落不下去，**仍在待审区**
+        "missing_instance": missing,
+        "failures": failures,
+        "warnings": warnings,
+    }
 
 
 @router.post("/proposals/{proposal_id}/accept")

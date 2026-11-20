@@ -26,18 +26,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Chunk, Document, OntologyInstance, OntologyRelation
 from app.services.graph.ontology.anchoring import Candidate
-from app.services.graph.ontology.proposals import (
+from app.services.graph.ontology.proposal_prompts import (
     SYSTEM_PROMPT,
+    build_link_prompt,
+    build_scan_prompt,
+    parse_payload,
+)
+from app.services.graph.ontology.proposals import (
     InstanceCandidate,
     Known,
     ProposalRunResult,
     RelationCandidate,
     _clean_name,
     build_candidates,
-    build_link_prompt,
-    build_scan_prompt,
     known_from_instances,
-    parse_payload,
 )
 from app.services.graph.ontology.registry import OntologyRegistry
 

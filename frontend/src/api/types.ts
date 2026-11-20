@@ -503,15 +503,55 @@ export interface OntologyProposalItem {
   instance_name: string
   entity_type: string
   attribute: string
+  /** attr=给已有实例填字段；instance=新实例；relation=新关系（7-C） */
+  kind: 'attr' | 'instance' | 'relation' | string
+  /** instance / relation 提案的结构化内容 */
+  payload: Record<string, unknown> | null
+  /** 关系提案的两端名字（后端按 uid 解析好，审核时不用看 uid） */
+  subject_name: string
+  object_name: string
   value: unknown
   /** 实例当前这个字段的值：和提案值并排看，冲突一眼可见（P2） */
   current_value: unknown
-  /** rule / llm = 抽值；anchor = 只找证据（P2） */
-  method: 'rule' | 'llm' | 'anchor' | string
+  /** rule / llm = 抽值；anchor = 只找证据（P2）；graph = 图提案（7-C） */
+  method: 'rule' | 'llm' | 'anchor' | 'graph' | string
   confidence: number
   evidence: Record<string, unknown> | null
   status: string
   created_at: string | null
+}
+
+/** 按文档整体扫 / 补边的一次运行结果（7-C）。 */
+export interface ProposeRunResult {
+  profile_id: string
+  dry_run: boolean
+  /** 范围内一共有多少段可扫 */
+  chunks: number
+  /** 真正送进模型的有几段——**没送的就是没扫** */
+  scanned: number
+  instances: number
+  relations: number
+  rejected: number
+  saved: number
+  reject_reasons: Record<string, number>
+  notes: string[]
+  preview: Array<Record<string, unknown>>
+}
+
+/** 审核一条/一批提案的结果（7-C）：失败了要知道是谁、为什么。 */
+export interface ProposalReviewResult {
+  reviewed: number
+  skipped: number
+  failed: number
+  missing_instance: number
+  failures: Array<{ id: number; kind: string; subject: string; reason: string }>
+  /** 落地后立刻体检：新建的实例还缺什么 */
+  warnings: Array<{
+    subject: string
+    severity: string
+    constraint_id: string
+    message: string
+  }>
 }
 
 /** 一次运行记录（O8-2）：率定跑完后上报，落成 Run 节点 + 参数/指标边。 */

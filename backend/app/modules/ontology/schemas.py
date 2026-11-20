@@ -264,6 +264,9 @@ class ProposalOut(BaseModel):
     attribute: str
     kind: str = "attr"
     payload: dict[str, Any] | None = None
+    # 关系提案的两端名字：光看 uid 审核时没法判断（7-C C-4）
+    subject_name: str = ""
+    object_name: str = ""
     value: Any
     # 实例当前这个字段的值：审核时和提案值并排看，冲突一眼可见（P2）
     current_value: Any = None
