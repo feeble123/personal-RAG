@@ -44,6 +44,7 @@ import { useOntologyLibrary } from '@/stores/ontologyLibrary'
 import TBoxPanel from './ontology/TBoxPanel'
 import ExtractionPanel from './ontology/ExtractionPanel'
 import ImportCenter from './ontology/ImportCenter'
+import HealthPanel from './ontology/HealthPanel'
 import RunForm from './ontology/RunForm'
 import type { OntologyInstance, OntologyRelation, OntologyRunRecord } from '@/api/types'
 import InstanceForm from './ontology/InstanceForm'
@@ -84,6 +85,13 @@ export default function OntologyManager() {
     queryFn: () =>
       ontologyApi.relations({ profile: profileId || undefined, status: 'all', limit: 5000 }),
   })
+  // 约束体检（7-B）：这个库的 TBox 声明了哪些规矩、当前数据违反了哪几条
+  const healthQuery = useQuery({
+    queryKey: ['ontology-health', profileId],
+    queryFn: () => ontologyApi.constraints(profileId || undefined),
+  })
+  const healthErrors = healthQuery.data?.summary.errors ?? 0
+  const healthTotal = healthQuery.data?.summary.total ?? 0
   // 运行记录（O8-2）：只有库里有 Run 类型时才查，别的库查了也是空
   const hasRunType = (typesQuery.data?.entity_types ?? []).some((t) => t.name === 'Run')
   const runsQuery = useQuery({
@@ -129,6 +137,8 @@ export default function OntologyManager() {
     qc.invalidateQueries({ queryKey: ['ontology-instances'] })
     qc.invalidateQueries({ queryKey: ['ontology-relations'] })
     qc.invalidateQueries({ queryKey: ['ontology-graph'] })
+    // 改了数据，体检结论会跟着变——不刷新的话「还缺 3 条」会一直挂着
+    qc.invalidateQueries({ queryKey: ['ontology-health'] })
   }
 
   const saveInstance = useMutation({
@@ -507,6 +517,36 @@ export default function OntologyManager() {
                     }}
                   />
                 </Card>
+              ),
+            },
+            {
+              key: 'health',
+              label: (
+                <Space size={4}>
+                  体检
+                  {healthErrors > 0 ? (
+                    <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                      {healthErrors}
+                    </Tag>
+                  ) : healthTotal > 0 ? (
+                    <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                      {healthTotal}
+                    </Tag>
+                  ) : null}
+                </Space>
+              ),
+              children: (
+                <HealthPanel
+                  report={healthQuery.data}
+                  loading={healthQuery.isFetching}
+                  entityTypes={entityTypes}
+                  instances={instances}
+                  onRefetch={() => qc.invalidateQueries({ queryKey: ['ontology-health'] })}
+                  onLocate={(row) => {
+                    setActiveTab('instances')
+                    setInstanceModal({ open: true, row })
+                  }}
+                />
               ),
             },
             {

@@ -1,7 +1,7 @@
 import { api } from './client'
 import { useAuthStore } from '@/stores/auth'
 import type { AnswerMode } from '@/stores/chat'
-import type { AnchorRunResult, AuditLog, ChunkItem, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, OntologyTypes, RunRecordResult, SourceFileToken, SourceLocate, SourceSheets, SystemStats, TokenOut, User } from './types'
+import type { AnchorRunResult, AuditLog, ChunkItem, OntologyConstraintReport, Citation, Conversation, ExcelColumnSuggestion, ExtractRunResult, FlowImportResult, KnowledgeBase, MemoryItem, MemoryStats, Message, OntologyAskResult, OntologyGraph, InstanceImportResult, OntologyImportResult, OntologyInstance, OntologyLibrary, OntologyParamCard, OntologyProposalItem, OntologyRelation, OntologyRunRecord, OntologyTypes, RunRecordResult, SourceFileToken, SourceLocate, SourceSheets, SystemStats, TokenOut, User } from './types'
 
 // ===== 认证 =====
 export const authApi = {
@@ -104,6 +104,15 @@ export const ontologyApi = {
   /** TBox：当前本体有哪些实体类型 / 关系类型 / 属性 */
   types: (profile?: string) =>
     api.get('/admin/ontology/types', { params: { profile } }).then((r) => r.data as OntologyTypes),
+  /**
+   * 约束体检：TBox 里声明了什么规矩、当前数据违反了哪几条。
+   *
+   * **只报不改**——违规是数据问题，要人来决定是补数据还是改规矩。
+   */
+  constraints: (profile?: string) =>
+    api
+      .get('/admin/ontology/constraints', { params: { profile } })
+      .then((r) => r.data as OntologyConstraintReport),
   /** 图谱全览：节点 + 边（节点来自 PG 实例，边来自图库） */
   graph: (params?: Record<string, unknown>) =>
     api.get('/admin/ontology/graph', { params }).then((r) => r.data as OntologyGraph),

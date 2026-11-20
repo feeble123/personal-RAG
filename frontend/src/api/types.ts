@@ -356,6 +356,67 @@ export interface OntologyRelation {
   updated_at: string | null
 }
 
+/**
+ * 一条本体约束（TBox `constraints:` 里声明的规矩）。
+ *
+ * 每条约束都带 `cq`——追溯到 `docs/本体能力问题清单.md` 里的编号。
+ * 「这条规矩为什么存在」必须能回答，否则规矩会变成没人敢改的感觉。
+ */
+export interface OntologyConstraint {
+  id: string
+  type: 'required_attribute' | 'min_count' | 'max_count' | 'unique_attribute' | 'coverage'
+  entity: string
+  severity: 'error' | 'warning'
+  relation?: string[]
+  direction?: 'in' | 'out'
+  target_type?: string
+  attribute?: string
+  min?: number
+  max?: number
+  min_attr?: string
+  total_attr?: string
+  item_attr?: string
+  /** 追溯到哪条能力问题 */
+  cq?: string
+  message?: string
+}
+
+/** 一条约束违规：哪个实例、违反了哪条规矩、缺什么。 */
+export interface OntologyViolation {
+  constraint_id: string
+  type: string
+  severity: 'error' | 'warning'
+  entity: string
+  /** 出问题的实例名；整类问题时也用它 */
+  subject: string
+  message: string
+  cq?: string
+  detail?: {
+    actual?: number
+    expected?: number
+    missing?: number
+    excess?: number
+    /** coverage：原文第几条没有人认领 */
+    missing_items?: number[]
+    covered_items?: number[]
+    untagged?: string[]
+    [key: string]: unknown
+  }
+}
+
+/** 约束体检报告。 */
+export interface OntologyConstraintReport {
+  profile_id: string
+  constraints: OntologyConstraint[]
+  summary: {
+    total: number
+    errors: number
+    warnings: number
+    by_constraint: Record<string, number>
+  }
+  violations: OntologyViolation[]
+}
+
 /** 参数表导入结果（dry_run=true 时只预演）。 */
 export interface OntologyImportResult {
   dry_run: boolean
