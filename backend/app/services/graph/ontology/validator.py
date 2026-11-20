@@ -58,6 +58,26 @@ def _check_attribute(name: str, attr_type: str, values: tuple[str, ...], value: 
     return None
 
 
+def missing_required(
+    registry: OntologyRegistry, entity_type: str, props: dict[str, Any] | None = None
+) -> list[str]:
+    """这条实例还缺哪些必填属性。
+
+    单独拎出来是因为**提案和落地要区别对待**：模型提的新实例可以缺字段（缺什么
+    由人来补），但缺字段的实例不该被无声无息地写进库。提案阶段拿它当提醒，
+    落地阶段拿它当闸门——两边用的是同一份「哪些属性必填」的知识。
+    """
+    ent = registry.entity(entity_type)
+    if ent is None:
+        return []
+    props = props or {}
+    return [
+        a.name
+        for a in ent.attributes.values()
+        if a.required and props.get(a.name) in (None, "")
+    ]
+
+
 def validate_entity(
     registry: OntologyRegistry,
     entity_type: str,

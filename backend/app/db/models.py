@@ -724,7 +724,13 @@ class OntologyProposal(Base):
     entity_type: Mapped[str] = mapped_column(String(60), nullable=False)
     attribute: Mapped[str] = mapped_column(String(60), nullable=False)
     value: Mapped[Any] = mapped_column(JSONType, nullable=False)
-    # rule（TBox 正则）/ llm（大模型抽取）
+    # attr（既有实例的字段）/ instance（新实例）/ relation（新关系）——F5 图提案
+    kind: Mapped[str] = mapped_column(
+        String(12), default="attr", server_default="attr", nullable=False
+    )
+    # instance / relation 提案的结构化内容；attr 提案为空
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    # rule（TBox 正则）/ llm（大模型抽取）/ anchor（证据锚定）/ graph（图提案）
     method: Mapped[str] = mapped_column(
         String(10), default="rule", server_default="rule", nullable=False
     )
