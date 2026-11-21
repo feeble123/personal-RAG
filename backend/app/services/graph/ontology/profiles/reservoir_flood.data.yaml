@@ -918,6 +918,36 @@ instances:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 3.3.2.2 保枢纽安全的防洪调度
     page: 39
+# 下面三条是补 CQ-09 时新增的：原来 12 个调度方案里只有 3 个挂了条款边。
+# 原文的小节标题就是条款出处——「3.3.1.1 正常年的防洪调度」下逐条列 ①~⑦，
+# 每个方案的正文都在这条标题之下。
+- type: standard_clause
+  name: 调度规程 3.3.1
+  props:
+    doc: 高洞子水库调度规程报告.pdf
+    clause_no: '3.3.1'
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1 正常情况下的防洪调度
+    page: 35
+- type: standard_clause
+  name: 调度规程 3.3.1.2
+  props:
+    doc: 高洞子水库调度规程报告.pdf
+    clause_no: 3.3.1.2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.2干旱年的防洪调度
+    page: 37
+- type: standard_clause
+  name: 调度规程 3.3.2.1
+  props:
+    doc: 高洞子水库调度规程报告.pdf
+    clause_no: 3.3.2.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.2.1 超标准洪水的防洪调度
+    page: 39
 - type: standard_clause
   name: 防洪预案 4.2.3
   props:
@@ -1416,6 +1446,108 @@ relations:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 3.3.1.1 正常年的防洪调度
     page: 35
+# ---- CQ-09：把剩下 9 个方案的条款边补齐 ----
+# 正常年那 7 档都写在「3.3.1.1 正常年的防洪调度」之下（①~⑦逐条），干旱年那 6 档
+# 在「3.3.1.2 干旱年的防洪调度」之下，非常情况在 3.3.2.1 / 3.3.2.2。
+- subject:
+    type: dispatch_plan
+    name: 1年一遇控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 2~3年一遇控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 3~5年一遇控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 5~10年一遇控泄方案（调度规程）
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 10~20年一遇控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 20~50年一遇控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.1 正常年的防洪调度
+    page: 35
+- subject:
+    type: dispatch_plan
+    name: 5~20年一遇控泄方案（干旱年）
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1.2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1.2干旱年的防洪调度
+    page: 37
+- subject:
+    type: dispatch_plan
+    name: 超标准洪水削峰方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.2.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.2.1 超标准洪水的防洪调度
+    page: 39
+- subject:
+    type: dispatch_plan
+    name: 中小洪水控泄方案
+  predicate: CONSTRAINED_BY
+  object:
+    type: standard_clause
+    name: 调度规程 3.3.1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 3.3.1 正常情况下的防洪调度
+    page: 35
 - subject:
     type: dispatch_plan
     name: 5~10年一遇控泄方案（汛期调度运用计划）
@@ -1746,6 +1878,18 @@ relations:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 控制溢洪闸开度保持下泄量等于入库量
     page: 35
+# CQ-21：涉及泄水设施的措施里，这条原来没挂设施。
+- subject:
+    type: measure
+    name: 闸门失灵应急处置
+  predicate: USES_FACILITY
+  object:
+    type: engineering_object
+    name: 溢洪道闸门
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 当泄洪闸门失灵，应及时进行检修，必要时可将闸门紧急拆除以保证水库下泄能力
+    page: 38
 - subject:
     type: measure
     name: 向区防指报备
