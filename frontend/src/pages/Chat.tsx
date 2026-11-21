@@ -97,6 +97,9 @@ export default function Chat() {
       evidence_top_score: m.evidence_top_score ?? null,
       answer_complete: m.answer_complete ?? null,
       optimized: m.optimized ?? false,
+      // 本体事实卡片：刷新/重进会话后要还原，否则只剩一段文字，
+      // 看不出这条回答是本体给的还是普通检索给的
+      ontologyFacts: m.ontology_facts ?? null,
     })),
     ...messages,
   ]

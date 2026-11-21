@@ -1240,3 +1240,32 @@ async def test_empty_llm_answer_shows_hint(client, user_headers, sample_kb, monk
     r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
     asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
     assert asst["content"].strip(), "落库的助手消息不能是空白"
+
+
+async def test_history_keeps_ontology_facts(client, user_headers, sample_kb):
+    """本体事实要随消息落库，重进会话还能看到。
+
+    以前 facts 只走 SSE：发给前端塞进当前这条流式消息，既不落库、也不进历史接口。
+    刷新页面或过一会儿再打开会话，卡片就没了，只剩一段文字答案——
+    「这条到底是本体 RAG 还是普通 RAG」当场看不出来。
+    """
+    kb_id, _ = sample_kb
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    async with client.stream(
+        "POST",
+        f"/api/conversations/{conv_id}/chat",
+        headers=user_headers,
+        json={"content": "明渠均匀流的形成条件", "kb_id": kb_id, "mode": "ontology"},
+    ) as resp:
+        assert resp.status_code == 200
+        async for _line in resp.aiter_lines():
+            pass
+
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    facts = asst.get("ontology_facts")
+    assert facts is not None, "历史消息里丢了本体事实"
+    assert facts["mode"] == "ontology"
+    assert "facts" in facts and "fallback_used" in facts

@@ -413,21 +413,35 @@ def _labeled_props(nodes: dict[str, Any], reg: Any, uid: str) -> dict[str, Any]:
 
 
 def _label_edge_props(
-    nodes: dict[str, Any], reg: Any, object_uid: str, props: dict[str, Any] | None
+    nodes: dict[str, Any],
+    reg: Any,
+    predicate: str,
+    object_uid: str,
+    props: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """边属性 → 中文键，**只收 TBox 里声明过的**。
 
-    边属性是「随主语变」的值：同一条措施在Ⅱ级是「30min 内」、在Ⅳ级是「1h 内」。
+    边属性是「随关系本身变」的值：同一条措施在Ⅱ级是「30min 内」、在Ⅳ级是「1h 内」。
     挂在节点上就会串味——实测回答里出现「时限：Ⅳ/Ⅲ级 1h 内；Ⅱ级 30min 内」，
     读者得自己从四个等级里挑一个。
 
-    `source_item` 这类内部字段没有声明，不进正文。
+    声明位置有两种，先看关系自己的，再回落到宾语类型的属性：
+    - `relation_types[].attributes`：只属于这条关系的值（如「工况→方案」的依据条款，
+      同一个方案在正常年/干旱年下依据不同，挂方案上就只能留一个）；
+    - 宾语类型的属性：历史写法（如把 `target_level_m` 当成方案的属性），继续兼容。
+
+    `source_item` 这类内部字段两处都没声明，不进正文。
     """
+    rel = reg.relation(predicate) if reg is not None else None
     node = nodes.get(object_uid)
     entity = reg.entity(getattr(node, "type_name", "")) if reg is not None else None
     out: dict[str, Any] = {}
     for key, value in (props or {}).items():
-        attr = entity.attributes.get(key) if entity is not None else None
+        attr = None
+        if rel is not None:
+            attr = rel.attributes.get(key)
+        if attr is None and entity is not None:
+            attr = entity.attributes.get(key)
         if attr is None or value in (None, ""):
             continue
         out[attr.description or key] = value
@@ -783,7 +797,9 @@ async def _graph_facts(
         # 「传达命令在Ⅱ级 30min 内」这种差异只能挂在边上，节点上只能写一句笼统的。
         object_props = _labeled_props(nodes, reg, edge.object_uid)
         object_props.update(
-            _label_edge_props(nodes, reg, edge.object_uid, getattr(edge, "props", None))
+            _label_edge_props(
+                nodes, reg, edge.predicate_name, edge.object_uid, getattr(edge, "props", None)
+            )
         )
         facts.append(
             {

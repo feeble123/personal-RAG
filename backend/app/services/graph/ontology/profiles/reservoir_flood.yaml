@@ -168,9 +168,17 @@ relation_types:
   # phase 是 response 不是 basis：它讲的是**该做什么**，不是"凭什么这么判"。
   # 早先挂成 basis，答案里就出现两段并排的「工况与依据」——一段是调度方案、
   # 一段是等级判据，读起来像两份文档拼在一起（实测）。
-  - {name: STIPULATES, display_name: 规定, phase: response,
-     source: condition, target: dispatch_plan,
-     description: "该工况下按此方案调度"}
+  - name: STIPULATES
+    display_name: 规定
+    phase: response
+    source: condition
+    target: dispatch_plan
+    description: "该工况下按此方案调度"
+    # 依据条款挂**边**上，不挂方案上：同一套控泄方案在正常年和干旱年都在用，
+    # 但两套年型的出处是不同小节。挂方案上只能留一条，于是干旱年的工况
+    # 会答出正常年的条款（实测）。
+    attributes:
+      - {name: clause, type: string, description: "依据条款"}
 
   # 工况 → 工况：粗说法落在细档位里。
   # 四份文件里「20 年一遇」有好几种写法（预警条件、下游标准、调度分档），

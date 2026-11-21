@@ -122,6 +122,8 @@ export interface Message {
   // LLM优化（opt-in）：True = 用户点「🤖 LLM优化」产生的结果
   optimized: boolean
   created_at: string
+  // 本体事实（O7）：历史消息还原用，形状同 SSE 的 facts 事件
+  ontology_facts?: OntologyFactsEvent | null
 }
 
 export interface Citation {

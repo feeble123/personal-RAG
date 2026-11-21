@@ -1133,6 +1133,8 @@ relations:
     name: 1年一遇控泄方案
   props:
     target_level_m: 340.0
+  props:
+    clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 预计24h降雨量小于85mm（1年一遇）的情况下，洪水洪峰流量小于安全下泄流量
@@ -1146,6 +1148,8 @@ relations:
     name: 1~2年一遇控泄方案
   props:
     target_level_m: 340.0
+  props:
+    clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 预计24h降雨量大于85mm且小于100mm（1~2年一遇）的情况下，洪水初期控制下泄流量为60m³/s
@@ -1159,6 +1163,8 @@ relations:
     name: 2~3年一遇控泄方案
   props:
     target_level_m: 340.0
+  props:
+    clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 预计24h降雨量大于100mm且小于110mm（2~3年一遇）的情况下，洪水初期控制下泄流量为70m³/s
@@ -1172,6 +1178,8 @@ relations:
     name: 3~5年一遇控泄方案
   props:
     target_level_m: 340.0
+  props:
+    clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 预计24h降雨量大于110mm且小于130mm（3~5年一遇）的情况下，洪水初期控制下泄流量为100m³/s
@@ -1185,6 +1193,8 @@ relations:
     name: 5~20年一遇控泄方案（干旱年）
   props:
     target_level_m: 340.0
+  props:
+    clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 降雨预报24h降雨量超过130mm且小于170mm（5~20年一遇）的情况下，洪水初期控制下泄流量为130m³/s
@@ -1198,6 +1208,8 @@ relations:
     name: 20~50年一遇控泄方案
   props:
     target_level_m: 340.0
+  props:
+    clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 降雨预报24h降雨量超过170mm且小于210mm（20~50年一遇）的情况下，洪水初期控制下泄流量为130m³/s
@@ -1211,6 +1223,8 @@ relations:
     name: 2~3年一遇控泄方案
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量70m³/s
@@ -1222,6 +1236,8 @@ relations:
   object:
     type: dispatch_plan
     name: 超标准洪水削峰方案
+  props:
+    clause: "调度规程 3.3.2.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 水库最大能对300年一遇（P=0.33%）的洪水进行削峰
@@ -1266,6 +1282,8 @@ relations:
   object:
     type: dispatch_plan
     name: 保坝泄洪方案
+  props:
+    clause: "调度规程 3.3.2.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 入库流量达到乃至超过校核洪峰流量1000m³/s时，水位仍继续上涨，为保大坝安全
@@ -1279,6 +1297,8 @@ relations:
     name: 10~20年一遇控泄方案
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 24h大于155mm且小于170mm(10~20年一遇)
@@ -1292,6 +1312,8 @@ relations:
     name: 1~2年一遇控泄方案
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量60m³/s
@@ -1327,6 +1349,8 @@ relations:
     name: 1年一遇控泄方案
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 预计24h降雨量小于85mm（1年一遇）
@@ -1340,6 +1364,8 @@ relations:
     name: 20~50年一遇控泄方案
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 24h大于170mm且小于210mm(20~50年一遇)
@@ -1362,6 +1388,8 @@ relations:
   object:
     type: dispatch_plan
     name: 超标准洪水削峰方案
+  props:
+    clause: "调度规程 3.3.2.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 由于下游防护对象的防洪标准为20年一遇
@@ -1384,6 +1412,8 @@ relations:
   object:
     type: dispatch_plan
     name: 超标准洪水削峰方案
+  props:
+    clause: "调度规程 3.3.2.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 水库最大能对100年一遇（P=1.00%）的洪水进行削峰
@@ -1397,6 +1427,8 @@ relations:
     name: 3~5年一遇控泄方案
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量 1 0 0 m^3 / s
@@ -1410,6 +1442,8 @@ relations:
     name: 5~10年一遇控泄方案（调度规程）
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量120m³/s
@@ -1423,6 +1457,8 @@ relations:
     name: 5~10年一遇控泄方案（汛期调度运用计划）
   props:
     target_level_m: 338.5
+  props:
+    clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库汛期调度运用计划.pdf
     quote: 洪水控制下泄流量125m³/s
@@ -1473,76 +1509,7 @@ relations:
     page: 35
 - subject:
     type: dispatch_plan
-    name: 1~2年一遇控泄方案
-  predicate: CONSTRAINED_BY
-  object:
-    type: standard_clause
-    name: 调度规程 3.3.1.1
-  evidence:
-  - doc: 高洞子水库调度规程报告.pdf
-    quote: 3.3.1.1 正常年的防洪调度
-    page: 35
-# ---- CQ-09：把剩下 9 个方案的条款边补齐 ----
-# 正常年那 7 档都写在「3.3.1.1 正常年的防洪调度」之下（①~⑦逐条），干旱年那 6 档
-# 在「3.3.1.2 干旱年的防洪调度」之下，非常情况在 3.3.2.1 / 3.3.2.2。
-- subject:
-    type: dispatch_plan
-    name: 1年一遇控泄方案
-  predicate: CONSTRAINED_BY
-  object:
-    type: standard_clause
-    name: 调度规程 3.3.1.1
-  evidence:
-  - doc: 高洞子水库调度规程报告.pdf
-    quote: 3.3.1.1 正常年的防洪调度
-    page: 35
-- subject:
-    type: dispatch_plan
-    name: 2~3年一遇控泄方案
-  predicate: CONSTRAINED_BY
-  object:
-    type: standard_clause
-    name: 调度规程 3.3.1.1
-  evidence:
-  - doc: 高洞子水库调度规程报告.pdf
-    quote: 3.3.1.1 正常年的防洪调度
-    page: 35
-- subject:
-    type: dispatch_plan
-    name: 3~5年一遇控泄方案
-  predicate: CONSTRAINED_BY
-  object:
-    type: standard_clause
-    name: 调度规程 3.3.1.1
-  evidence:
-  - doc: 高洞子水库调度规程报告.pdf
-    quote: 3.3.1.1 正常年的防洪调度
-    page: 35
-- subject:
-    type: dispatch_plan
-    name: 5~10年一遇控泄方案（调度规程）
-  predicate: CONSTRAINED_BY
-  object:
-    type: standard_clause
-    name: 调度规程 3.3.1.1
-  evidence:
-  - doc: 高洞子水库调度规程报告.pdf
-    quote: 3.3.1.1 正常年的防洪调度
-    page: 35
-- subject:
-    type: dispatch_plan
     name: 10~20年一遇控泄方案
-  predicate: CONSTRAINED_BY
-  object:
-    type: standard_clause
-    name: 调度规程 3.3.1.1
-  evidence:
-  - doc: 高洞子水库调度规程报告.pdf
-    quote: 3.3.1.1 正常年的防洪调度
-    page: 35
-- subject:
-    type: dispatch_plan
-    name: 20~50年一遇控泄方案
   predicate: CONSTRAINED_BY
   object:
     type: standard_clause

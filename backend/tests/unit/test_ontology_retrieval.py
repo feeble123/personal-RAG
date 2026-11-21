@@ -369,7 +369,7 @@ class TestEdgePropsOverride:
     def test_边属性用中文键且覆盖节点上的同名属性(self):
         from app.services.graph.ontology import retrieval as R
 
-        out = R._label_edge_props(self._nodes(), self._reg(), "ms:1", {"timing": "30min 内"})
+        out = R._label_edge_props(self._nodes(), self._reg(), "RESPONDS_WITH", "ms:1", {"timing": "30min 内"})
         assert out == {"时限": "30min 内"}
 
     def test_未声明的内部字段不进正文(self):
@@ -377,14 +377,14 @@ class TestEdgePropsOverride:
 
         # source_item 是引擎内部用的，TBox 没声明，不该出现在给模型的属性里
         out = R._label_edge_props(
-            self._nodes(), self._reg(), "ms:1", {"source_item": 1, "timing": "30min 内"}
+            self._nodes(), self._reg(), "RESPONDS_WITH", "ms:1", {"source_item": 1, "timing": "30min 内"}
         )
         assert "source_item" not in out and len(out) == 1
 
     def test_空值不占位(self):
         from app.services.graph.ontology import retrieval as R
 
-        assert R._label_edge_props(self._nodes(), self._reg(), "ms:1", {"timing": ""}) == {}
+        assert R._label_edge_props(self._nodes(), self._reg(), "RESPONDS_WITH", "ms:1", {"timing": ""}) == {}
 
 
 class TestSiblingPruning:

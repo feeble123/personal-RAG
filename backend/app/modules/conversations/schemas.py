@@ -52,6 +52,8 @@ class MessageOut(ORMModel):
     created_at: datetime
     # 引用随消息返回（历史会话可还原）
     citations: list[CitationOut] = []
+    # 本体事实随消息返回：以前只在 SSE 的 facts 事件里发一次，刷新会话就没了
+    ontology_facts: dict | None = None
 
 
 class MessageListOut(BaseModel):

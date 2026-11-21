@@ -260,12 +260,14 @@ async def chat(
                 #      回退走下方原有检索链路，行为与 kb 模式完全一致。
                 ontology_pack = None
                 ontology_hit = False
+                # 落库用的事实体（刷新会话后卡片要还在，见 _persist 那一段）
+                ontology_payload: dict | None = None
                 if body.mode in ("ontology", "hybrid"):
                     ontology_pack = await retrieve_with_ontology(
                         sdb, search_query, kb_id=body.kb_id, allow_fallback=False
                     )
                     ontology_hit = bool(ontology_pack.facts)
-                    yield _sse({"event": "facts", "data": {
+                    ontology_payload = {
                         "mode": body.mode,
                         "facts": ontology_pack.facts,
                         "fallback_used": not ontology_hit,
@@ -274,7 +276,8 @@ async def chat(
                         "sources": ontology_pack.sources,
                         "latency_ms": ontology_pack.latency_ms,
                         "notes": ontology_pack.notes,
-                    }})
+                    }
+                    yield _sse({"event": "facts", "data": ontology_payload})
 
                 # 3) 问答记忆（用户背书，先于检索）：命中即秒回，不浪费检索
                 #    good → 直接复用记忆答案；bad → 强制跳过语义缓存重新检索
@@ -560,6 +563,9 @@ async def chat(
                     evidence_level=evidence_level,
                     evidence_top_score=evidence_top_score,
                     answer_complete=answer_complete,
+                    # 存整个 facts 事件体：前端卡片读的就是这个形状，
+                    # 以后加字段不用再动表结构
+                    ontology_facts=ontology_payload,
                 )
                 sdb.add(asst)
                 await sdb.flush()

@@ -149,6 +149,11 @@ class RelationTypeDef:
     #: 问 A 的时候，B 身上的事实一并算作 A 的（标 `inherited`）。
     #: 没有这个标记，`INSTANCE_OF` 就只是一条普通边，不传递也不继承。
     subsumption: bool = False
+    #: 这条关系上允许携带的**边属性**（`{名字: AttributeDef}`）。
+    #: 有些值不属于两端任何一个节点，只属于"这条规定本身"：
+    #: 同一套控泄方案在正常年和干旱年下依据的条款不同，挂在方案上就只能留一个。
+    #: 声明在关系上，YAML 里怎么写、答案里怎么显示，都不用引擎为某个领域改代码。
+    attributes: dict[str, AttributeDef] = field(default_factory=dict)
 
     def allows_object(self, object_type: str) -> bool:
         return object_type in (self.target_types or (self.target,))
@@ -177,6 +182,8 @@ class RelationTypeDef:
             out["phase"] = self.phase
         if self.subsumption:
             out["subsumption"] = True
+        if self.attributes:
+            out["attributes"] = [a.to_dict() for a in self.attributes.values()]
         return out
 
 
@@ -440,6 +447,48 @@ def _resolve(profile: str | Path) -> Path:
     return PROFILES_DIR / f"{profile}.yaml"
 
 
+def _parse_attributes(raw: Any, where: str) -> dict[str, AttributeDef]:
+    """解析 `attributes:` 段（实体和关系共用同一套写法）。"""
+    attributes: dict[str, AttributeDef] = {}
+    for a_idx, attr in enumerate(raw or []):
+        a_where = f"{where}.attributes[{a_idx}]"
+        if not isinstance(attr, dict) or not attr.get("name"):
+            raise ProfileError(f"{a_where} 缺少 name")
+        a_name = str(attr["name"]).strip()
+        a_type = str(attr.get("type") or "string").strip()
+        if a_type not in _ATTR_TYPES:
+            raise ProfileError(
+                f"{a_where}.type 非法：{a_type!r}（可选：{', '.join(sorted(_ATTR_TYPES))}）"
+            )
+        values = tuple(str(v) for v in (attr.get("values") or ()))
+        if a_type == "enum" and not values:
+            raise ProfileError(f"{a_where} 是 enum 但没给 values")
+        if a_name in attributes:
+            raise ProfileError(f"{a_where}.name 重复：{a_name}")
+        extract = attr.get("extract")
+        if extract is not None and not isinstance(extract, dict):
+            raise ProfileError(f"{a_where}.extract 必须是映射（pattern / unit）")
+        if isinstance(extract, dict) and not extract.get("pattern"):
+            raise ProfileError(f"{a_where}.extract 缺少 pattern（正则）")
+        compare = str(attr.get("compare") or "").strip()
+        if compare and compare not in _COMPARES:
+            raise ProfileError(
+                f"{a_where}.compare 非法：{compare!r}（可选：{', '.join(sorted(_COMPARES))}）"
+            )
+        if compare and a_type != "number":
+            raise ProfileError(f"{a_where}.compare 只对 number 属性有意义")
+        attributes[a_name] = AttributeDef(
+            name=a_name,
+            type=a_type,
+            required=bool(attr.get("required", False)),
+            values=values,
+            description=str(attr.get("description") or ""),
+            extract=dict(extract) if isinstance(extract, dict) else None,
+            compare=compare,
+        )
+    return attributes
+
+
 def _parse_entities(raw: Any, path: Path) -> dict[str, EntityTypeDef]:
     if not isinstance(raw, list) or not raw:
         raise ProfileError(f"{path.name}: entity_types 必须是非空列表")
@@ -460,43 +509,7 @@ def _parse_entities(raw: Any, path: Path) -> dict[str, EntityTypeDef]:
         if scope not in _SCOPES:
             raise ProfileError(f"{where}.scope 仅支持 local/global，收到 {scope!r}")
 
-        attributes: dict[str, AttributeDef] = {}
-        for a_idx, attr in enumerate(item.get("attributes") or []):
-            a_where = f"{where}.attributes[{a_idx}]"
-            if not isinstance(attr, dict) or not attr.get("name"):
-                raise ProfileError(f"{a_where} 缺少 name")
-            a_name = str(attr["name"]).strip()
-            a_type = str(attr.get("type") or "string").strip()
-            if a_type not in _ATTR_TYPES:
-                raise ProfileError(
-                    f"{a_where}.type 非法：{a_type!r}（可选：{', '.join(sorted(_ATTR_TYPES))}）"
-                )
-            values = tuple(str(v) for v in (attr.get("values") or ()))
-            if a_type == "enum" and not values:
-                raise ProfileError(f"{a_where} 是 enum 但没给 values")
-            if a_name in attributes:
-                raise ProfileError(f"{a_where}.name 重复：{a_name}")
-            extract = attr.get("extract")
-            if extract is not None and not isinstance(extract, dict):
-                raise ProfileError(f"{a_where}.extract 必须是映射（pattern / unit）")
-            if isinstance(extract, dict) and not extract.get("pattern"):
-                raise ProfileError(f"{a_where}.extract 缺少 pattern（正则）")
-            compare = str(attr.get("compare") or "").strip()
-            if compare and compare not in _COMPARES:
-                raise ProfileError(
-                    f"{a_where}.compare 非法：{compare!r}（可选：{', '.join(sorted(_COMPARES))}）"
-                )
-            if compare and a_type != "number":
-                raise ProfileError(f"{a_where}.compare 只对 number 属性有意义")
-            attributes[a_name] = AttributeDef(
-                name=a_name,
-                type=a_type,
-                required=bool(attr.get("required", False)),
-                values=values,
-                description=str(attr.get("description") or ""),
-                extract=dict(extract) if isinstance(extract, dict) else None,
-                compare=compare,
-            )
+        attributes = _parse_attributes(item.get("attributes"), where)
 
         out[name] = EntityTypeDef(
             name=name,
@@ -547,6 +560,7 @@ def _parse_relations(raw: Any, entities: dict[str, EntityTypeDef], path: Path) -
             inverse_of=item.get("inverse_of"),
             phase=phase,
             subsumption=bool(item.get("subsumption", False)),
+            attributes=_parse_attributes(item.get("attributes"), where),
         )
     return out
 

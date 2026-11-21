@@ -132,6 +132,11 @@ class Message(Base):
     answer_complete: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # ---- LLM 优化（opt-in）：True = 用户点「🤖 LLM优化」产生的结果（刷新后可还原标签）----
     is_optimized: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # ---- 本体事实（O7）：本轮检索到的结构化事实 ----
+    # 以前只在 SSE 的 facts 事件里发给前端，**没落库**，于是刷新或过一会儿再打开
+    # 会话，本体事实卡片就没了，只剩一段文字答案。截图/答辩时尤其致命：
+    # 「这套是本体 RAG 还是普通 RAG」当场就看不出来了。
+    ontology_facts: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
