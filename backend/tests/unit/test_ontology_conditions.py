@@ -167,3 +167,49 @@ class TestBoundaryOwnership:
                 if low < years <= high
             ]
             assert len(hits) == 1, f"{years} 年一遇落到了 {hits}"
+
+
+class TestWaterLevel:
+    """水位判别（CQ-03）。三处都错过，逐个守住：
+
+    1. `m\b` 遇中文失效——「343.2m时」整条抽不出来；
+    2. 高程用百分比容差（±1.7m），343.0 和 343.54 两个互斥工况同时命中；
+    3. 「超过正常蓄水位」写的是 343.0，是**阈值**不是"等于"，按相等永远对不上。
+    """
+
+    def test_汉字紧跟单位也能抽出来(self):
+        """`\b` 是 Unicode 词边界，汉字也是词字符——「343.2m时」就没有边界。"""
+        [cond] = C.extract_conditions("库水位343.2m时适用哪套调度规则")
+        assert cond.kind == "value"
+        assert cond.value == pytest.approx(343.2)
+        assert cond.unit == "m"
+
+    def test_单位后面是字母数字时不误判(self):
+        [cond] = C.extract_conditions("下泄 343.2m3/s")
+        assert cond.unit == "m3/s"
+
+    def test_高程按绝对容差而不是百分比(self):
+        """343.0 与 343.54 只差 0.54m；百分比容差会放宽到 ±1.7m。"""
+        cond = C.extract_conditions("库水位343.54米")[0]
+        assert C.matches({"level_m": 343.54}, "x", cond) is True   # 同一个高程
+        assert C.matches({"level_m": 343.0}, "x", cond) is False   # 差 0.54m → 不算同一个
+        # 反证：按百分比容差（343×0.5%≈±1.7m）这里会被判成"同一个"，
+        # 于是 343.2m 同时命中 343.0 和 343.54 两个互斥工况。
+
+    def test_阈值语义_超过才算命中(self):
+        cond = C.extract_conditions("库水位343.2m")[0]
+        compares = {"level_m": "gt"}
+        assert C.matches({"level_m": 343.0}, "库水位超过正常蓄水位", cond, compares=compares) is True
+        assert C.matches({"level_m": 343.54}, "库水位超过校核洪水位", cond, compares=compares) is False
+
+    def test_没声明阈值时退化成相等(self):
+        """TBox 没说 compare 的数值属性仍按"差不多相等"比——不能擅自改成大于。"""
+        cond = C.extract_conditions("下泄流量 3200 m3/s")[0]
+        assert C.matches({"outflow_m3s": 3200}, "方案", cond) is True
+        assert C.matches({"outflow_m3s": 3000}, "方案", cond) is False
+
+    def test_超过两条线时两条都命中(self):
+        cond = C.extract_conditions("库水位343.6米")[0]
+        compares = {"level_m": "gt"}
+        assert C.matches({"level_m": 343.0}, "x", cond, compares=compares) is True
+        assert C.matches({"level_m": 343.54}, "x", cond, compares=compares) is True

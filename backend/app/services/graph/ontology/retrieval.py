@@ -162,6 +162,7 @@ async def _expand_graph(
     max_edges: int,
     rel_types: list[Any] | None,
     forward_only: bool = False,
+    seed_types: set[str] | None = None,
 ) -> list[tuple[int, Any]]:
     """从种子出发逐跳展开，返回 [(跳数, 边)]。
 
@@ -176,6 +177,12 @@ async def _expand_graph(
     问题里点了具体工况时必须开——处置链是有方向的，而"通知下游"这类措施会被
     Ⅰ/Ⅱ/Ⅲ/Ⅳ 四级共用，双向展开会顺着它们爬到别的等级，把「20 年一遇」
     的答案混进「1000 年一遇」才有的动作。
+
+    `seed_types`：种子的实体类型。用来挡住**反向爬回同类兄弟**——
+    问「Ⅳ级响应由谁执行」时问题里没有工况（`forward_only` 不会开），
+    两步就会顺着共用的措施走到「Ⅲ级响应」，再展开它那一级的措施；
+    实测答案里混进另一个等级整整 10 步。砍的只是"回到另一条同类实例"的边，
+    反方向展开别的类型（单位 ← 措施）照旧。
     """
     seen_edges: set[tuple[str, str, str]] = set()
     collected: list[tuple[int, Any]] = []
@@ -213,6 +220,23 @@ async def _expand_graph(
                 break
         frontier = next_frontier
 
+    if seed_types and not forward_only:
+        seed_set = set(seed_uids)
+
+        def _sibling(uid: str) -> bool:
+            """不是种子、但和种子同类型——就是"另一条兄弟实例"。"""
+            return (
+                uid not in seed_set
+                and getattr(nodes.get(uid), "type_name", None) in seed_types
+            )
+
+        # **两端都要挡**。只挡主语会漏掉 `其它等级 ← TRIGGERS ← 某个工况` 这种边：
+        # 主语是工况（不是兄弟），宾语才是另一条等级，于是它照样混进链路。
+        collected = [
+            (hop, edge)
+            for hop, edge in collected
+            if not (_sibling(edge.subject_uid) or _sibling(edge.object_uid))
+        ]
     return collected
 
 
@@ -524,6 +548,17 @@ def _condition_like_types(reg: Any) -> list[str]:
     ]
 
 
+def _compare_semantics(reg: Any, entity_type: str) -> dict[str, str]:
+    """这个类型里哪些属性是**阈值**（`compare: gt/gte/lt/lte`）。
+
+    引擎不认识"水位"，阈值语义只能由 TBox 声明；这里只负责把它取出来传下去。
+    """
+    ent = reg.entity(entity_type) if reg is not None else None
+    if ent is None:
+        return {}
+    return {a.name: a.compare for a in ent.attributes.values() if a.compare}
+
+
 async def _link_conditions_by_value(
     db: AsyncSession,
     conds: list[conditions_mod.Condition],
@@ -545,8 +580,14 @@ async def _link_conditions_by_value(
             db, profile_id=reg.profile_id, entity_type=entity_type, status="active", limit=500
         )
         for row in rows:
+            compares = _compare_semantics(reg, row.entity_type)
             hit = next(
-                (c for c in conds if conditions_mod.matches(row.props, row.name, c)), None
+                (
+                    c
+                    for c in conds
+                    if conditions_mod.matches(row.props, row.name, c, compares=compares)
+                ),
+                None,
             )
             if hit is None:
                 continue
@@ -619,7 +660,12 @@ async def _graph_facts(
         if node is None:
             continue
         nodes[node.uid] = node
-        matched = conditions_mod.any_match(node.props, node.name, conds)
+        matched = conditions_mod.any_match(
+            node.props,
+            node.name,
+            conds,
+            compares=_compare_semantics(reg, node.type_name),
+        )
         fact = {
             "kind": "graph_node",
             "subject": node.uid,
@@ -664,6 +710,11 @@ async def _graph_facts(
         rel_types=rel_types,
         # 命中工况时只顺着"处置方向"走，别从共用措施爬回其它等级
         forward_only=bool(matched_uids),
+        # 没命中工况时也还有一道闸：别反向爬回**同类型的兄弟实例**
+        seed_types={
+            getattr(nodes.get(uid), "type_name", None) for uid in frontier_seeds
+        }
+        - {None},
     )
 
     # ⑥ 冲突仲裁：同一「主语 + 关系」有多条边时按权威级留一条（如 120 vs 125）。

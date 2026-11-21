@@ -31,9 +31,18 @@ _RETURN_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?|[零〇一二两三四五六七�
 _PERCENT_RE = re.compile(r"(?:[Pp]\s*[=＝]\s*)?([0-9]+(?:\.[0-9]+)?)\s*%")
 _REPERIOD_RE = re.compile(r"重现期\s*([0-9]+(?:\.[0-9]+)?)\s*年")
 #: 带单位的数值：流量 / 水位（只认这几种常见写法，避免把"120 米"误当水位）
+#:
+#: `m` 后面**不能用 `\b`**：`\b` 是 Unicode 词边界，而汉字也是词字符，所以
+#: 「343.2m时」里的 `m` 后面没有边界，整条抽不出来（实测）。改成"后面不是字母
+#: 数字"即可——「343.2m时」「343.2m」都命中，`m3/s` 仍由前面的分支先接住。
 _VALUE_RE = re.compile(
-    r"([0-9]+(?:\.[0-9]+)?)\s*(m3/s|m³/s|立方米每秒|立方米/秒|m\b|米)"
+    r"([0-9]+(?:\.[0-9]+)?)\s*(m3/s|m³/s|立方米每秒|立方米/秒|m(?![A-Za-z0-9])|米)"
 )
+
+#: 长度单位：这类数值是**高程**，1.7 米的误差会跨过整座坝，不能按百分比宽容。
+_LEVEL_UNITS = ("m", "米")
+#: 高程匹配的绝对容差（米）。同一个库的特征水位之间通常只差零点几米。
+_LEVEL_TOL_M = 0.1
 
 
 @dataclass(frozen=True)
@@ -199,11 +208,37 @@ def _in_interval(props: dict[str, Any], cond: "Condition") -> bool:
     return lo + 1e-9 < cond.return_period <= hi + 1e-9
 
 
-def matches(props: dict[str, Any] | None, name: str, cond: Condition) -> bool:
+def _compare_holds(actual: float, threshold: float, op: str) -> bool:
+    """`actual`（问题里的值）对 `threshold`（实例属性上的阈值）是否满足比较。
+
+    **顺序不能反**：阈值挂在实例上（`level_m: 343.0`），问题里给的是"实际到了
+    多少"（343.2）。这里判的是「实际 > 阈值」。
+    """
+    if op == "gt":
+        return actual > threshold
+    if op == "gte":
+        return actual >= threshold
+    if op == "lt":
+        return actual < threshold
+    if op == "lte":
+        return actual <= threshold
+    return _close(actual, threshold)
+
+
+def matches(
+    props: dict[str, Any] | None,
+    name: str,
+    cond: Condition,
+    *,
+    compares: dict[str, str] | None = None,
+) -> bool:
     """这个实例是不是该工况。
 
     三个来源都看：属性里的频率/重现期、名字里的「20年一遇」、属性/名字里的百分比。
     宁可判"不是"，也不要把别的工况硬套上来（讲错方案的代价比不回答高）。
+
+    `compares` 是「属性名 → 比较语义」，由调用方从 TBox 取（`AttributeDef.compare`）。
+    没有它就只能按相等比，而「库水位超过正常蓄水位」那种阈值工况就会被判错。
     """
     props = props or {}
     # 只认**名字**里的工况说法，不去扫任意文本属性（note/description/mode…）。
@@ -247,17 +282,38 @@ def matches(props: dict[str, Any] | None, name: str, cond: Condition) -> bool:
         return any(_close(p / 100.0, cond.value) for p in percents)
 
     if cond.kind == "value":
-        for raw in props.values():
+        ops = compares or {}
+        is_level = cond.unit in _LEVEL_UNITS
+        for key, raw in props.items():
             try:
                 number = float(str(raw).strip())
             except (TypeError, ValueError):
                 continue
-            if _close(number, cond.value, tol=0.005):
+            op = ops.get(key, "")
+            if op:
+                # 阈值语义：属性声明了 gt/gte/lt/lte，就问"问题里的值过没过这条线"。
+                # 这是「库水位超过正常蓄水位」这类工况唯一说得通的理解方式——
+                # 它写的是 343.0，问的却是 343.2。
+                if _compare_holds(cond.value, number, op):
+                    return True
+                continue
+            # 高程按绝对容差比：343.0 与 343.54 只差 0.54m，用百分比（±1.7m）
+            # 会把两个互斥工况同时命中（实测）。流量仍按相对容差。
+            if is_level:
+                if abs(number - cond.value) <= _LEVEL_TOL_M:
+                    return True
+            elif _close(number, cond.value, tol=0.005):
                 return True
         return False
 
     return False
 
 
-def any_match(props: dict[str, Any] | None, name: str, conditions: Iterable[Condition]) -> bool:
-    return any(matches(props, name, cond) for cond in conditions)
+def any_match(
+    props: dict[str, Any] | None,
+    name: str,
+    conditions: Iterable[Condition],
+    *,
+    compares: dict[str, str] | None = None,
+) -> bool:
+    return any(matches(props, name, cond, compares=compares) for cond in conditions)

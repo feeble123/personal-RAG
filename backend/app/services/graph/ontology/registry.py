@@ -30,6 +30,8 @@ DEFAULT_PROFILE = "tuning"
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PREFIX_RE = re.compile(r"^[a-z]{2,4}$")
 _ATTR_TYPES = {"string", "text", "number", "range", "enum", "list", "boolean"}
+#: 数值属性的比较语义。空字符串 = 等于（缺省），和 `conditions.matches` 对齐。
+_COMPARES = {"eq", "gt", "gte", "lt", "lte"}
 _SCOPES = {"local", "global"}
 #: 关系可以声明的链路档位。必须与 `chain.PHASE_ORDER` 里的档位一致
 #: （`subject`/`other` 是编排层自己产生的，不由 YAML 声明）；有单测守着这条一致性。
@@ -80,6 +82,13 @@ class AttributeDef:
     description: str = ""
     # 自动抽取规则（F4）：{pattern/unit} —— 有它才会去知识库里找这个属性的值
     extract: dict[str, Any] | None = None
+    #: 数值属性的**比较语义**：`eq`（缺省，等于）/ `gt` / `gte` / `lt` / `lte`。
+    #:
+    #: 为什么需要它：工况「库水位超过正常蓄水位」写的是 `level_m: 343.0`，这是个
+    #: **阈值**，不是"等于 343.0"。按相等去比，问「库水位 343.2m」不但对不上阈值，
+    #: 还会因为百分比容差把 343.0 和 343.54 两个互斥工况同时命中（实测 ±1.7m）。
+    #: 阈值语义只能由 TBox 声明——引擎不认识"水位"是什么。
+    compare: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         out = {"name": self.name, "type": self.type, "required": self.required}
@@ -89,6 +98,8 @@ class AttributeDef:
             out["description"] = self.description
         if self.extract:
             out["extract"] = dict(self.extract)
+        if self.compare:
+            out["compare"] = self.compare
         return out
 
 
@@ -470,6 +481,13 @@ def _parse_entities(raw: Any, path: Path) -> dict[str, EntityTypeDef]:
                 raise ProfileError(f"{a_where}.extract 必须是映射（pattern / unit）")
             if isinstance(extract, dict) and not extract.get("pattern"):
                 raise ProfileError(f"{a_where}.extract 缺少 pattern（正则）")
+            compare = str(attr.get("compare") or "").strip()
+            if compare and compare not in _COMPARES:
+                raise ProfileError(
+                    f"{a_where}.compare 非法：{compare!r}（可选：{', '.join(sorted(_COMPARES))}）"
+                )
+            if compare and a_type != "number":
+                raise ProfileError(f"{a_where}.compare 只对 number 属性有意义")
             attributes[a_name] = AttributeDef(
                 name=a_name,
                 type=a_type,
@@ -477,6 +495,7 @@ def _parse_entities(raw: Any, path: Path) -> dict[str, EntityTypeDef]:
                 values=values,
                 description=str(attr.get("description") or ""),
                 extract=dict(extract) if isinstance(extract, dict) else None,
+                compare=compare,
             )
 
         out[name] = EntityTypeDef(

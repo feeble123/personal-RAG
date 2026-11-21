@@ -59,7 +59,9 @@ entity_types:
       - {name: return_period_high, type: number, description: "区间上界（年一遇）"}
       - {name: rainfall_24h_mm, type: string, description: "24h 降雨量区间（mm）"}
       - {name: rainfall_6h_mm, type: string, description: "6h 降雨量阈值（mm）"}
-      - {name: level_m, type: number, description: "判别用库水位（m）"}
+      # compare: gt —— 这是个**阈值**，不是"等于"。工况名写的是「库水位超过正常蓄水位」，
+      # 属性值是 343.0；问「库水位 343.2m」时要按"过没过这条线"判，按相等判就对不上。
+      - {name: level_m, type: number, compare: gt, description: "判别用库水位阈值（m），超过它才算命中"}
       - {name: inflow_m3s, type: number, description: "入库流量（m³/s）"}
       - {name: season, type: string, description: "来水年型"}
       - {name: note, type: string, description: "补充说明"}

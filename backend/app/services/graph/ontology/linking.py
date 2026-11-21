@@ -52,6 +52,33 @@ def _contains_code(question: str, code: str) -> bool:
     return re.search(pattern, question) is not None
 
 
+_WORD_CH = re.compile(r"[a-z0-9_]")
+
+
+def contains_term(question: str, term: str) -> bool:
+    """`term` 是否在 `question` 里**独立**出现，而不是更长英文/数字串的一截。
+
+    为什么不能直接 `term in question`：`normalize_name` 会做 NFKC，
+    罗马数字 Ⅱ→`ii`、Ⅰ→`i`，于是「Ⅰ级响应」成了「Ⅱ级响应」的**子串**。
+    实测：问「Ⅱ级响应的处置措施有哪些」，链接器同时把 Ⅰ 级也连上，
+    答案里混进整整 5 步另一个等级的措施。
+
+    规则：命中位置的左边/右边紧邻的字符不能还是英文/数字/下划线；
+    中文相邻没关系（「Ⅳ级响应」后面跟"的"是正常说法）。
+    """
+    if not term:
+        return False
+    start = question.find(term)
+    while start >= 0:
+        end = start + len(term)
+        left = question[start - 1] if start > 0 else ""
+        right = question[end] if end < len(question) else ""
+        if not (_WORD_CH.match(left) or _WORD_CH.match(right)):
+            return True
+        start = question.find(term, start + 1)
+    return False
+
+
 def link_instances(rows: Iterable[OntologyInstance], question: str) -> list[LinkedEntity]:
     """在实例集合里找问题提到的实体。"""
     q = normalize_name(question)
@@ -76,7 +103,7 @@ def link_instances(rows: Iterable[OntologyInstance], question: str) -> list[Link
                     continue
                 score = base
             else:
-                if key not in q:
+                if not contains_term(q, key):
                     continue
                 # 中文名越长、覆盖问题比例越高越可信
                 coverage = len(key) / max(len(q), 1)
@@ -124,7 +151,7 @@ async def link_graph_entities(
     best: dict[str, LinkedEntity] = {}
     for alias in aliases:
         key = alias.normalized_alias or ""
-        if len(key) < 2 or key not in data:
+        if len(key) < 2 or not contains_term(data, key):
             continue
         # 别名占问题的比例越高越可信
         coverage = len(key) / max(len(data), 1)

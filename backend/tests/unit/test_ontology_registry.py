@@ -187,6 +187,41 @@ relation_types: []
         with pytest.raises(ProfileError, match="enum"):
             load_profile(path)
 
+    def test_compare_must_be_known_operator(self, tmp_path):
+        """比较语义只认 eq/gt/gte/lt/lte——写错在加载期就炸，不能默默当成等于。"""
+        path = self._write(
+            tmp_path,
+            """
+version: 1
+profile_id: bad
+entity_types:
+  - name: Thing
+    uid_prefix: th
+    attributes:
+      - { name: level_m, type: number, compare: 大于 }
+relation_types: []
+""",
+        )
+        with pytest.raises(ProfileError, match="compare"):
+            load_profile(path)
+
+    def test_compare_only_on_numbers(self, tmp_path):
+        path = self._write(
+            tmp_path,
+            """
+version: 1
+profile_id: bad
+entity_types:
+  - name: Thing
+    uid_prefix: th
+    attributes:
+      - { name: mode, type: string, compare: gt }
+relation_types: []
+""",
+        )
+        with pytest.raises(ProfileError, match="number"):
+            load_profile(path)
+
     def test_broken_yaml(self, tmp_path):
         path = self._write(tmp_path, "version: 1\n  bad: [")
         with pytest.raises(ProfileError, match="YAML"):

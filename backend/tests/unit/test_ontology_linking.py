@@ -137,3 +137,31 @@ async def test_graph_link_prefers_alias_hit():
     found = await link_graph_entities(_Session([alias], rows), "自由水蓄水容量怎么定")
     assert len(found) == 1
     assert found[0].source == "graph"
+
+
+class TestRomanNumeralTrap:
+    """罗马数字在 NFKC 之后会变成 ASCII 字母，短的名字成了长的名字的子串。
+
+    实测：问「Ⅱ级响应的处置措施有哪些」，链接器把 Ⅰ 级也连上（`i级响应` 是
+    `ii级响应` 的子串），答案里混进整整 5 步另一个等级的措施。
+    """
+
+    def test_短等级不会被长等级带出来(self):
+        rows = [
+            _row("Ⅰ级响应", uid="rl:1"),
+            _row("Ⅱ级响应", uid="rl:2"),
+        ]
+        hits = link_instances(rows, "Ⅱ级响应的处置措施有哪些")
+        assert [h.name for h in hits] == ["Ⅱ级响应"]
+
+    def test_长等级也不会被短等级带出来(self):
+        rows = [
+            _row("Ⅰ级响应", uid="rl:1"),
+            _row("Ⅱ级响应", uid="rl:2"),
+        ]
+        hits = link_instances(rows, "Ⅰ级响应由谁执行")
+        assert [h.name for h in hits] == ["Ⅰ级响应"]
+
+    def test_正常中文相邻仍能命中(self):
+        rows = [_row("加强安全巡查", uid="ms:1")]
+        assert [h.name for h in link_instances(rows, "加强安全巡查由谁执行")] == ["加强安全巡查"]

@@ -385,3 +385,77 @@ class TestEdgePropsOverride:
         from app.services.graph.ontology import retrieval as R
 
         assert R._label_edge_props(self._nodes(), self._reg(), "ms:1", {"timing": ""}) == {}
+
+
+class TestSiblingPruning:
+    """问某一个等级时，别顺着共用的措施爬回**另一条等级**。
+
+    实测：问「Ⅳ级响应由谁执行」（问题里没有工况，`forward_only` 不会开），
+    62 步里混进另外三级整整 20 步——因为「通知下游镇街」这类措施被四级共用。
+    """
+
+    class _Node:
+        def __init__(self, uid, name, type_name):
+            self.uid, self.name, self.type_name = uid, name, type_name
+
+    class _Edge:
+        def __init__(self, s, p, o):
+            self.subject_uid, self.predicate_name, self.object_uid = s, p, o
+
+    def _store(self):
+        Node, Edge = self._Node, self._Edge
+        nodes = {
+            "rl:2": Node("rl:2", "Ⅱ级响应", "response_level"),
+            "rl:3": Node("rl:3", "Ⅲ级响应", "response_level"),
+            "ms:1": Node("ms:1", "加强水情监测", "measure"),
+            "cd:2": Node("cd:2", "50~1000年一遇洪水", "condition"),
+            "cd:9": Node("cd:9", "20~50年一遇洪水", "condition"),
+        }
+        edges = [
+            Edge("rl:2", "RESPONDS_WITH", "ms:1"),
+            Edge("rl:3", "RESPONDS_WITH", "ms:1"),   # 兄弟等级，共用措施
+            Edge("cd:2", "TRIGGERS", "rl:2"),
+            Edge("cd:9", "TRIGGERS", "rl:3"),         # 兄弟等级，经由工况进来
+        ]
+
+        class _Slice:
+            def __init__(self, ns, es):
+                self.nodes, self.edges = ns, es
+
+        class _Store:
+            async def get_node(self, uid):
+                return nodes.get(uid)
+
+            async def neighbors(self, uid, depth=1, rel_types=None, limit=60):
+                inc = [e for e in edges if uid in (e.subject_uid, e.object_uid)]
+                ids = {uid}
+                for e in inc:
+                    ids.update((e.subject_uid, e.object_uid))
+                return _Slice([nodes[i] for i in ids if i in nodes], inc)
+
+        return _Store()
+
+    async def _expand(self, **kw):
+        nodes = {}
+        edges = await retrieval._expand_graph(
+            self._store(), ["rl:2"], nodes=nodes, depth=3,
+            max_nodes=50, max_edges=50, rel_types=None, **kw,
+        )
+        return [(e.subject_uid, e.predicate_name, e.object_uid) for _h, e in edges]
+
+    async def test_默认会爬回兄弟等级(self):
+        """先证明问题真实存在：不开闸时 Ⅲ 级会进来。"""
+        got = await self._expand()
+        assert ("rl:3", "RESPONDS_WITH", "ms:1") in got
+        assert ("cd:9", "TRIGGERS", "rl:3") in got
+
+    async def test_声明种子类型后兄弟等级被挡掉(self):
+        got = await self._expand(seed_types={"response_level"})
+        assert ("rl:2", "RESPONDS_WITH", "ms:1") in got   # 自己的边照留
+        assert ("cd:2", "TRIGGERS", "rl:2") in got
+        assert not any("rl:3" in (s, o) for s, _p, o in got)
+
+    async def test_别的类型不受影响(self):
+        """挡的是"同类型兄弟"，单位/措施这些照常连——不能一刀切成 forward_only。"""
+        got = await self._expand(seed_types={"response_level"})
+        assert ("rl:2", "RESPONDS_WITH", "ms:1") in got
