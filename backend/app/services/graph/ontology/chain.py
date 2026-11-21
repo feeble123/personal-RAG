@@ -77,6 +77,10 @@ class ChainStep:
     #: 只报名字的话，「10~20年一遇控泄方案」看不出到底泄多少——而这恰恰是
     #: 用户最想知道的数。属性是节点事实里本来就有，顺手带上来，不需要额外查询。
     object_props: dict[str, Any] = field(default_factory=dict)
+    #: 主语节点的属性。宾语属性答"是什么"，主语属性答"谁"——
+    #: 「Ⅳ级响应是谁启动的」里，主语是人，「蒋捷」三个字本身不是答案，
+    #: 「领导小组副组长、城南公司董事长」才是。
+    subject_props: dict[str, Any] = field(default_factory=dict)
     #: 这条边是 TBox 规则当场推出来的（库里没有这条边）。空串表示是实打实存着的。
     derived_by: str = ""
     #: 这条事实是从哪个祖先继承来的（沿 `subsumption: true` 的关系往上一层）
@@ -95,6 +99,7 @@ class ChainStep:
             "predicate_label": self.predicate_label,
             "object": self.object,
             "object_props": self.object_props,
+            "subject_props": self.subject_props,
             "evidence": self.evidence,
             "condition_matched": self.condition_matched,
             "source_item": self.source_item,
@@ -260,6 +265,7 @@ def build_chain(
                 edge.get("object_props")
                 or props_by_name.get(str(edge.get("object") or ""), {})
             ),
+            subject_props=dict(edge.get("subject_props") or {}),
             derived_by=str(edge.get("derived_by") or ""),
             inherited_from=str(edge.get("inherited_from") or ""),
             source_item=_as_item((edge.get("edge_props") or {}).get("source_item")),

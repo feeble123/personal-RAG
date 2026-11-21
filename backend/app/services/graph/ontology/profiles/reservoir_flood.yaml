@@ -66,15 +66,15 @@ entity_types:
       - {name: rainfall_6h_mm, type: string, description: "6h 降雨量阈值（mm）"}
       # compare: gt —— 这是个**阈值**，不是"等于"。工况名写的是「库水位超过正常蓄水位」，
       # 属性值是 343.0；问「库水位 343.2m」时要按"过没过这条线"判，按相等判就对不上。
-      - {name: level_m, type: number, compare: gt, description: "判别用库水位阈值（m），超过它才算命中"}
+      - {name: level_m, type: number, compare: gt, description: "库水位阈值（m）"}
       # 和上面的 `level_m` 语义不同：那个是"超过某条线就算"，这个是"这一档对应哪条线"。
       # 调度规程每个方案的前置条件都是「当雨前库水位达到 338.5m（正常年）/ 340.00m
       # （干旱年），且预计 24h 降雨量…的情况下」——起调水位属于**工况**，不属于方案：
       # 同一个方案（控泄 60m³/s）两套年型都用，只有起调水位不同。挂在方案上就会
       # 只剩一个值（CQ-07），挂在工况上才说得清。
-      - {name: start_level_m, type: number, description: "该工况的雨前库水位档（m）"}
+      - {name: start_level_m, type: number, description: "雨前库水位（m）"}
       - {name: inflow_m3s, type: number, description: "入库流量（m³/s）"}
-      - {name: season, type: string, description: "来水年型（正常年 / 干旱年）"}
+      - {name: season, type: string, description: "来水年型"}
       - {name: note, type: string, description: "补充说明"}
 
   - name: dispatch_plan
@@ -90,7 +90,7 @@ entity_types:
       - {name: target_level_m, type: number, description: "维持目标水位（m）"}
       - {name: gate_opening_m, type: number, description: "闸门开度（m）"}
       - {name: mode, type: enum, values: [控泄, 全开泄洪, 保坝, 不泄], description: "调度方式"}
-      - {name: priority, type: string, description: "保护对象，如「下游防洪」「保坝」"}
+      - {name: priority, type: string, description: "保护对象"}
       # 引擎约定：同一工况下出现多条同类方案时，按这个值取高者（数字大 = 优先）。
       # 值是人根据文件效力定的，不是原文事实——所以写在 note 里说明依据，别当数字证据。
       - {name: authority_rank, type: number, description: "依据文件的权威级（同工况冲突时取高者）"}
@@ -143,6 +143,20 @@ entity_types:
     attributes:
       - {name: doc, type: string, description: "文件名"}
       - {name: clause_no, type: string, description: "条款号，如 3.3.1.1"}
+
+  # 预案对每一级响应都点名了「谁启动」——「领导小组副组长城南公司董事长蒋捷
+  # 启动IV级应急响应」。这是**具体的人**，不是单位，用 management_unit 装不下
+  # （一问"启动人是谁"，答"高洞子水库管理处"是错的）。
+  - name: person
+    display_name: 人员
+    uid_prefix: ps
+    scope: local
+    attributes:
+      # 职务照抄原文，不改写：同一个人的头衔在四级里写法不同（副组长/组长），
+      # 而职称（城南公司董事长 / 水利局局长 / 副区长）是区分同名同姓的依据。
+      - {name: title, type: string, description: "职务"}
+      - {name: org, type: string, description: "所在单位"}
+      - {name: note, type: string, description: "补充说明"}
 
 # ------------------------------------------------------------
 # 关系
@@ -229,6 +243,12 @@ relation_types:
   - {name: DISPATCHED_BY, display_name: 调度权限归, phase: actor,
      source: condition, target: management_unit,
      description: "该工况下的调度指令由谁下达"}
+
+  # 和 RESPONDS_WITH（等级 → 启动哪些措施）不是一回事：这条是「谁按下了启动键」。
+  # 方向按原文语序：原文写「蒋捷启动IV级应急响应」，主语是人。
+  - {name: STARTS, display_name: 启动, phase: actor,
+     source: person, target: response_level,
+     description: "这个人启动该级应急响应"}
 
   # 措施 → 工程对象（开哪扇闸、用哪个泄水设施）
   - {name: USES_FACILITY, display_name: 使用设施, phase: means,

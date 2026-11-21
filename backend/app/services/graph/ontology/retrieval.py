@@ -375,7 +375,20 @@ def _declared_phase(reg: Any, predicate: str) -> str:
 #: `expected_measures` 是"预案这一级原文共几条"的建库口径（给 coverage 约束用的），
 #: `authority_rank` 是冲突仲裁的排序值。两者都不是给读者看的业务事实——
 #: 放进去的结果是答案里冒出「预案该级列出的处置措施条数：6」这种话（实测）。
-INTERNAL_PROPS = ("expected_measures", "authority_rank")
+INTERNAL_PROPS = (
+    "expected_measures",
+    "authority_rank",
+    # 下面这些是**引擎约定**字段，不是领域词：工况靠它们做数值匹配
+    # （重现期落在哪个区间、雨量落在哪个档）。TBox 里已经注明"属性名是引擎约定"，
+    # 写进正文只会变成「超越概率（0.05 = 20 年一遇）：0.05」这种读不懂的行。
+    # 读者要看的是 `rainfall_24h_mm`（"130~170"）和 `start_level_m`，那两个保留。
+    "frequency",
+    "return_period",
+    "return_period_low",
+    "return_period_high",
+    "rain_low_mm",
+    "rain_high_mm",
+)
 
 
 def _labeled_props(nodes: dict[str, Any], reg: Any, uid: str) -> dict[str, Any]:
@@ -752,6 +765,11 @@ async def _graph_facts(
                 # 宾语节点自己的属性跟着走：链路里只报名字的话，
                 # 「10~20年一遇控泄方案」看不出到底泄多少。
                 "object_props": object_props,
+                # 主语节点的属性也带上。宾语属性只回答"这件事是什么"，
+                # 回答不了"这个人是谁"——问「Ⅳ级响应是谁启动的」，
+                # 只写「蒋捷 —启动→ Ⅳ级响应」，读的人不知道蒋捷是什么人。
+                # 编排层只在主语是"终端节点"（只当主语、没当过宾语）时才用。
+                "subject_props": _labeled_props(nodes, reg, edge.subject_uid),
                 "evidence_text": edge.evidence_text,
                 "chunk_ids": edge.chunk_ids,
                 # 边自己的属性：`source_item`（对应原文第几条）就在这里，

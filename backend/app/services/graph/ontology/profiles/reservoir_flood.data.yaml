@@ -593,6 +593,42 @@ instances:
   - doc: 高洞子水库防洪预案.pdf
     quote: 高洞子水库管理处人员应在1h内
     page: 50
+# ---- 启动人（CQ-18）----
+# 预案对每一级都点名了具体的人，不是单位。四级里三个人的职务写法不同，
+# 照原文抄，不做统一改写（改写会让人以为原文就是这么写的）。
+- type: person
+  name: 蒋捷
+  props:
+    title: 高洞子水库防汛抗旱应急领导小组副组长、城南公司董事长
+    org: 城南公司
+    note: 原文连写为「副组长城南公司董事长」，顿号是为了读得清加的
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组副组长城南公司董事长蒋捷启动IV级应急响应
+    page: 50
+- type: person
+  name: 蒋文
+  props:
+    title: 高洞子水库防汛抗旱应急领导小组副组长、水利局局长
+    org: 巴南区水利局
+    note: 原文连写为「副组长水利局局长」，顿号是为了读得清加的
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组副组长水利局局长蒋文启动Ⅲ级应急响应
+    page: 51
+- type: person
+  name: 冉仁均
+  props:
+    title: 高洞子水库防汛抗旱应急领导小组组长、巴南区人民政府副区长
+    org: 巴南区人民政府
+    note: 同一职务在Ⅱ级页写作「冉仁均」、在Ⅰ级页写作「再仁均」。同名同职务、读音一致，按同一人建一条；**若实际是两个人，这里就是错的，需要人工确认**
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组组长巴南区人民政府副区长冉仁均启动Ⅱ级应急响应
+    page: 52
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组组长巴南区人民政府副区长再仁均启动I级应急响应
+    page: 53
 - type: management_unit
   name: 应急抢险专家组
   props:
@@ -2561,3 +2597,48 @@ relations:
   - doc: 高洞子水库防洪预案.pdf
     quote: 群众转移、财产撤离的负责人员为所在镇街的镇长、街道办事处主任制定
     page: 50
+# ---- 启动人（CQ-18）：四级响应分别由谁按下启动键 ----
+- subject:
+    type: person
+    name: 蒋捷
+  predicate: STARTS
+  object:
+    type: response_level
+    name: Ⅳ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组副组长城南公司董事长蒋捷启动IV级应急响应
+    page: 50
+- subject:
+    type: person
+    name: 蒋文
+  predicate: STARTS
+  object:
+    type: response_level
+    name: Ⅲ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组副组长水利局局长蒋文启动Ⅲ级应急响应
+    page: 51
+- subject:
+    type: person
+    name: 冉仁均
+  predicate: STARTS
+  object:
+    type: response_level
+    name: Ⅱ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组组长巴南区人民政府副区长冉仁均启动Ⅱ级应急响应
+    page: 52
+- subject:
+    type: person
+    name: 冉仁均
+  predicate: STARTS
+  object:
+    type: response_level
+    name: Ⅰ级响应
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库防汛抗旱应急领导小组组长巴南区人民政府副区长再仁均启动I级应急响应
+    page: 53

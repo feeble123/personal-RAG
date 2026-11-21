@@ -200,6 +200,14 @@ async def build_answer_plan(db: AsyncSession, pack: Any) -> AnswerPlan | None:
     # 哪些档位的边是"某条主干的补充信息"，应该并进那一段而不是自成一段。
     # impact 也在里面：「通知下游镇街」扇出 4 个镇，不合并就是 4 段几乎一样的话（实测）。
     detail_slot = {"actor": "执行", "basis": "依据", "impact": "影响"}
+    # 只当过主语、从没当过宾语的节点，是链路的"终端"：读者不知道它是什么，
+    # 光有名字等于没回答。问「Ⅳ级响应是谁启动的」，答「蒋捷 —启动→ Ⅳ级响应」
+    # 只是把问题重复了一遍；至少得说清蒋捷是领导小组副组长、城南公司董事长。
+    # 反过来，已经作为宾语出现过的节点（Ⅳ级响应、某条措施）属性早就讲过了，
+    # 再挂一遍就是重复。
+    _objects = {str(step.get("object") or "") for step in raw_steps}
+    _subjects = {str(step.get("subject") or "") for step in raw_steps}
+    terminal_subjects = _subjects - _objects
     details: dict[str, dict[str, str]] = {}
     kept: list[dict[str, Any]] = []
     for step in raw_steps:
@@ -227,6 +235,10 @@ async def build_answer_plan(db: AsyncSession, pack: Any) -> AnswerPlan | None:
         ]
         wanted.extend(ids)
         props = dict(step.get("object_props") or {})
+        if str(step.get("subject") or "") in terminal_subjects:
+            for key, value in (step.get("subject_props") or {}).items():
+                # 宾语属性优先：同名的键说明这句话讲的就是宾语那边的事
+                props.setdefault(key, value)
         props.update(details.get(str(step.get("object") or ""), {}))
         quotes = _quotes_by_chunk(list(step.get("evidence") or []))
         steps.append(

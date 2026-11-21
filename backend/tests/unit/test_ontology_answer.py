@@ -25,7 +25,7 @@ class _Pack:
         }
 
 
-def _step(subject, predicate, obj, *, phase, label, chunk_id, props=None):
+def _step(subject, predicate, obj, *, phase, label, chunk_id, props=None, subject_props=None):
     return {
         "phase": phase,
         "phase_label": {"basis": "工况与依据", "actor": "谁处置", "response": "怎么应对"}.get(
@@ -36,6 +36,7 @@ def _step(subject, predicate, obj, *, phase, label, chunk_id, props=None):
         "predicate_label": label,
         "object": obj,
         "object_props": props or {},
+        "subject_props": subject_props or {},
         "evidence": [{"chunk_id": chunk_id}] if chunk_id else [],
     }
 
@@ -225,3 +226,54 @@ class TestExcerptDedupe:
         text = A.render_plan(self._plan(["窗口甲", "窗口乙"]))
         assert "窗口甲" in text and "窗口乙" in text
         assert "同一段原文已在上文给出" not in text
+
+
+class TestSubjectIdentity:
+    """链路"终端主语"的身份要讲出来（CQ-18）。
+
+    问「Ⅳ级响应是谁启动的」，只写「蒋捷 —启动→ Ⅳ级响应」等于把问题重复一遍；
+    「领导小组副组长、城南公司董事长」才是答案。但已经作为宾语出现过的节点
+    （响应等级、某条措施）属性早就在前面讲过了，再挂一遍就是重复。
+    """
+
+    async def test_终端主语的属性被并入(self, fake_excerpts):
+        steps = [
+            _step("Ⅳ级响应", "RESPONDS_WITH", "加强安全巡查", phase="response", label="启动", chunk_id=1),
+            _step(
+                "蒋捷", "STARTS", "Ⅳ级响应", phase="actor", label="启动", chunk_id=2,
+                subject_props={"职务": "领导小组副组长", "所在单位": "城南公司"},
+            ),
+        ]
+        plan = await A.build_answer_plan(None, _Pack(steps))
+        row = next(s for s in plan.steps if s.sentence.startswith("蒋捷"))
+        assert row.props["职务"] == "领导小组副组长"
+        assert row.props["所在单位"] == "城南公司"
+
+    async def test_当过宾语的节点不重复讲属性(self, fake_excerpts):
+        """「Ⅳ级响应」既是 STARTS 的宾语、又是 RESPONDS_WITH 的主语，不该再说一遍。"""
+        steps = [
+            _step(
+                "蒋捷", "STARTS", "Ⅳ级响应", phase="actor", label="启动", chunk_id=2,
+                subject_props={"职务": "副组长"},
+            ),
+            _step(
+                "Ⅳ级响应", "RESPONDS_WITH", "加强安全巡查", phase="response", label="启动",
+                chunk_id=1, subject_props={"响应级别": "Ⅳ"},
+            ),
+        ]
+        plan = await A.build_answer_plan(None, _Pack(steps))
+        row = next(s for s in plan.steps if s.sentence.startswith("Ⅳ级响应"))
+        assert "响应级别" not in row.props
+
+    async def test_宾语属性同名时不覆盖(self, fake_excerpts):
+        steps = [
+            _step(
+                "蒋捷", "STARTS", "Ⅳ级响应", phase="actor", label="启动", chunk_id=2,
+                props={"职务": "宾语上的值"},
+                subject_props={"职务": "主语上的值"},
+            ),
+            _step("Ⅳ级响应", "RESPONDS_WITH", "加强安全巡查", phase="response", label="启动", chunk_id=1),
+        ]
+        plan = await A.build_answer_plan(None, _Pack(steps))
+        row = next(s for s in plan.steps if s.sentence.startswith("蒋捷"))
+        assert row.props["职务"] == "宾语上的值"

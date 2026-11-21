@@ -254,6 +254,15 @@ class TestJobRoutes:
     async def test_cancel_endpoint(self, client, admin_headers, sample_kb):
         """POST /documents/{id}/cancel 返回 cancelled 布尔。"""
         kb_id, doc_id = sample_kb
+        # `sample_kb` 只保证**文档**到 ready，不等于**所有 job** 都到终态：
+        # upload 之后可能还排着后续任务。不等到终态就断言「无活跃 job」，
+        # 等于赌 worker 跑得比测试快——单独跑这条必挂（实测两次），
+        # 整个文件跑却过，因为前面的用例替它把时间耗掉了。
+        terminal = {"succeeded", "failed", "cancelled"}
+        for _ in range(50):
+            if all(j.stage in terminal for j in await _get_jobs(doc_id)):
+                break
+            await asyncio.sleep(0.1)
         # 无活跃 job（已 succeeded）→ cancelled=False
         r = await client.post(f"/api/admin/documents/{doc_id}/cancel", headers=admin_headers)
         assert r.status_code == 200, r.text
