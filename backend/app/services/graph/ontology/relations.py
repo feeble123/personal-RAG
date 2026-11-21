@@ -19,6 +19,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import OntologyRelation
+from app.services.graph.ontology.instances import spread_sample
 from app.services.graph.schema import Edge, type_value
 
 logger = logging.getLogger(__name__)
@@ -224,10 +225,11 @@ def to_edge(row: OntologyRelation) -> Edge:
 async def sync_to_graph(rows: Iterable[OntologyRelation], store: Any) -> int:
     """把关系重放成图里的边。图库写失败是静默降级的，所以要抽查。
 
-    **首尾都要验。** 只验第一条边是不够的：那条边很可能上次同步就在图里了，
-    于是"写了一批新边但整批超时失败"照样能通过抽查——实测踩过：补 7 条
-    `PERFORMED_BY`，导入报告写着「边 99/99」，图里一条都没有，答案里也查不到。
-    追加的新边通常排在末尾，验最后一条最能说明问题。
+    **要等距抽查，不能只验第一条。** 那条边很可能上次同步就在图里了，于是
+    "写了一批新边但整批超时失败"照样能通过抽查——实测踩过两次：补 7 条
+    `PERFORMED_BY` 报告「边 99/99」图里没有；再补 4 个单位 8 条边又报
+    「107/107」，图里还是没有。只改成"首尾都验"也不够——这里的行来自数据库
+    查询，顺序任意，新边可能夹在中间。所以改成等距抽 5 条。
     """
     if store is None:
         return 0
@@ -245,8 +247,7 @@ async def sync_to_graph(rows: Iterable[OntologyRelation], store: Any) -> int:
             for e in slice_.edges
         )
 
-    probes = {edges[0].subject_uid: edges[0], edges[-1].subject_uid: edges[-1]}
-    for probe in probes.values():
+    for probe in spread_sample(edges):
         if not await _present(probe):
             return 0
     return len(edges)

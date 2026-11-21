@@ -303,3 +303,25 @@ class TestSyncProbe:
         partial = _Partial()
         partial.edges = list(store.edges)
         assert await rel_mod.sync_to_graph(rows, partial) == 0
+
+
+class TestSpreadSample:
+    """抽查要等距取，不能只取首尾——列表来自数据库查询，顺序是任意的。"""
+
+    def test_覆盖首尾和中间(self):
+        from app.services.graph.ontology.instances import spread_sample
+
+        picked = spread_sample(list(range(10)), 5)
+        assert picked[0] == 0 and picked[-1] == 9
+        assert len(picked) == 5
+        assert any(0 < i < 9 for i in picked)
+
+    def test_数量不足时全取(self):
+        from app.services.graph.ontology.instances import spread_sample
+
+        assert spread_sample([1, 2, 3], 5) == [1, 2, 3]
+
+    def test_空列表(self):
+        from app.services.graph.ontology.instances import spread_sample
+
+        assert spread_sample([], 5) == []

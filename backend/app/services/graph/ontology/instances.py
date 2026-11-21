@@ -333,6 +333,21 @@ def to_node(row: OntologyInstance) -> Node:
     )
 
 
+def spread_sample(items: list[Any], count: int = 5) -> list[Any]:
+    """从列表里**等距**取几项做抽查。
+
+    为什么不能只取首尾：这里的列表来自数据库查询，**顺序是任意的**，
+    新写入的那批可能夹在中间。只验首尾等于赌博——实测就是这么漏掉的：
+    107 条边全部没写进图，抽查却通过了。
+    """
+    if not items:
+        return []
+    if len(items) <= count:
+        return list(items)
+    step = (len(items) - 1) / (count - 1)
+    return [items[round(i * step)] for i in range(count)]
+
+
 async def sync_to_graph(rows: Iterable[OntologyInstance], store: Any) -> int:
     """把实例重放成图节点（图库是派生索引，随时可重建）。
 
@@ -340,7 +355,7 @@ async def sync_to_graph(rows: Iterable[OntologyInstance], store: Any) -> int:
     否则「图库挂了」会被报成「同步成功 N 个节点」。
     返回真正写进去的节点数（0 表示没成功）。
 
-    **首尾都要验**。只验第一个是不够的：这个节点很可能上次同步就在图里了，
+    **要等距抽查，不能只验第一个**：这个节点很可能上次同步就在图里了，
     于是"写了一批新东西但整批超时失败"照样能通过抽查——实测踩过：
     导入 7 条新边，报告写着「边 99/99」，图里一条都没有。
     """
@@ -350,7 +365,7 @@ async def sync_to_graph(rows: Iterable[OntologyInstance], store: Any) -> int:
     if not nodes:
         return 0
     await store.upsert(nodes, [])
-    for probe_uid in {nodes[0].uid, nodes[-1].uid}:
-        if await store.get_node(probe_uid) is None:
+    for probe in spread_sample(nodes):
+        if await store.get_node(probe.uid) is None:
             return 0
     return len(nodes)

@@ -185,6 +185,16 @@ relation_types:
      source: management_unit, target: management_unit,
      description: "信息与指令的上报/指挥关系"}
 
+  # 行政区 → 属地责任单位：谁管这片地。
+  # 为什么需要：转移、安置、转移后的警戒都是镇街政府在干，而本体原来只有
+  # 「行政区」（受影响对象）没有「属地政府」（执行者），于是「组织人员转移」
+  # 找不到执行单位——它的执行者是镇街的镇长/主任，不是水库管理处。
+  # **数量随实际下游镇街走**：这一条加进 TBox，下游 4 个镇就建 4 个、
+  # 换一座水库下游 7 个就建 7 个，引擎不需要改一行。
+  - {name: GOVERNED_BY, display_name: 由…管辖, phase: actor,
+     source: admin_region, target: management_unit,
+     description: "这片行政区的属地责任单位（镇人民政府 / 街道办事处）"}
+
   # 措施 → 影响区域（谁需要被通知/转移）
   - {name: AFFECTS, display_name: 影响, phase: impact,
      source: measure, target: admin_region,

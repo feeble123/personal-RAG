@@ -886,6 +886,48 @@ instances:
   - doc: 高洞子水库汛期调度运用计划.pdf
     quote: 3 | 正常蓄水位 | 343 | 994
     page: 40
+# ============================================================
+# CQ-11 续：属地政府（镇人民政府 / 街道办事处）
+# ------------------------------------------------------------
+# 为什么建这一批：原文里「群众转移、财产撤离的负责人员为所在镇街的镇长、
+# 街道办事处主任」——执行者是镇街政府，不是水库管理处。原来本体只有
+# 「行政区」（受影响对象），没有「属地政府」（执行者），这条措施就挂不上人。
+# **下游有几个镇街就建几个**：高洞子下游 5 个，但原文只对 4 个给了联系人，
+# 鱼洞街道没有（原文只把它列为下游防护对象），所以这里只建 4 个，不凑数。
+# 换一座水库，这一节随实际资料增减，TBox 不动。
+# ============================================================
+- type: management_unit
+  name: 圣灯山镇人民政府
+  props:
+    role: 属地转移与安置
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 圣灯山镇人民政府，联系电话：023-66489073
+    page: 50
+- type: management_unit
+  name: 安澜镇人民政府
+  props:
+    role: 属地转移与安置
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 安澜镇人民政府，联系电话：023-66484013
+    page: 50
+- type: management_unit
+  name: 一品街道办事处
+  props:
+    role: 属地转移与安置
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 一品街道办事处，联系电话：023-66480001
+    page: 50
+- type: management_unit
+  name: 龙洲湾街道办事处
+  props:
+    role: 属地转移与安置
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 龙洲湾街道办事处，联系电话：023-66238888
+    page: 50
 relations:
 - subject:
     type: condition
@@ -2059,3 +2101,96 @@ relations:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 当值运行人员在起闭泄洪闸门前
     page: 54
+
+# 属地政府 ↔ 行政区：谁管这片地（行政区 --GOVERNED_BY--> 政府）
+- subject:
+    type: admin_region
+    name: 圣灯山镇
+  predicate: GOVERNED_BY
+  object:
+    type: management_unit
+    name: 圣灯山镇人民政府
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 圣灯山镇人民政府，联系电话：023-66489073
+    page: 50
+- subject:
+    type: admin_region
+    name: 安澜镇
+  predicate: GOVERNED_BY
+  object:
+    type: management_unit
+    name: 安澜镇人民政府
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 安澜镇人民政府，联系电话：023-66484013
+    page: 50
+- subject:
+    type: admin_region
+    name: 一品街道
+  predicate: GOVERNED_BY
+  object:
+    type: management_unit
+    name: 一品街道办事处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 一品街道办事处，联系电话：023-66480001
+    page: 50
+- subject:
+    type: admin_region
+    name: 龙洲湾街道
+  predicate: GOVERNED_BY
+  object:
+    type: management_unit
+    name: 龙洲湾街道办事处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 龙洲湾街道办事处，联系电话：023-66238888
+    page: 50
+
+# 组织人员转移：原文「群众转移、财产撤离的负责人员为所在镇街的镇长、
+# 街道办事处主任制定」——四个属地政府分别执行
+- subject:
+    type: measure
+    name: 组织人员转移
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 圣灯山镇人民政府
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 群众转移、财产撤离的负责人员为所在镇街的镇长、街道办事处主任制定
+    page: 50
+- subject:
+    type: measure
+    name: 组织人员转移
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 安澜镇人民政府
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 群众转移、财产撤离的负责人员为所在镇街的镇长、街道办事处主任制定
+    page: 50
+- subject:
+    type: measure
+    name: 组织人员转移
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 一品街道办事处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 群众转移、财产撤离的负责人员为所在镇街的镇长、街道办事处主任制定
+    page: 50
+- subject:
+    type: measure
+    name: 组织人员转移
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 龙洲湾街道办事处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 群众转移、财产撤离的负责人员为所在镇街的镇长、街道办事处主任制定
+    page: 50

@@ -49,6 +49,10 @@ _SCHEMA_RETRY_COOLDOWN_S = 30.0
 _CONNECTION_LIFETIME_S = 3600
 # 单条 Cypher 一次带多少行（节点/边批量写入）
 _BATCH_SIZE = 500
+# 写入的最小预算（秒）。查询超时是按"用户等不起"设的，批量 MERGE 不是——
+# 用 0.8 秒卡它，结果是整批静默不写、上层以为成功（实测：导入 107 条边，
+# 报告 107/107，图里一条都没有）。
+_WRITE_TIMEOUT_S = 15.0
 # 状态优先级：数字越大越权威（与内存实现一致）
 _STATUS_RANK = {"auto": 0, "rejected": 1, "confirmed": 2}
 
@@ -373,12 +377,23 @@ class Neo4jGraphStore:
         if not self._schema_ready:
             self._schema_retry_at = time.monotonic() + _SCHEMA_RETRY_COOLDOWN_S
 
-    async def _run(self, cypher: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """执行查询：超时/异常一律降级为空结果，不打断调用方。"""
+    async def _run(
+        self,
+        cypher: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """执行查询：超时/异常一律降级为空结果，不打断调用方。
+
+        `timeout` 给**写操作**用：查询超时是按"用户等不起"设的（0.8 秒），
+        但批量写 100 多条边本来就要几秒。用查询预算去卡写入，结果是"整批静默
+        不写"，而上层以为成功了——实测导入 107 条边，图里一条都没有。
+        """
         # 首次调用要顺带建 schema + 驱动握手（实测约 2 秒），不能用稳态查询超时去卡它，
         # 否则进程刚起来的头几个图查询会被误判成「图库不可用」并触发 30 秒冷却。
         # 连接池被回收后重建连接同样要 ~2 秒，所以「上一次失败过」也走宽松超时。
-        timeout = self._budget()
+        timeout = timeout or self._budget()
         try:
             rows = await asyncio.wait_for(self._execute(cypher, params or {}), timeout=timeout)
             self._warm = True
@@ -396,11 +411,14 @@ class Neo4jGraphStore:
 
     # ---------- 写入 ----------
     async def upsert(self, nodes: list[Node], edges: list[Edge]) -> None:
+        # 写入用**写预算**，不跟查询抢那 0.8 秒：批量 MERGE 本来就是秒级操作，
+        # 用查询超时卡它只会得到"整批静默失败、上层以为成功"。
+        budget = max(self._budget(), _WRITE_TIMEOUT_S)
         for group in _chunks([_node_row(n) for n in nodes]):
-            await self._run(_UPSERT_NODES, {"rows": group})
+            await self._run(_UPSERT_NODES, {"rows": group}, timeout=budget)
         # 边必须晚于节点写：MATCH 依赖节点已存在
         for group in _chunks([_edge_row(e) for e in edges]):
-            await self._run(_UPSERT_EDGES, {"rows": group})
+            await self._run(_UPSERT_EDGES, {"rows": group}, timeout=budget)
 
     # ---------- 删除 ----------
     async def delete_version(self, doc_id: int, version_id: int) -> None:
