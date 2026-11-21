@@ -1133,7 +1133,6 @@ relations:
     name: 1年一遇控泄方案
   props:
     target_level_m: 340.0
-  props:
     clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1148,7 +1147,6 @@ relations:
     name: 1~2年一遇控泄方案
   props:
     target_level_m: 340.0
-  props:
     clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1163,7 +1161,6 @@ relations:
     name: 2~3年一遇控泄方案
   props:
     target_level_m: 340.0
-  props:
     clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1178,7 +1175,6 @@ relations:
     name: 3~5年一遇控泄方案
   props:
     target_level_m: 340.0
-  props:
     clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1193,7 +1189,6 @@ relations:
     name: 5~20年一遇控泄方案（干旱年）
   props:
     target_level_m: 340.0
-  props:
     clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1208,7 +1203,6 @@ relations:
     name: 20~50年一遇控泄方案
   props:
     target_level_m: 340.0
-  props:
     clause: "调度规程 3.3.1.2"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1223,7 +1217,6 @@ relations:
     name: 2~3年一遇控泄方案
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1297,7 +1290,6 @@ relations:
     name: 10~20年一遇控泄方案
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1312,7 +1304,6 @@ relations:
     name: 1~2年一遇控泄方案
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1349,7 +1340,6 @@ relations:
     name: 1年一遇控泄方案
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1364,7 +1354,6 @@ relations:
     name: 20~50年一遇控泄方案
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1427,7 +1416,6 @@ relations:
     name: 3~5年一遇控泄方案
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1442,7 +1430,6 @@ relations:
     name: 5~10年一遇控泄方案（调度规程）
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -1457,7 +1444,6 @@ relations:
     name: 5~10年一遇控泄方案（汛期调度运用计划）
   props:
     target_level_m: 338.5
-  props:
     clause: "调度规程 3.3.1.1"
   evidence:
   - doc: 高洞子水库汛期调度运用计划.pdf

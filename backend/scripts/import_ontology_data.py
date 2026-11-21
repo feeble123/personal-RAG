@@ -42,6 +42,7 @@ from app.services.graph.ontology import relations as rel_mod  # noqa: E402
 from app.services.graph.ontology.evidence import load_index, resolve  # noqa: E402
 from app.services.graph.ontology.registry import ProfileError, get_registry  # noqa: E402
 from app.services.graph.ontology.validator import validate_entity, validate_relation  # noqa: E402
+from app.services.graph.ontology.yaml_strict import DuplicateKeyError, load_yaml_strict  # noqa: E402
 from app.services.graph.store import get_graph_store  # noqa: E402
 
 
@@ -197,7 +198,14 @@ async def main() -> int:
     if not path.exists():
         print(f"数据文件不存在：{path}", file=sys.stderr)
         return 2
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    try:
+        raw = load_yaml_strict(path.read_text(encoding="utf-8"), source=path.name) or {}
+    except DuplicateKeyError as exc:
+        print(f"数据文件有重复键，拒绝导入：{exc}", file=sys.stderr)
+        return 2
+    except yaml.YAMLError as exc:
+        print(f"数据文件解析失败：{exc}", file=sys.stderr)
+        return 2
     file_profile = str(raw.get("profile_id") or "").strip()
     if file_profile and file_profile != reg.profile_id:
         print(

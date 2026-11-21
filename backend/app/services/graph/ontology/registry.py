@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from app.services.graph import schema as graph_schema
+from app.services.graph.ontology.yaml_strict import DuplicateKeyError, load_yaml_strict
 
 logger = logging.getLogger(__name__)
 
@@ -430,7 +431,10 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise ProfileError(f"profile 文件不存在：{path}")
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = load_yaml_strict(path.read_text(encoding="utf-8"), source=path.name)
+    except DuplicateKeyError as exc:
+        # 静默覆盖会让一条边的属性凭空消失，必须在加载时就失败
+        raise ProfileError(str(exc)) from exc
     except yaml.YAMLError as exc:
         raise ProfileError(f"YAML 解析失败（{path.name}）：{exc}") from exc
     if not isinstance(data, dict):

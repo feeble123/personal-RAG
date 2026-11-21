@@ -325,3 +325,42 @@ class TestSpreadSample:
         from app.services.graph.ontology.instances import spread_sample
 
         assert spread_sample([], 5) == []
+
+
+class TestShippedDataFile:
+    """已发布的数据文件本身要立得住——这里守的是"属性别在半路被吃掉"。"""
+
+    @pytest.fixture(scope="class")
+    def data(self):
+        from app.services.graph.ontology import PROFILES_DIR
+        from app.services.graph.ontology.yaml_strict import load_yaml_strict
+
+        path = PROFILES_DIR / "reservoir_flood.data.yaml"
+        return load_yaml_strict(path.read_text(encoding="utf-8"), source=path.name)
+
+    def test_每条边只有一段_props(self, data):
+        """YAML 重复键已由加载器拦掉；这里再从数据形状上确认一次。
+
+        边属性是逐条渲染进答案的，少了哪个键不会报错，只会让答案悄悄变错。
+        """
+        for edge in data["relations"]:
+            props = edge.get("props")
+            assert props is None or isinstance(props, dict)
+
+    def test_干旱年工况的目标水位来自边属性而不是方案默认值(self, data):
+        """CQ-07：起调/目标水位属于工况，不属于方案。
+
+        干旱年那几档共用的是正常年的方案节点（默认 338.5），一旦边属性丢了，
+        渲染会回落到方案上的 338.5——干旱年应当是 340.0。
+        """
+        dry = [
+            edge
+            for edge in data["relations"]
+            if edge.get("predicate") == "STIPULATES"
+            and edge["subject"]["name"].startswith("干旱年")
+        ]
+        assert dry, "干旱年工况的 STIPULATES 边不能为空"
+        for edge in dry:
+            props = edge.get("props") or {}
+            assert props.get("target_level_m") == 340.0, edge["subject"]["name"]
+            assert props.get("clause"), edge["subject"]["name"]
