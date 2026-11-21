@@ -61,11 +61,14 @@ instances:
 - type: condition
   name: 1~2年一遇降雨（85~100mm）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 0.5
     display_zh: 1~2年一遇
     return_period: 2
     rainfall_24h_mm: 85~100
+    rain_low_mm: 85
+    rain_high_mm: 100
+    start_level_m: 338.5
     return_period_low: 1
     return_period_high: 2
   evidence:
@@ -75,11 +78,14 @@ instances:
 - type: condition
   name: 10~20年一遇降雨（155~170mm）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 0.05
     display_zh: 10~20年一遇
     return_period: 20
     rainfall_24h_mm: 155~170
+    rain_low_mm: 155
+    rain_high_mm: 170
+    start_level_m: 338.5
     return_period_low: 10
     return_period_high: 20
   evidence:
@@ -112,14 +118,122 @@ instances:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 水库最大能对100年一遇（P=1.00%）的洪水进行削峰
     page: 39
+# ---- 干旱年的防洪调度（调度规程 3.3.1.2，起调水位 340.00m）----
+# 和正常年那 7 档**不是一一对应**：原文把 5~10 与 10~20 合并成「5~20 年一遇」，
+# 且统一按 130m³/s 控泄（正常年 5~10 档是 120）。所以不能直接复制正常年的方案。
+- type: condition
+  name: 干旱年·24h降雨小于85mm（1年一遇）
+  props:
+    season: 干旱年
+    frequency: 1.0
+    display_zh: 干旱年 1年一遇
+    return_period: 1
+    rainfall_24h_mm: <85
+    rain_high_mm: 85
+    start_level_m: 340.0
+    return_period_low: 0.1
+    return_period_high: 1
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量小于85mm（1年一遇）的情况下，洪水洪峰流量小于安全下泄流量
+    page: 37
+- type: condition
+  name: 干旱年·24h降雨85~100mm（1~2年一遇）
+  props:
+    season: 干旱年
+    frequency: 0.5
+    display_zh: 干旱年 1~2年一遇
+    return_period: 2
+    rainfall_24h_mm: 85~100
+    rain_low_mm: 85
+    rain_high_mm: 100
+    start_level_m: 340.0
+    return_period_low: 1
+    return_period_high: 2
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于85mm且小于100mm（1~2年一遇）的情况下，洪水初期控制下泄流量为60m³/s
+    page: 37
+- type: condition
+  name: 干旱年·24h降雨100~110mm（2~3年一遇）
+  props:
+    season: 干旱年
+    frequency: 0.333
+    display_zh: 干旱年 2~3年一遇
+    return_period: 3
+    rainfall_24h_mm: 100~110
+    rain_low_mm: 100
+    rain_high_mm: 110
+    start_level_m: 340.0
+    return_period_low: 2
+    return_period_high: 3
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于100mm且小于110mm（2~3年一遇）的情况下，洪水初期控制下泄流量为70m³/s
+    page: 38
+- type: condition
+  name: 干旱年·24h降雨110~130mm（3~5年一遇）
+  props:
+    season: 干旱年
+    frequency: 0.2
+    display_zh: 干旱年 3~5年一遇
+    return_period: 5
+    rainfall_24h_mm: 110~130
+    rain_low_mm: 110
+    rain_high_mm: 130
+    start_level_m: 340.0
+    return_period_low: 3
+    return_period_high: 5
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于110mm且小于130mm（3~5年一遇）的情况下，洪水初期控制下泄流量为100m³/s
+    page: 38
+- type: condition
+  name: 干旱年·24h降雨130~170mm（5~20年一遇）
+  props:
+    season: 干旱年
+    frequency: 0.05
+    display_zh: 干旱年 5~20年一遇
+    note: 原文把正常年的 5~10、10~20 两档合并成一档，统一按 130m³/s 控泄
+    return_period: 20
+    rainfall_24h_mm: 130~170
+    rain_low_mm: 130
+    rain_high_mm: 170
+    start_level_m: 340.0
+    return_period_low: 5
+    return_period_high: 20
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 降雨预报24h降雨量超过130mm且小于170mm（5~20年一遇）的情况下，洪水初期控制下泄流量为130m³/s
+    page: 38
+- type: condition
+  name: 干旱年·24h降雨170~210mm（20~50年一遇）
+  props:
+    season: 干旱年
+    frequency: 0.02
+    display_zh: 干旱年 20~50年一遇
+    return_period: 50
+    rainfall_24h_mm: 170~210
+    rain_low_mm: 170
+    rain_high_mm: 210
+    start_level_m: 340.0
+    return_period_low: 20
+    return_period_high: 50
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 降雨预报24h降雨量超过170mm且小于210mm（20~50年一遇）的情况下，洪水初期控制下泄流量为130m³/s
+    page: 38
 - type: condition
   name: 2~3年一遇降雨（100~110mm）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 0.333
     display_zh: 2~3年一遇
     return_period: 3
     rainfall_24h_mm: 100~110
+    rain_low_mm: 100
+    rain_high_mm: 110
+    start_level_m: 338.5
     return_period_low: 2
     return_period_high: 3
   evidence:
@@ -141,11 +255,14 @@ instances:
 - type: condition
   name: 20~50年一遇降雨（170~210mm）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 0.02
     display_zh: 20~50年一遇
     return_period: 50
     rainfall_24h_mm: 170~210
+    rain_low_mm: 170
+    rain_high_mm: 210
+    start_level_m: 338.5
     return_period_low: 20
     return_period_high: 50
   evidence:
@@ -165,11 +282,13 @@ instances:
 - type: condition
   name: 24h降雨小于85mm（1年一遇）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 1.0
     display_zh: 1年一遇
     return_period: 1
     rainfall_24h_mm: <85
+    rain_high_mm: 85
+    start_level_m: 338.5
     return_period_low: 0.1
     return_period_high: 1
   evidence:
@@ -179,11 +298,14 @@ instances:
 - type: condition
   name: 3~5年一遇降雨（110~130mm）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 0.2
     display_zh: 3~5年一遇
     return_period: 5
     rainfall_24h_mm: 110~130
+    rain_low_mm: 110
+    rain_high_mm: 130
+    start_level_m: 338.5
     return_period_low: 3
     return_period_high: 5
   evidence:
@@ -207,11 +329,14 @@ instances:
 - type: condition
   name: 5~10年一遇降雨（130~155mm）
   props:
-    season: 汛期
+    season: 正常年
     frequency: 0.1
     display_zh: 5~10年一遇
     return_period: 10
     rainfall_24h_mm: 130~155
+    rain_low_mm: 130
+    rain_high_mm: 155
+    start_level_m: 338.5
     return_period_low: 5
     return_period_high: 10
   evidence:
@@ -270,7 +395,6 @@ instances:
     mode: 控泄
     priority: 下游防洪
     outflow_m3s: 60
-    start_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量60m³/s
@@ -281,7 +405,6 @@ instances:
     mode: 控泄
     priority: 下游防洪
     outflow_m3s: 130
-    start_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 初期洪水控制下泄流量130m³/s
@@ -292,7 +415,6 @@ instances:
     mode: 控泄
     note: 下泄量等于入库量
     priority: 维持试运行水位
-    start_level_m: 338.5
     target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -304,7 +426,6 @@ instances:
     mode: 控泄
     priority: 下游防洪
     outflow_m3s: 70
-    start_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量70m³/s
@@ -315,7 +436,6 @@ instances:
     mode: 控泄
     priority: 下游防洪
     outflow_m3s: 130
-    start_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 24h大于170mm且小于210mm(20~50年一遇)的情况下，初期洪水控制下泄流量130m³/s
@@ -326,7 +446,6 @@ instances:
     mode: 控泄
     priority: 下游防洪
     outflow_m3s: 100
-    start_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量 1 0 0 m^3 / s
@@ -338,7 +457,6 @@ instances:
     note: 调度规程取 120；同一工况汛期调度运用计划取 125，两份文件不一致
     priority: 下游防洪
     outflow_m3s: 120
-    start_level_m: 338.5
     authority_rank: 1
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
@@ -351,12 +469,22 @@ instances:
     note: 运用计划取 125；调度规程取 120，两份文件不一致
     priority: 下游防洪
     outflow_m3s: 125
-    start_level_m: 338.5
     authority_rank: 2
   evidence:
   - doc: 高洞子水库汛期调度运用计划.pdf
     quote: 洪水控制下泄流量125m³/s
     page: 44
+- type: dispatch_plan
+  name: 5~20年一遇控泄方案（干旱年）
+  props:
+    mode: 控泄
+    note: 干旱年把 5~10、10~20 两档合并成一档，统一控泄 130m³/s（正常年这两档分别是 120、130）
+    priority: 下游防洪
+    outflow_m3s: 130
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 降雨预报24h降雨量超过130mm且小于170mm（5~20年一遇）的情况下，洪水初期控制下泄流量为130m³/s
+    page: 38
 - type: dispatch_plan
   name: 保坝泄洪方案
   props:
@@ -929,6 +1057,85 @@ instances:
     quote: 龙洲湾街道办事处，联系电话：023-66238888
     page: 50
 relations:
+# ---- 干旱年那套调度方案（3.3.1.2）----
+- subject:
+    type: condition
+    name: 干旱年·24h降雨小于85mm（1年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 1年一遇控泄方案
+  props:
+    target_level_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量小于85mm（1年一遇）的情况下，洪水洪峰流量小于安全下泄流量
+    page: 37
+- subject:
+    type: condition
+    name: 干旱年·24h降雨85~100mm（1~2年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 1~2年一遇控泄方案
+  props:
+    target_level_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于85mm且小于100mm（1~2年一遇）的情况下，洪水初期控制下泄流量为60m³/s
+    page: 37
+- subject:
+    type: condition
+    name: 干旱年·24h降雨100~110mm（2~3年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 2~3年一遇控泄方案
+  props:
+    target_level_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于100mm且小于110mm（2~3年一遇）的情况下，洪水初期控制下泄流量为70m³/s
+    page: 38
+- subject:
+    type: condition
+    name: 干旱年·24h降雨110~130mm（3~5年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 3~5年一遇控泄方案
+  props:
+    target_level_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 预计24h降雨量大于110mm且小于130mm（3~5年一遇）的情况下，洪水初期控制下泄流量为100m³/s
+    page: 38
+- subject:
+    type: condition
+    name: 干旱年·24h降雨130~170mm（5~20年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 5~20年一遇控泄方案（干旱年）
+  props:
+    target_level_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 降雨预报24h降雨量超过130mm且小于170mm（5~20年一遇）的情况下，洪水初期控制下泄流量为130m³/s
+    page: 38
+- subject:
+    type: condition
+    name: 干旱年·24h降雨170~210mm（20~50年一遇）
+  predicate: STIPULATES
+  object:
+    type: dispatch_plan
+    name: 20~50年一遇控泄方案
+  props:
+    target_level_m: 340.0
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 降雨预报24h降雨量超过170mm且小于210mm（20~50年一遇）的情况下，洪水初期控制下泄流量为130m³/s
+    page: 38
 - subject:
     type: condition
     name: 2~3年一遇降雨（100~110mm）
@@ -936,6 +1143,8 @@ relations:
   object:
     type: dispatch_plan
     name: 2~3年一遇控泄方案
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量70m³/s
@@ -1002,6 +1211,8 @@ relations:
   object:
     type: dispatch_plan
     name: 10~20年一遇控泄方案
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 24h大于155mm且小于170mm(10~20年一遇)
@@ -1013,6 +1224,8 @@ relations:
   object:
     type: dispatch_plan
     name: 1~2年一遇控泄方案
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量60m³/s
@@ -1046,6 +1259,8 @@ relations:
   object:
     type: dispatch_plan
     name: 1年一遇控泄方案
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 预计24h降雨量小于85mm（1年一遇）
@@ -1057,6 +1272,8 @@ relations:
   object:
     type: dispatch_plan
     name: 20~50年一遇控泄方案
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 24h大于170mm且小于210mm(20~50年一遇)
@@ -1112,6 +1329,8 @@ relations:
   object:
     type: dispatch_plan
     name: 3~5年一遇控泄方案
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量 1 0 0 m^3 / s
@@ -1123,6 +1342,8 @@ relations:
   object:
     type: dispatch_plan
     name: 5~10年一遇控泄方案（调度规程）
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库调度规程报告.pdf
     quote: 洪水控制下泄流量120m³/s
@@ -1134,6 +1355,8 @@ relations:
   object:
     type: dispatch_plan
     name: 5~10年一遇控泄方案（汛期调度运用计划）
+  props:
+    target_level_m: 338.5
   evidence:
   - doc: 高洞子水库汛期调度运用计划.pdf
     quote: 洪水控制下泄流量125m³/s

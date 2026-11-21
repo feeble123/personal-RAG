@@ -233,3 +233,28 @@ class TestTimeoutBudget:
         store._note_failure()
         assert store._warm is False
         assert store._budget() >= 5.0
+
+
+class TestEdgePropsReplay:
+    """边属性必须跟着重放，不能只在建边那次写。
+
+    这条曾经漏过：`ON MATCH` 里只有证据并集、没有 `r.props_json`。
+    结果是**任何后补的边属性都进不了图**——边第一次同步就建好了，之后每次
+    走 `ON MATCH`，图上的 props 停在最早那次（当时还是空对象）。
+    实测：给 14 条 `STIPULATES` 补了目标水位，PG 里有值、图上全是 `{}`，
+    答案里也就永远不显示。证据是累积项，属性不是，这两者不能共用一套写法。
+    """
+
+    def _on_match(self) -> str:
+        sql = nj._UPSERT_EDGES
+        assert "ON MATCH SET" in sql
+        return sql.split("ON MATCH SET", 1)[1]
+
+    def test_属性在_on_match_里被覆盖(self):
+        assert "r.props_json = row.props_json" in self._on_match()
+
+    def test_证据仍然是并集(self):
+        """别为了修属性把证据改成覆盖——多份文献支撑同一条关系是常态。"""
+        on_match = self._on_match()
+        assert "r.chunk_ids = coalesce(r.chunk_ids, [])" in on_match
+        assert "r.evidence_ids = coalesce(r.evidence_ids, [])" in on_match

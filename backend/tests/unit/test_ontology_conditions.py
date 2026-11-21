@@ -213,3 +213,116 @@ class TestWaterLevel:
         compares = {"level_m": "gt"}
         assert C.matches({"level_m": 343.0}, "x", cond, compares=compares) is True
         assert C.matches({"level_m": 343.54}, "x", cond, compares=compares) is True
+
+
+class TestRainAndSeason:
+    """雨量与来水年型两个新维度（CQ-04）。
+
+    原文的调度方案是「当雨前库水位达到 338.5m，且 24h 降雨量大于 85mm 且
+    小于 100mm 的情况下」——雨量必须**看上下文**才认，年型决定用哪一套方案
+    （正常年 130~155mm 是 120m³/s，干旱年 130~170mm 是 130m³/s）。
+    """
+
+    def test_雨量带上下文才认(self):
+        [cond] = C.extract_conditions("24h降雨量 90mm 该按哪个方案控泄")
+        assert cond.kind == "value"
+        assert cond.unit == "mm"
+        assert cond.dimension == "rain_24h_mm"
+
+    def test_毫米写法也认(self):
+        [cond] = C.extract_conditions("预计 24 小时雨量 140 毫米")
+        assert cond.unit == "mm"
+        assert cond.value == pytest.approx(140)
+
+    def test_没有降雨上下文不认(self):
+        """大坝沉降 20mm、裂缝宽度 15mm 也是 mm——当雨量会把问题链到错工况。"""
+        assert C.extract_conditions("大坝沉降 20mm，裂缝宽度 15mm") == []
+
+    def test_年型抽得出来(self):
+        conds = C.extract_conditions("干旱年 24h 降雨 140mm 怎么调度")
+        seasons = [c for c in conds if c.kind == "season"]
+        assert seasons and seasons[0].season == "干旱年"
+
+    def test_维度区分水位与雨量(self):
+        conds = C.extract_conditions("雨前库水位 338.5m，24h 降雨量 90mm")
+        dims = C.dimension_values(conds)
+        assert dims == {"level_m": 338.5, "rain_24h_mm": 90.0}
+
+    def test_同一维度只留第一个(self):
+        """「20年一遇，P=5%」说的是同一件事，不该变成两个重现期。"""
+        dims = C.dimension_values(C.extract_conditions("20年一遇（P=5%）"))
+        assert dims["return_period"] == 20
+
+
+class TestMatchesAll:
+    """多条件按 AND 合并（CQ-04）。"""
+
+    NORMAL = {
+        "season": "正常年",
+        "rain_low_mm": 85,
+        "rain_high_mm": 100,
+        "start_level_m": 338.5,
+        "return_period": 2,
+        "return_period_low": 1,
+        "return_period_high": 2,
+    }
+
+    def _dims(self, question: str):
+        return C.dimension_values(C.extract_conditions(question))
+
+    def test_雨量落在区间里就命中(self):
+        assert C.matches_all(self.NORMAL, "x", self._dims("降雨 90mm")) is True
+
+    def test_雨量超出区间不命中(self):
+        assert C.matches_all(self.NORMAL, "x", self._dims("降雨 140mm")) is False
+
+    def test_左开右闭_下界不含上界含(self):
+        assert C.matches_all(self.NORMAL, "x", self._dims("降雨 85mm")) is False
+        assert C.matches_all(self.NORMAL, "x", self._dims("降雨 100mm")) is True
+
+    def test_年型不符不命中(self):
+        dims = self._dims("干旱年降雨 90mm")
+        assert dims["season"] == "干旱年"
+        assert C.matches_all(self.NORMAL, "x", dims) is False
+
+    def test_水位档位要精确对上(self):
+        assert C.matches_all(self.NORMAL, "x", self._dims("雨前库水位 338.5m")) is True
+        # 340m 是干旱年的档位，不是"超过 338.5 也算"——否则两个互斥工况同时命中
+        assert C.matches_all(self.NORMAL, "x", self._dims("雨前库水位 340m")) is False
+
+    def test_两个条件都满足才命中(self):
+        """雨量和重现期同时给出时，两者都要落在这条实例上。"""
+        assert C.matches_all(self.NORMAL, "x", self._dims("2年一遇，降雨 90mm")) is True
+        assert C.matches_all(self.NORMAL, "x", self._dims("50年一遇，降雨 90mm")) is False
+
+    def test_实例没声明的维度不参与(self):
+        """只写了重现期的工况，遇到"降雨 90mm"不该被排除——它本来就没这一维。"""
+        props = {"frequency": 0.05, "return_period": 20}
+        dims = self._dims("降雨 90mm")
+        assert C.matches_all(props, "x", dims) is False  # 一个维度都没比上 → 不猜
+        dims["return_period"] = 20.0
+        assert C.matches_all(props, "x", dims) is True
+
+    def test_没有条件一律不命中(self):
+        assert C.matches_all(self.NORMAL, "x", {}) is False
+
+    def test_年型不能单独作为命中依据(self):
+        """「300年一遇洪水（正常年）」只有重现期和年型，靠年型不该被链接进来。
+
+        实测：问「正常年 24h 降雨 140mm」时它靠 `season` 过关，答案里混进
+        「超标准洪水削峰方案 450m³/s」——那不是这条问题问的东西。
+        """
+        other = {"season": "正常年", "return_period": 300}
+        dims = self._dims("正常年 24h 降雨 140mm")
+        assert dims["season"] == "正常年"
+        assert C.matches_all(other, "x", dims) is False
+        # 重现期维度给出来时它才参与
+        dims["return_period"] = 300.0
+        assert C.matches_all(other, "x", dims) is True
+
+    def test_阈值型水位仍走旧语义(self):
+        """CQ-03 的「库水位超过正常蓄水位」不能被联合匹配改坏。"""
+        props = {"level_m": 343.0}
+        compares = {"level_m": "gt"}
+        assert C.matches_all(props, "x", self._dims("库水位 343.2m"), compares=compares) is True
+        assert C.matches_all(props, "x", self._dims("库水位 343.0m"), compares=compares) is False

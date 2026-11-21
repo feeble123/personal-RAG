@@ -58,12 +58,23 @@ entity_types:
       - {name: return_period_low, type: number, description: "区间下界（年一遇）"}
       - {name: return_period_high, type: number, description: "区间上界（年一遇）"}
       - {name: rainfall_24h_mm, type: string, description: "24h 降雨量区间（mm）"}
+      # 上面那条是**给人看**的区间写法（"85~100"），下面两条才是引擎拿去比的数值界。
+      # 原文每一档都是「大于 85mm 且小于 100mm」，所以是左开右闭：85 属于上一档、
+      # 100 属于这一档。只有单边的档（「小于 85mm」）缺什么界就不声明什么界。
+      - {name: rain_low_mm, type: number, description: "24h 降雨区间下界（mm，不含）"}
+      - {name: rain_high_mm, type: number, description: "24h 降雨区间上界（mm，含）"}
       - {name: rainfall_6h_mm, type: string, description: "6h 降雨量阈值（mm）"}
       # compare: gt —— 这是个**阈值**，不是"等于"。工况名写的是「库水位超过正常蓄水位」，
       # 属性值是 343.0；问「库水位 343.2m」时要按"过没过这条线"判，按相等判就对不上。
       - {name: level_m, type: number, compare: gt, description: "判别用库水位阈值（m），超过它才算命中"}
+      # 和上面的 `level_m` 语义不同：那个是"超过某条线就算"，这个是"这一档对应哪条线"。
+      # 调度规程每个方案的前置条件都是「当雨前库水位达到 338.5m（正常年）/ 340.00m
+      # （干旱年），且预计 24h 降雨量…的情况下」——起调水位属于**工况**，不属于方案：
+      # 同一个方案（控泄 60m³/s）两套年型都用，只有起调水位不同。挂在方案上就会
+      # 只剩一个值（CQ-07），挂在工况上才说得清。
+      - {name: start_level_m, type: number, description: "该工况的雨前库水位档（m）"}
       - {name: inflow_m3s, type: number, description: "入库流量（m³/s）"}
-      - {name: season, type: string, description: "来水年型"}
+      - {name: season, type: string, description: "来水年型（正常年 / 干旱年）"}
       - {name: note, type: string, description: "补充说明"}
 
   - name: dispatch_plan
@@ -72,7 +83,10 @@ entity_types:
     scope: local
     attributes:
       - {name: outflow_m3s, type: number, description: "控制下泄流量（m³/s）"}
-      - {name: start_level_m, type: number, description: "起调水位（m）"}
+      # 起调水位**不建在方案上**：同一个方案（如「1~2年一遇控泄方案」60m³/s）
+      # 正常年（338.5m）和干旱年（340m）都在用，挂在方案上只能留一个值，
+      # 干旱年就答成 338.5（CQ-07 实测）。真正的归属是 `condition.start_level_m`。
+      - {name: start_level_m, type: number, description: "起调水位（m）。归属工况（condition.start_level_m），方案上不再存"}
       - {name: target_level_m, type: number, description: "维持目标水位（m）"}
       - {name: gate_opening_m, type: number, description: "闸门开度（m）"}
       - {name: mode, type: enum, values: [控泄, 全开泄洪, 保坝, 不泄], description: "调度方式"}

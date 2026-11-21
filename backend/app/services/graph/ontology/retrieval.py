@@ -574,6 +574,8 @@ async def _link_conditions_by_value(
     """
     if db is None or reg is None or not conds:
         return []
+    dims = conditions_mod.dimension_values(conds)
+    matched_raw = "、".join(c.raw for c in conds if c.raw)
     candidates: list[tuple[tuple, LinkedEntity]] = []
     for entity_type in _condition_like_types(reg):
         rows = await inst_mod.list_instances(
@@ -581,21 +583,16 @@ async def _link_conditions_by_value(
         )
         for row in rows:
             compares = _compare_semantics(reg, row.entity_type)
-            hit = next(
-                (
-                    c
-                    for c in conds
-                    if conditions_mod.matches(row.props, row.name, c, compares=compares)
-                ),
-                None,
-            )
-            if hit is None:
+            # **多个条件按 AND 合并**：问题同时给了雨前水位和雨量时，两个维度
+            # 都要落在同一个实例上才算命中（见 `conditions.matches_all`）。
+            if not conditions_mod.matches_all(row.props, row.name, dims, compares=compares):
                 continue
             # 越具体越先讲：精确重现期 > 窄区间 > 宽区间。
             # 「20 年一遇」会同时落在 10~20、20~50 两档上，不排序的话
             # 讲哪个全看遍历顺序，答案就不稳定了。
             props = row.props or {}
-            exact = conditions_mod.as_float(props.get("return_period")) == hit.return_period
+            years = dims.get("return_period")
+            exact = years is not None and conditions_mod.as_float(props.get("return_period")) == years
             low = conditions_mod.as_float(props.get("return_period_low"))
             high = conditions_mod.as_float(props.get("return_period_high"))
             width = abs(high - low) if (low is not None and high is not None) else 1e9
@@ -608,7 +605,7 @@ async def _link_conditions_by_value(
                         entity_type=row.entity_type,
                         name=row.name,
                         display=row.name,
-                        matched=hit.raw,
+                        matched=matched_raw,
                         score=1.0 if exact else 0.9,
                         source="instance",
                     ),
@@ -654,6 +651,11 @@ async def _graph_facts(
     nodes: dict[str, Any] = {}  # uid → Node，边两端的名字从这里取
 
     seeds = linked[:_MAX_LINKED]
+    # 联合匹配（雨前水位 + 雨量 + 年型）命中过的实例，这里要认账：
+    # 旧的 `any_match` 一次只看一条条件，对「干旱年 140mm」这种**两个维度凑在
+    # 一起才成立**的工况会判 False，于是它被排到后面、也不开 `forward_only`，
+    # 同类型的兄弟工况跟着被展开进答案。
+    matched_by_value_uids = {e.uid for e in matched_by_value}
     node_facts: list[dict] = []
     for entity in seeds:
         node = await store.get_node(entity.uid)
@@ -665,7 +667,7 @@ async def _graph_facts(
             node.name,
             conds,
             compares=_compare_semantics(reg, node.type_name),
-        )
+        ) or entity.uid in matched_by_value_uids
         fact = {
             "kind": "graph_node",
             "subject": node.uid,

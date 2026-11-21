@@ -94,6 +94,14 @@ ON MATCH SET n.entity_type = row.entity_type,
              n += row.scalars
 """
 
+#: `ON MATCH` 里 **证据并集、属性覆盖**，这两条不能混：
+#: 证据是累积项（一条关系可以被多份文献支撑，重放不该抹掉旧的）；
+#: 属性描述的是这条关系**当前**是什么（「本等级下的时限」「该方案维持的水位」），
+#: PG 是真相源，重放就该以 PG 为准。
+#:
+#: 漏掉 `r.props_json` 时，**后补的边属性永远进不了图**：边第一次同步就建好了，
+#: 之后每次走 `ON MATCH`，图上的 props 一直停在最早那次。实测：给 14 条
+#: `STIPULATES` 补了目标水位，PG 里有值、图上全是 `{}`，答案里自然也不显示。
 _UPSERT_EDGES = f"""
 UNWIND $rows AS row
 MATCH (s:{NODE_LABEL} {{uid: row.subject}})
@@ -112,6 +120,7 @@ ON MATCH SET r.chunk_ids = coalesce(r.chunk_ids, [])
                            + [x IN row.chunk_ids WHERE NOT x IN coalesce(r.chunk_ids, [])],
              r.evidence_ids = coalesce(r.evidence_ids, [])
                               + [x IN row.evidence_ids WHERE NOT x IN coalesce(r.evidence_ids, [])],
+             r.props_json = row.props_json,
              r.confidence = CASE WHEN row.confidence > coalesce(r.confidence, 0.0)
                                  THEN row.confidence ELSE coalesce(r.confidence, 0.0) END,
              r.status = CASE
