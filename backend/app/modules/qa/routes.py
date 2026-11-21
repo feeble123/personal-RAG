@@ -47,6 +47,13 @@ from app.services.graph.ontology.retrieval import retrieve_with_ontology
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["qa"])
 
+#: 模型一个字都没吐时的兜底文案。空白回答比"答不上来"更糟——用户分不清是没答、
+#: 没显示，还是自己的页面坏了。这句话要能解释原因，并给出下一步动作。
+EMPTY_ANSWER_HINT = (
+    "（模型这次没有返回任何内容，通常是接口超时或限流。"
+    "可以重试一次，或者换个问法。）"
+)
+
 
 def _now() -> datetime:
     return utcnow()
@@ -398,7 +405,9 @@ async def chat(
                         style=style,
                         user_id=user.id,  # P0-3 缓存按用户隔离
                     )
-                if cached:
+                # 空答案不算命中：历史缓存里可能已经躺了一条空的（旧版本没拦），
+                # 让它当没命中、重新生成，比秒回一片空白强。
+                if cached and (cached[0] or "").strip():
                     _chat_result = "cache_hit"
                     cached_answer, cached_cites = cached
                     yield _sse({"event": "citations", "data": cached_cites})
@@ -486,11 +495,24 @@ async def chat(
                 yield _sse({"event": "delta", "data": text})
             metrics["chat_stage_seconds"].labels("generate").observe(perf_counter() - _t_generate)
 
+            # 5.4) 模型一个字都没吐（偶发的超时/限流）。不处理的话用户看到一条空白回答，
+            #      而且空答案会进语义缓存（风格 cacheable、又没被截断），此后近似问法
+            #      **每次都秒回空**——届时已经查不出是"偶发"还是"这个知识库没内容"。
+            llm_empty = not buffer.strip()
+            if llm_empty:
+                logger.warning(
+                    "LLM 返回空回答：mode=%s style=%s finish=%s usage=%s/%s question=%r",
+                    body.mode, style, finish_reason, usage_in, usage_out, body.content[:80],
+                )
+                buffer = EMPTY_ANSWER_HINT
+                cacheable = False
+                yield _sse({"event": "delta", "data": buffer})
+
             # 5.5) 完备性校验（opt-in，默认关；用户不满意可点「🤖 LLM优化」触发 /optimize）。
             #      硬信号兜底：生成因超出 max_tokens 被截断（finish_reason=length）→ 诚实标记不完整。
             truncated = finish_reason == "length"
             answer_complete = False if truncated else None
-            if settings.answer_verify_enabled and buffer and cites:
+            if settings.answer_verify_enabled and not llm_empty and buffer and cites:
                 verdict = await verify.verify_completeness(body.content, buffer, cites)
                 if verdict.enumeration and not verdict.complete:
                     async with async_session_factory() as vsdb:

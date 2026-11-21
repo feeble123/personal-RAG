@@ -1195,3 +1195,48 @@ def test_is_real_time_query():
     assert is_real_time_query("汛期限制水位是多少") is False
     assert is_real_time_query("当前水库的正常蓄水位是多少") is False
     assert is_real_time_query("死水位和兴利库容有什么区别") is False
+
+
+async def test_empty_llm_answer_shows_hint(client, user_headers, sample_kb, monkeypatch):
+    """模型一个字都没吐（偶发超时/限流）：给明确提示，不落空白消息。
+
+    以前什么都不做：前端显示一条空白回答，而且空答案会进语义缓存
+    （风格 cacheable、又没被截断），此后近似问法**每次都秒回空**——
+    那时已经分不清是"偶发"还是"这个知识库没内容"。
+    """
+    kb_id, _ = sample_kb
+
+    class _EmptyLLM:
+        async def astream(self, _messages):
+            for _chunk in ():  # 空异步生成器：一个 chunk 都不产出
+                yield _chunk
+
+    # 注意 patch 的位置：routes.py 是 `from ... import build_chat_model`，
+    # 改 chat 模块里的名字不会影响它已经绑定的引用。
+    monkeypatch.setattr(
+        "app.modules.qa.routes.build_chat_model", lambda *a, **kw: _EmptyLLM()
+    )
+
+    r = await client.post("/api/conversations", headers=user_headers, json={})
+    conv_id = r.json()["id"]
+
+    text = ""
+    async with client.stream(
+        "POST",
+        f"/api/conversations/{conv_id}/chat",
+        headers=user_headers,
+        json={"content": "明渠均匀流的形成条件", "kb_id": kb_id},
+    ) as resp:
+        assert resp.status_code == 200
+        async for line in resp.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            ev = json.loads(line[5:])
+            if ev["event"] == "delta":
+                text += ev["data"]
+
+    assert "没有返回任何内容" in text, f"应给出兜底提示，实得：{text!r}"
+
+    r = await client.get(f"/api/conversations/{conv_id}/messages", headers=user_headers)
+    asst = [m for m in r.json()["items"] if m["role"] == "assistant"][-1]
+    assert asst["content"].strip(), "落库的助手消息不能是空白"
