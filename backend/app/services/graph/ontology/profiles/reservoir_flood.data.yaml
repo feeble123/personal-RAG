@@ -1976,3 +1976,86 @@ relations:
   - doc: 高洞子水库防洪预案.pdf
     quote: 每0.5h向巴南区防汛抗旱应急指挥部办公室汇报水库水情、工情及险情
     page: 53
+# ============================================================
+# CQ-11 补齐：9 条措施里能在原文找到明确执行单位的 7 条
+# ------------------------------------------------------------
+# 另外 2 条**故意没补**，因为原文没有点名执行单位（不猜）：
+#   · 解除预警——原文只说「发布预警信息的部门和单位应当及时宣布终止预警」，
+#     没有点出是哪个单位；
+#   · 组织人员转移——原文明确是「所在镇街的镇长、街道办事处主任」负责，
+#     但本体的镇街是 admin_region 不是 management_unit，补边要先把
+#     「XX镇人民政府」建成责任单位，属于建模决策，留给人定。
+# ============================================================
+- subject:
+    type: measure
+    name: 加强安全巡查
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 高洞子水库管理处密切关注水位，雨情，加大安全巡查力度
+- subject:
+    type: measure
+    name: 启动防洪抢险应急预案
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 巴南区防汛抗旱指挥部
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 由巴南区防汛抗旱指挥部按照应急预案的启动方式启动应急预案
+    page: 38
+- subject:
+    type: measure
+    name: 开闸泄水前通知下游村镇
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 水库溢洪前要通知下游各镇街政府
+- subject:
+    type: measure
+    name: 闸门失灵应急处置
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 水库管理处在每年汛前组织对水库大坝、溢洪堰、闸门
+- subject:
+    type: measure
+    name: 发布预警信息
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库防洪预案.pdf
+    quote: 指定人负责出现突发事件时向有关镇街报警
+- subject:
+    type: measure
+    name: 开闸泄洪
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 当值运行人员在起闭泄洪闸门前
+    page: 54
+- subject:
+    type: measure
+    name: 超标准洪水联合泄洪
+  predicate: PERFORMED_BY
+  object:
+    type: management_unit
+    name: 高洞子水库管理处
+  evidence:
+  - doc: 高洞子水库调度规程报告.pdf
+    quote: 当值运行人员在起闭泄洪闸门前
+    page: 54

@@ -222,23 +222,33 @@ def to_edge(row: OntologyRelation) -> Edge:
 
 
 async def sync_to_graph(rows: Iterable[OntologyRelation], store: Any) -> int:
-    """把关系重放成图里的边。图库写失败是静默降级的，所以要抽查一次。"""
+    """把关系重放成图里的边。图库写失败是静默降级的，所以要抽查。
+
+    **首尾都要验。** 只验第一条边是不够的：那条边很可能上次同步就在图里了，
+    于是"写了一批新边但整批超时失败"照样能通过抽查——实测踩过：补 7 条
+    `PERFORMED_BY`，导入报告写着「边 99/99」，图里一条都没有，答案里也查不到。
+    追加的新边通常排在末尾，验最后一条最能说明问题。
+    """
     if store is None:
         return 0
     edges = [to_edge(row) for row in rows]
     if not edges:
         return 0
     await store.upsert([], edges)
-    first = edges[0]
-    slice_ = await store.neighbors(first.subject_uid, depth=1, limit=200)
-    hit = any(
-        e.subject_uid == first.subject_uid
-        and e.object_uid == first.object_uid
-        and e.predicate_name == type_value(first.predicate)
-        for e in slice_.edges
-    )
-    if not hit:
-        return 0
+
+    async def _present(edge: Any) -> bool:
+        slice_ = await store.neighbors(edge.subject_uid, depth=1, limit=200)
+        return any(
+            e.subject_uid == edge.subject_uid
+            and e.object_uid == edge.object_uid
+            and e.predicate_name == type_value(edge.predicate)
+            for e in slice_.edges
+        )
+
+    probes = {edges[0].subject_uid: edges[0], edges[-1].subject_uid: edges[-1]}
+    for probe in probes.values():
+        if not await _present(probe):
+            return 0
     return len(edges)
 
 

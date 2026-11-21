@@ -339,6 +339,10 @@ async def sync_to_graph(rows: Iterable[OntologyInstance], store: Any) -> int:
     图库写入失败会被**静默降级**（这是主链路的要求），所以这里必须抽样验一次：
     否则「图库挂了」会被报成「同步成功 N 个节点」。
     返回真正写进去的节点数（0 表示没成功）。
+
+    **首尾都要验**。只验第一个是不够的：这个节点很可能上次同步就在图里了，
+    于是"写了一批新东西但整批超时失败"照样能通过抽查——实测踩过：
+    导入 7 条新边，报告写着「边 99/99」，图里一条都没有。
     """
     if store is None:
         return 0
@@ -346,5 +350,7 @@ async def sync_to_graph(rows: Iterable[OntologyInstance], store: Any) -> int:
     if not nodes:
         return 0
     await store.upsert(nodes, [])
-    probe = await store.get_node(nodes[0].uid)
-    return len(nodes) if probe is not None else 0
+    for probe_uid in {nodes[0].uid, nodes[-1].uid}:
+        if await store.get_node(probe_uid) is None:
+            return 0
+    return len(nodes)

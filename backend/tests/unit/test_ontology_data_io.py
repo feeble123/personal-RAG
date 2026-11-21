@@ -208,3 +208,98 @@ class TestSourceTypes:
     def test_导出的_tbo_快照带上_source_types(self, reg):
         snap = {r["name"]: r for r in reg.to_dict()["relation_types"]}
         assert snap["CONSTRAINED_BY"]["source_types"] == ["dispatch_plan"]
+
+
+class TestSyncProbe:
+    """图库写入是**静默降级**的，所以同步后必须抽查——而且首尾都要验。
+
+    实测踩过：补 7 条边，导入报告写「边 99/99」，图里一条都没有。
+    原因是抽查只验第一条，而那条上次同步就在图里了，怎么都能过。
+    """
+
+    class _NoopStore:
+        """写进去什么都不留——模拟图库超时降级。"""
+
+        async def upsert(self, nodes, edges):
+            return None
+
+        async def get_node(self, uid):
+            return None
+
+        async def neighbors(self, uid, depth=1, rel_types=None, limit=200):
+            class _S:
+                nodes = []
+                edges = []
+
+            return _S()
+
+    class _FullStore:
+        def __init__(self):
+            self.nodes = {}
+            self.edges = []
+
+        async def upsert(self, nodes, edges):
+            for n in nodes:
+                self.nodes[n.uid] = n
+            self.edges.extend(edges)
+
+        async def get_node(self, uid):
+            return self.nodes.get(uid)
+
+        async def neighbors(self, uid, depth=1, rel_types=None, limit=200):
+            from types import SimpleNamespace
+
+            class _S:
+                pass
+
+            s = _S()
+            s.nodes = [n for u, n in self.nodes.items() if u == uid]
+            s.edges = [e for e in self.edges if uid in (e.subject_uid, e.object_uid)]
+            return s
+
+    def _rows(self, n=3):
+        from app.services.graph.ontology.relations import OntologyRelation
+
+        return [
+            OntologyRelation(
+                profile_id="p", subject_uid=f"a:{i}", predicate="USES",
+                object_uid=f"b:{i}", kb_id=0, props={}, evidence=[], source="manual",
+                status="active",
+            )
+            for i in range(n)
+        ]
+
+    async def test_写入没生效时报0而不是报成功(self):
+        from app.services.graph.ontology import relations as rel_mod
+
+        assert await rel_mod.sync_to_graph(self._rows(), self._NoopStore()) == 0
+
+    async def test_写入生效时报条数(self):
+        from app.services.graph.ontology import relations as rel_mod
+
+        store = self._FullStore()
+        assert await rel_mod.sync_to_graph(self._rows(), store) == 3
+
+    async def test_只有第一条写进去也算失败(self):
+        """这正是实测踩到的情形：第一条早已在图里，新的整批没写进去。"""
+        from app.services.graph.ontology import relations as rel_mod
+        from app.services.graph.ontology.relations import OntologyRelation
+
+        rows = self._rows(3)
+        old = OntologyRelation(
+            profile_id="p", subject_uid="a:0", predicate="USES", object_uid="b:0",
+            kb_id=0, props={}, evidence=[], source="manual", status="active",
+        )
+        store = self._FullStore()
+        await store.upsert([], [rel_mod.to_edge(old)])  # 第一条上次同步就在图里了
+
+        class _Partial(self._FullStore):
+            """模拟"写了一条就超时"：只留第一条。"""
+
+            async def upsert(self, nodes, edges):
+                if edges:
+                    self.edges.extend(edges[:1])
+
+        partial = _Partial()
+        partial.edges = list(store.edges)
+        assert await rel_mod.sync_to_graph(rows, partial) == 0
