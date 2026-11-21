@@ -10,9 +10,11 @@ interface Props {
   onStop: () => void
   streaming: boolean
   placeholder?: string
+  /** 前置条件没满足时禁止发送（例如本体回答还没选知识库）。 */
+  disabled?: boolean
 }
 
-export default function PromptInput({ onSend, onStop, streaming, placeholder }: Props) {
+export default function PromptInput({ onSend, onStop, streaming, placeholder, disabled }: Props) {
   const editorRef = useRef<HTMLDivElement>(null)
   const [hasText, setHasText] = useState(false)
 
@@ -23,7 +25,7 @@ export default function PromptInput({ onSend, onStop, streaming, placeholder }: 
 
   const doSend = () => {
     const text = (editorRef.current?.textContent ?? '').trim()
-    if (!text || streaming) return
+    if (!text || streaming || disabled) return
     onSend(text)
     if (editorRef.current) editorRef.current.innerHTML = ''
     setHasText(false)

@@ -30,6 +30,7 @@ import InlineCitations from './InlineCitations'
 import OntologyFactCards from './OntologyFactCards'
 import { useChatStore } from '@/stores/chat'
 import type { StreamMessage } from '@/stores/chat'
+import { normalizeAnswerMarkdown } from '@/utils/markdownNormalize'
 
 interface Props {
   msg: StreamMessage
@@ -49,14 +50,8 @@ function MessageBubbleInner({ msg, showCitations = true }: Props) {
   // 引用详情弹窗：点击正文角标 / 底部来源清单时打开
   const [detailIdx, setDetailIdx] = useState<number | null>(null)
 
-  // 公式定界符兜底：LLM 偶发输出 LaTeX 标准写法 \(...\) / \[...\]，而 remark-math
-  // 只认 $...$ / $$...$$。渲染前把前者归一化为后者，避免公式被当普通文字原样显示。
-  const markdown = useMemo(
-    () =>
-      msg.content.replace(/\\\[([\s\S]*?)\\\]/g, (_m, body) => `$$${body}$$`)
-        .replace(/\\\(([\s\S]*?)\\\)/g, (_m, body) => `$${body}$`),
-    [msg.content],
-  )
+  // 渲染前的兜底归一化（公式定界符 + 区间符号 `~`），见 utils/markdownNormalize.ts
+  const markdown = useMemo(() => normalizeAnswerMarkdown(msg.content), [msg.content])
 
   const onCopy = async () => {
     try {

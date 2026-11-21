@@ -459,3 +459,52 @@ class TestSiblingPruning:
         """挡的是"同类型兄弟"，单位/措施这些照常连——不能一刀切成 forward_only。"""
         got = await self._expand(seed_types={"response_level"})
         assert ("rl:2", "RESPONDS_WITH", "ms:1") in got
+
+
+class TestResolveProfileByQuestion:
+    """没带知识库时，按问题里的**实例名**认本体（C/RETRIEVAL-PROFILE）。
+
+    以前 kb_id 为空就直接掉进全局默认（调参本体）：名字能直接对上的节点照样查得到，
+    但关系的中文名和阶段划分全退化成 other，工况匹配一条不生效——答案看着"答偏了"，
+    用户完全看不出是本体没认出来。
+    """
+
+    class _DB:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def execute(self, _stmt):
+            class _R:
+                def __init__(self, rows):
+                    self._rows = rows
+
+                def all(self):
+                    return self._rows
+
+            return _R(self._rows)
+
+    @pytest.mark.asyncio
+    async def test_命中唯一本体就用它(self):
+        db = self._DB([
+            ("reservoir_flood", "超标准洪水联合泄洪"),
+            ("reservoir_flood", "Ⅳ级响应"),
+            ("tuning", "sm"),
+        ])
+        got = await retrieval._resolve_profile_by_question(db, "超标准洪水联合泄洪动用哪些泄水设施")
+        assert got == "reservoir_flood"
+
+    @pytest.mark.asyncio
+    async def test_命中多套本体时不猜(self):
+        db = self._DB([("reservoir_flood", "Ⅳ级响应"), ("gate_dispatch", "Ⅳ级响应")])
+        assert await retrieval._resolve_profile_by_question(db, "Ⅳ级响应是谁启动的") is None
+
+    @pytest.mark.asyncio
+    async def test_纯数值问题不猜(self):
+        """「24h 降雨 140mm」里没有可字面对上的实例名，交给调用方提示选库。"""
+        db = self._DB([("reservoir_flood", "10~20年一遇降雨（155~170mm）")])
+        assert await retrieval._resolve_profile_by_question(db, "正常年 24h 降雨 140mm 怎么调度") is None
+
+    @pytest.mark.asyncio
+    async def test_单字实例名不参与推断(self):
+        db = self._DB([("tuning", "水")])
+        assert await retrieval._resolve_profile_by_question(db, "水库怎么调度") is None

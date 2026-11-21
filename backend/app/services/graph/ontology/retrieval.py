@@ -544,6 +544,39 @@ async def _resolve_profile_id(db: AsyncSession, kb_id: int | None) -> str | None
     return rows[0] if len(rows) == 1 else None
 
 
+async def _resolve_profile_by_question(db: AsyncSession, question: str) -> str | None:
+    """没带知识库时，按问题里出现的**实例名**判断该用哪套本体。
+
+    为什么需要：前端默认「全部知识库」时 `kb_id` 是空的，于是上层退回全局默认
+    `ONTOLOGY_PROFILE`（调参本体）。后果很隐蔽——**名字能直接对上的节点照样查得到**，
+    但关系的中文名、阶段划分全退化成 `other`，工况匹配一条都不生效：
+
+        kb 有值：[means] 超标准洪水联合泄洪 —使用设施→ 生态放水管
+        kb 为空：[other] 超标准洪水联合泄洪 —USES_FACILITY→ 生态放水管
+
+    读者只会觉得"这答案答偏了"，看不出是本体没认出来。这里只认**字面对得上**的
+    专名（「Ⅳ级响应」「超标准洪水联合泄洪」）；纯数值问题（「24h 降雨 140mm」）
+    本来就不该靠猜，交给调用方提示选库。
+    """
+    text = (question or "").strip()
+    if db is None or not text:
+        return None
+    from sqlalchemy import select
+
+    try:
+        rows = (
+            await db.execute(
+                select(inst_mod.OntologyInstance.profile_id, inst_mod.OntologyInstance.name)
+                .where(inst_mod.OntologyInstance.status == "active")
+            )
+        ).all()
+    except Exception:  # noqa: BLE001 - 推断失败不该影响问答
+        return None
+    # 一个字的实例名容易误伤（「水」），要求至少两个字
+    hits = {pid for pid, name in rows if name and len(str(name)) >= 2 and str(name) in text}
+    return hits.pop() if len(hits) == 1 else None
+
+
 def _condition_like_types(reg: Any) -> list[str]:
     """哪些实体类型算「工况」——声明了频率或区间属性的类型。
 
@@ -846,7 +879,13 @@ async def retrieve_with_ontology(
 ) -> FactPack:
     """本体优先的检索编排。任何一环失败都不抛给调用方，只降级。"""
     started = time.perf_counter()
-    resolved = profile_id or await _resolve_profile_id(db, kb_id) or settings.ontology_profile
+    resolved = (
+        profile_id
+        or await _resolve_profile_id(db, kb_id)
+        # 没带知识库时别直接掉进全局默认（那是调参本体）：先看问题里提到了谁的专名
+        or await _resolve_profile_by_question(db, question)
+        or settings.ontology_profile
+    )
     reg = get_registry(resolved)
     pack = FactPack(question=question)
 

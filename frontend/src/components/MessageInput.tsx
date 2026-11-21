@@ -46,6 +46,11 @@ export default function MessageInput() {
     send(text, kbId, style, mode)
   }
 
+  // 本体模式必须指定具体知识库：选「全部知识库」时 kb_id 是空的，后端不知道用哪套
+  // 本体，会退回默认的调参本体——工况一条都匹配不上，关系的中文名和阶段划分也全退化，
+  // 答案看着"答偏了"却查不出原因（实测：问「泄水设施」答成报告流程）。先拦住。
+  const needKb = mode !== 'kb' && kbId === null
+
   return (
     <div className="glass-bar" style={{ borderTop: '1px solid rgba(122, 190, 255, 0.12)', padding: 12 }}>
       <Space wrap style={{ marginBottom: 8, width: '100%' }}>
@@ -90,7 +95,18 @@ export default function MessageInput() {
           />
         </Space>
       </Space>
-      <PromptInput onSend={doSend} onStop={stop} streaming={streaming} />
+      <PromptInput
+        onSend={doSend}
+        onStop={stop}
+        streaming={streaming}
+        disabled={needKb}
+        placeholder={needKb ? '先选一个具体知识库，本体才知道该查哪套数据' : undefined}
+      />
+      {needKb && (
+        <Typography.Text type="warning" style={{ fontSize: 'var(--font-xs)', marginTop: 6, display: 'block' }}>
+          本体回答要按知识库里的数据选本体模型，请在上方下拉里选一个具体知识库（不能是「全部知识库」）——否则只能拿到原文片段，拿不到本体事实。
+        </Typography.Text>
+      )}
       {!currentId && (
         <Typography.Text type="secondary" style={{ fontSize: 'var(--font-xs)', marginTop: 6, display: 'block' }}>
           请先新建或选择一个会话
